@@ -76,7 +76,7 @@ export default function LayerPanel({ layers, activeLayers, onToggle }: Props) {
                   background: meta.color,
                   transform: 'translateY(-50%)',
                 }}
-                transition={{ type: 'spring', stiffness: 200, damping: 24 }}
+                transition={{ type: 'spring', stiffness: 100, damping: 20 }}
               />
             )}
             <Icon size={16} color={isActive ? meta.color : 'var(--text-tertiary)'} />

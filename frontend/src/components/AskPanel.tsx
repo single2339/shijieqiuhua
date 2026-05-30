@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { PaperPlaneRight, ChatCircleDots, FadersHorizontal, X } from '@phosphor-icons/react'
-import { askQuestion } from '../api'
+import { askQuestionIntel } from '../api'
 import type { AskResponse, IntelLayer } from '../types'
 import { LAYER_META } from '../types'
 
@@ -38,7 +38,7 @@ function TypewriterText({ text }: { text: string }) {
 
 export default function AskPanel({ onClose, isMobile }: Props) {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: '你好，我是 AI 情报分析师。你可以向我提问关于当前情报数据的任何问题。' },
+    { role: 'assistant', content: '你好，我是情报分析师。你可以就当前情报数据提出任何问题，我将结合多源信息为你提供分析。' },
   ])
   const [question, setQuestion] = useState('')
   const [loading, setLoading] = useState(false)
@@ -60,7 +60,7 @@ export default function AskPanel({ onClose, isMobile }: Props) {
     setQuestion('')
     setLoading(true)
     try {
-      const res = await askQuestion({ question: q, start_date: startDate, end_date: endDate, layer })
+      const res = await askQuestionIntel({ question: q, start_date: startDate, end_date: endDate, layer })
       setMessages(prev => [...prev, { role: 'assistant', content: res.answer, refs: res.references }])
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: '请求失败，请稍后重试。' }])
@@ -86,7 +86,7 @@ export default function AskPanel({ onClose, isMobile }: Props) {
         height: isMobile ? '100%' : 480,
         maxHeight: isMobile ? '100%' : undefined,
         borderRadius: isMobile ? 0 : 'var(--radius-lg)',
-        zIndex: 1000,
+        zIndex: 'var(--z-panel)',
         boxShadow: 'var(--shadow-diffuse)',
         display: 'flex', flexDirection: 'column',
         fontFamily: 'var(--font-ui)',
@@ -101,7 +101,7 @@ export default function AskPanel({ onClose, isMobile }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ChatCircleDots size={16} weight="duotone" color="var(--accent)" />
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: 1, fontFamily: 'var(--font-display)' }}>
-            AI 情报分析师
+            情报分析
           </span>
           <motion.button
             whileTap={{ scale: 0.95 }}
@@ -190,9 +190,9 @@ export default function AskPanel({ onClose, isMobile }: Props) {
               maxWidth: '85%',
             }}
           >
-            <div style={{
-              background: m.role === 'user' ? 'rgba(16,185,129,0.06)' : 'var(--bg-deep)',
-              border: `1px solid ${m.role === 'user' ? 'rgba(16,185,129,0.2)' : 'var(--border-subtle)'}`,
+            <div className={m.role === 'assistant' ? 'glass-card' : ''} style={{
+              background: m.role === 'user' ? 'rgba(16,185,129,0.06)' : 'transparent',
+              border: `1px solid ${m.role === 'user' ? 'rgba(16,185,129,0.2)' : 'var(--glass-border)'}`,
               borderLeft: m.role === 'user' ? '2px solid var(--accent)' : 'none',
               borderRadius: 'var(--radius-md)', padding: '8px 12px',
               fontSize: 12, lineHeight: 1.6, color: 'var(--text-primary)',

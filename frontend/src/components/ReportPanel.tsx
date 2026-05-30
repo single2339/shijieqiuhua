@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { FileText, Article, X, ArrowsClockwise } from '@phosphor-icons/react'
-import { generateReport } from '../api'
+import { generateReportIntel } from '../api'
 import type { SituationReport, IntelLayer } from '../types'
 import { LAYER_META } from '../types'
 
@@ -29,7 +29,7 @@ export default function ReportPanel({ onClose, isMobile }: Props) {
     setError(null)
     setReport(null)
     try {
-      const r = await generateReport({ topic: topic || undefined, country: country || undefined, days, layer: layer || undefined, detail_level: detail })
+      const r = await generateReportIntel({ topic: topic || undefined, country: country || undefined, days, layer: layer || undefined, detail_level: detail })
       setReport(r)
     } catch (e) {
       setError(e instanceof Error ? e.message : '生成失败')
@@ -54,7 +54,7 @@ export default function ReportPanel({ onClose, isMobile }: Props) {
         maxWidth: isMobile ? '100%' : '94vw',
         maxHeight: isMobile ? '100%' : '80vh',
         borderRadius: isMobile ? 0 : 'var(--radius-lg)',
-        zIndex: 1000, overflow: 'hidden',
+        zIndex: 'var(--z-panel)', overflow: 'hidden',
         boxShadow: 'var(--shadow-diffuse)',
         fontFamily: 'var(--font-ui)',
       }}
@@ -240,10 +240,9 @@ export default function ReportPanel({ onClose, isMobile }: Props) {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 + i * 0.05 }}
+                className="glass-card"
                 style={{
                   marginBottom: 10, padding: '10px 14px',
-                  background: 'var(--bg-deep)', borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--glass-border)',
                 }}
               >
                 <div style={{

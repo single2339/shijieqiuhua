@@ -14,6 +14,7 @@ rather than duplicated.  The project root is added to sys.path so that
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -47,12 +48,14 @@ from backend.collectors.horizon.models import (
     TelegramChannelConfig,
     GitHubSourceConfig,
 )
+from backend.llm_config import PROXY_URL
 from src.bronze.writer import BronzeWriter  # noqa: E402 (sys.path setup above)
 from src.models.document import RawDocument
 from src.processor.cleaner import clean_text
 from src.processor.summarizer import _summarize_with_llm
 from src.processor.translation import translate_text
 from backend.processors.llm_classifier import classify_with_llm
+from backend.bronze_reader import QUEUE_DB_FILENAME
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +65,7 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_RSS_FEEDS = [
     # ── Domestic / fast sources (prioritized) ──
-    RSSSourceConfig(name="aihot-daily",     url="https://aihot.virxact.com/rss",                  category="ai_hot"),
+    RSSSourceConfig(name="aihot-daily",     url="https://aihot.virxact.com/rss",                  category="ai_hot", enabled=False),
     RSSSourceConfig(name="google-news-ai4s",url="https://news.google.com/rss/search?q=ai%20for%20science&hl=en-US&gl=US&ceid=US:en", category="ai4s"),
     # ── AI for Science ──
     RSSSourceConfig(name="aihub-news",      url="https://aihub.org/category/news/feed/",          category="ai4s"),
@@ -72,13 +75,13 @@ _DEFAULT_RSS_FEEDS = [
     RSSSourceConfig(name="bbc",         url="https://feeds.bbci.co.uk/news/world/rss.xml",    category="international"),
     RSSSourceConfig(name="guardian",    url="https://www.theguardian.com/world/rss",          category="international"),
     RSSSourceConfig(name="nytimes",     url="https://rss.nytimes.com/services/xml/rss/nyt/World.xml", category="international"),
-    RSSSourceConfig(name="cnn",         url="https://rss.cnn.com/rss/cnn_world.rss",          category="international"),
+    RSSSourceConfig(name="cnn",         url="https://rss.cnn.com/rss/cnn_world.rss",          category="international", enabled=False),
     RSSSourceConfig(name="npr",         url="https://feeds.npr.org/1001/rss.xml",            category="international"),
     RSSSourceConfig(name="al-jazeera",  url="https://www.aljazeera.com/xml/rss/all.xml",      category="international"),
     RSSSourceConfig(name="euronews",    url="https://www.euronews.com/rss",                   category="international"),
-    RSSSourceConfig(name="economist",   url="https://www.economist.com/feeds/print-sections/77/the-economist.xml", category="international"),
+    RSSSourceConfig(name="economist",   url="https://www.economist.com/feeds/print-sections/77/the-economist.xml", category="international", enabled=False),
     # Asia
-    RSSSourceConfig(name="nikkei-asia", url="https://www.nikkei.com/rss/",                     category="regional_asia"),
+    RSSSourceConfig(name="nikkei-asia", url="https://www.nikkei.com/rss/",                     category="regional_asia", enabled=False),
     RSSSourceConfig(name="scmp",        url="https://www.scmp.com/rss/4/feed",                category="regional_asia"),
     # Europe
     RSSSourceConfig(name="le-monde",    url="https://www.lemonde.fr/en/rss/une.xml",          category="regional_europe"),
@@ -90,8 +93,14 @@ _DEFAULT_RSS_FEEDS = [
     # Defense / OSINT
     RSSSourceConfig(name="warzone",     url="https://www.twz.com/feed",                       category="defense"),
     RSSSourceConfig(name="bellingcat",  url="https://www.bellingcat.com/feed",                category="osint"),
+    # ── Crypto / Blockchain ──
+    RSSSourceConfig(name="coindesk",      url="https://www.coindesk.com/arc/outboundfeeds/rss/",    category="crypto"),
+    RSSSourceConfig(name="cointelegraph", url="https://cointelegraph.com/rss",                      category="crypto"),
+    RSSSourceConfig(name="theblock",      url="https://www.theblock.co/rss.xml",                   category="crypto"),
+    RSSSourceConfig(name="decrypt",       url="https://decrypt.co/feed",                            category="crypto"),
+    RSSSourceConfig(name="jinse-lives",    url="http://127.0.0.1:1200/jinse/lives",    category="crypto"),
+    RSSSourceConfig(name="jinse-timeline", url="http://127.0.0.1:1200/jinse/timeline", category="crypto"),
     # ── China domestic (via RSSHub) ──
-    RSSSourceConfig(name="weibo-hot",       url="http://127.0.0.1:1200/weibo/search/hot",        category="social_media_china"),
     RSSSourceConfig(name="cls-telegraph",   url="http://127.0.0.1:1200/cls/telegraph",           category="financial_china"),
     RSSSourceConfig(name="zaobao-china",    url="http://127.0.0.1:1200/zaobao/realtime/china",   category="regional_china"),
 ]
@@ -110,6 +119,8 @@ _DEFAULT_REDDIT_CONFIG = RedditConfig(
         RedditSubredditConfig(subreddit="credibledefense",  sort="hot", fetch_limit=25, min_score=5),
         RedditSubredditConfig(subreddit="intelligence",    sort="hot", fetch_limit=25, min_score=5),
         RedditSubredditConfig(subreddit="OSINT",           sort="new", fetch_limit=15, min_score=0),
+        RedditSubredditConfig(subreddit="CryptoCurrency", sort="hot", fetch_limit=20, min_score=50),
+        RedditSubredditConfig(subreddit="Binance",        sort="hot", fetch_limit=10, min_score=5),
     ],
     users=[],
     fetch_comments=3,
@@ -191,6 +202,7 @@ class HorizonBridge:
         self.telegram_config = telegram_config or _DEFAULT_TELEGRAM_CONFIG
         self.github_sources = github_sources or _DEFAULT_GITHUB_SOURCES
         self._client: Optional[httpx.AsyncClient] = None
+        self._local_client: Optional[httpx.AsyncClient] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -198,13 +210,24 @@ class HorizonBridge:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+            kwargs: dict = {"timeout": 10.0, "follow_redirects": True}
+            if PROXY_URL:
+                kwargs["proxy"] = PROXY_URL
+            self._client = httpx.AsyncClient(**kwargs)
         return self._client
+
+    async def _get_local_client(self) -> httpx.AsyncClient:
+        if self._local_client is None:
+            self._local_client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+        return self._local_client
 
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._local_client is not None:
+            await self._local_client.aclose()
+            self._local_client = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -227,7 +250,8 @@ class HorizonBridge:
         scrapers: list[tuple[str, object]] = []
 
         if self.rss_feeds:
-            scrapers.append(("rss", RSSScraper(self.rss_feeds, client)))
+            local_client = await self._get_local_client()
+            scrapers.append(("rss", RSSScraper(self.rss_feeds, client, local_client)))
         if self.hn_config.enabled:
             scrapers.append(("hackernews", HackerNewsScraper(self.hn_config, client)))
         if self.reddit_config.enabled:
@@ -237,42 +261,61 @@ class HorizonBridge:
         if self.github_sources:
             scrapers.append(("github", GitHubScraper(self.github_sources, client)))
 
-        results: dict[str, dict] = {}
+        sem = asyncio.Semaphore(3)
 
-        for name, scraper in scrapers:
+        async def _process_one(item: ContentItem) -> bool:
+            """Process a single item through the LLM pipeline. Returns True if stored."""
+            async with sem:
+                await _translate_item(item)
+                await _summarize_item(item)
+                await _classify_item(item)
+            doc = self._to_raw_document(item)
+            if doc.content_sha256 in existing_hashes:
+                return False
+            bronze.write(doc)
+            existing_hashes.add(doc.content_sha256)
+            return True
+
+        async def _run_scraper(name: str, scraper: object) -> tuple[str, dict]:
             try:
                 items = await scraper.fetch(since)  # type: ignore[union-attr]
-                stored = 0
-                skipped = 0
-                for item in items:
-                    await _translate_item(item)
-                    await _summarize_item(item)
-                    await _classify_item(item)
-                    doc = self._to_raw_document(item)
-                    if doc.content_sha256 in existing_hashes:
-                        skipped += 1
-                        continue
-                    bronze.write(doc)
-                    existing_hashes.add(doc.content_sha256)
-                    stored += 1
-                results[name] = {"fetched": len(items), "stored": stored, "skipped": skipped}
+                results = await asyncio.gather(*[_process_one(item) for item in items])
+                stored = sum(1 for r in results if r)
+                skipped = len(results) - stored
                 log.info("Horizon %s: %d fetched, %d new, %d duplicate", name, len(items), stored, skipped)
+                return (name, {"fetched": len(items), "stored": stored, "skipped": skipped})
             except Exception as exc:
                 log.warning("Horizon scraper %r failed: %s", name, exc)
-                results[name] = {"error": str(exc)}
+                return (name, {"error": str(exc)})
 
-        return results
+        results_list = await asyncio.gather(
+            *[_run_scraper(name, scraper) for name, scraper in scrapers]
+        )
+        return dict(results_list)
 
     # ------------------------------------------------------------------
     # Dedup helpers
     # ------------------------------------------------------------------
 
     def _load_existing_hashes(self) -> set[str]:
+        index_db = self.storage_root / "_index.db"
+        if index_db.exists():
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(index_db))
+                rows = conn.execute(
+                    "SELECT content_sha256 FROM bronze_index WHERE content_sha256 != ''"
+                ).fetchall()
+                conn.close()
+                return {r[0] for r in rows}
+            except Exception:
+                pass
+
         hashes: set[str] = set()
         if not self.storage_root.exists():
             return hashes
         for p in self.storage_root.rglob("*.json"):
-            if p.name == "queue.db":
+            if p.name == QUEUE_DB_FILENAME:
                 continue
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))

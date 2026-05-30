@@ -137,7 +137,31 @@ SOURCES: list[SourceConfig] = [
     SourceConfig("iea",              "IEA",                  "think_tank",        0.85, "global",  layer_bias="nature"),
 
     # ═══════════════════════════════════════════════
-    # 10 — Finance & Economic Intelligence
+    # 10 — Crypto & Blockchain Intelligence
+    # ═══════════════════════════════════════════════
+    SourceConfig("coindesk",         "CoinDesk",             "crypto",            0.84, "global",  layer_bias="finance",
+                 rss_url="https://www.coindesk.com/arc/outboundfeeds/rss/",
+                 notes="Leading crypto news — regulatory, market, enforcement"),
+    SourceConfig("cointelegraph",    "CoinTelegraph",        "crypto",            0.80, "global",  layer_bias="finance",
+                 rss_url="https://cointelegraph.com/rss",
+                 notes="Crypto news with regulatory and market coverage"),
+    SourceConfig("theblock",         "The Block",            "crypto",            0.83, "global",  layer_bias="finance",
+                 rss_url="https://www.theblock.co/rss.xml",
+                 notes="Crypto research and news — deep regulatory/institutional analysis"),
+    SourceConfig("decrypt",          "Decrypt",              "crypto",            0.78, "global",  layer_bias="cyber",
+                 rss_url="https://decrypt.co/feed",
+                 notes="Crypto/web3 news — security, DeFi, NFT coverage"),
+    SourceConfig("blockworks",       "Blockworks",           "crypto",            0.81, "global",  layer_bias="finance",
+                 notes="Institutional crypto research and market analysis"),
+    SourceConfig("sec-crypto",       "SEC Crypto Enforcement","government",       0.88, "global",  layer_bias="finance",
+                 notes="SEC crypto enforcement actions and regulatory filings"),
+    SourceConfig("doj-cyber",        "DOJ Cyber Division",   "government",        0.87, "global",  layer_bias="cyber",
+                 notes="DOJ cryptocurrency and cybercrime prosecutions"),
+    SourceConfig("chainalysis",      "Chainalysis Blog",     "crypto",            0.85, "global",  layer_bias="cyber",
+                 notes="Blockchain forensics and crypto crime analysis"),
+
+    # ═══════════════════════════════════════════════
+    # 11 — Finance & Economic Intelligence
     # ═══════════════════════════════════════════════
     SourceConfig("cnbc",             "CNBC",                 "financial",         0.84, "global"),
     SourceConfig("marketwatch",      "MarketWatch",          "financial",         0.82, "global"),
@@ -428,6 +452,7 @@ CATEGORIES = {
     "social_kol":       "Social Media News KOLs",
     "ai4s":             "AI for Science",
     "ai_hot":           "AI Hot",
+    "crypto":           "Crypto & Blockchain Intelligence",
 }
 
 def get_source(name: str) -> SourceConfig | None:

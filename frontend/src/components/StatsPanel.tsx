@@ -80,7 +80,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
         maxWidth: isMobile ? '100%' : '94vw',
         maxHeight: isMobile ? '100%' : '80vh',
         borderRadius: isMobile ? 0 : 'var(--radius-lg)',
-        zIndex: 1000, overflow: 'hidden',
+        zIndex: 'var(--z-panel)', overflow: 'hidden',
         boxShadow: 'var(--shadow-diffuse)',
         fontFamily: 'var(--font-ui)',
       }}
@@ -115,19 +115,77 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
       {/* Content */}
       <div style={{ padding: '14px 18px', overflowY: 'auto', maxHeight: 'calc(80vh - 52px)' }}>
         {loading && (
-          <div style={{ padding: 40, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
-              style={{
-                width: 20, height: 20, borderRadius: '50%',
-                border: '2px solid var(--border-subtle)',
-                borderTopColor: 'var(--accent)',
-              }}
-            />
-            <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
-              加载情报数据...
-            </span>
+          <div style={{ padding: '4px 0', display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* Skeleton summary cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+              <div style={{
+                height: 80, borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-deep)',
+                backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer 1.5s ease-in-out infinite',
+              }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[0, 1].map(i => (
+                  <div key={i} style={{
+                    flex: 1, borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-deep)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 1.5s ease-in-out infinite',
+                    animationDelay: `${i * 0.15}s`,
+                  }} />
+                ))}
+              </div>
+            </div>
+
+            {/* Skeleton layer bars */}
+            <div>
+              <div style={{
+                width: 60, height: 10, borderRadius: 99, marginBottom: 10,
+                background: 'var(--bg-deep)',
+                backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer 1.5s ease-in-out infinite',
+              }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} style={{
+                    height: 6, borderRadius: 3,
+                    background: 'var(--bg-deep)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 1.5s ease-in-out infinite',
+                    animationDelay: `${i * 0.08}s`,
+                    width: `${60 + Math.random() * 40}%`,
+                  }} />
+                ))}
+              </div>
+            </div>
+
+            {/* Skeleton charts */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              {[0, 1].map(i => (
+                <div key={i}>
+                  <div style={{
+                    width: 70, height: 10, borderRadius: 99, marginBottom: 10,
+                    background: 'var(--bg-deep)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 1.5s ease-in-out infinite',
+                    animationDelay: `${i * 0.1}s`,
+                  }} />
+                  <div style={{
+                    height: 120, borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-deep)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 1.5s ease-in-out infinite',
+                    animationDelay: `${i * 0.15}s`,
+                  }} />
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {error && (
@@ -142,39 +200,64 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
             animate="visible"
             style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
           >
-            {/* Bento Grid: Summary cards */}
+            {/* Summary cards — asymmetric 2+1 layout (no generic 3-column grid) */}
             <motion.div variants={itemVariants} style={{
-              display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10,
+              display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10,
             }}>
-              {[
-                { label: '情报总量', value: stats.total_items, icon: ChartBar, color: 'var(--accent)' },
-                { label: '数据来源', value: stats.total_sources, icon: Globe, color: 'var(--info)' },
-                { label: '活跃图层', value: stats.by_layer.filter(l => l.count > 0).length, icon: Stack, color: 'var(--warning)' },
-              ].map(card => (
-                <div key={card.label} style={{
-                  background: 'var(--bg-deep)', borderRadius: 'var(--radius-md)',
-                  padding: '14px 16px',
-                  border: '1px solid var(--glass-border)',
-                  boxShadow: 'var(--glass-inner-shadow)',
+              <div style={{
+                background: 'var(--bg-deep)', borderRadius: 'var(--radius-md)',
+                padding: '18px 20px',
+                border: '1px solid var(--glass-border)',
+                boxShadow: 'var(--glass-inner-shadow)',
+                display: 'flex', flexDirection: 'column', justifyContent: 'center',
+              }}>
+                <div style={{
+                  fontSize: 9, color: 'var(--text-tertiary)',
+                  fontFamily: 'var(--font-mono)', letterSpacing: 1,
+                  display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8,
                 }}>
-                  <div style={{
-                    fontSize: 9, color: 'var(--text-tertiary)',
-                    fontFamily: 'var(--font-mono)', letterSpacing: 1,
-                    display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
-                  }}>
-                    <card.icon size={12} weight="duotone" color={card.color} />
-                    {card.label}
-                  </div>
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.5 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ type: 'spring', stiffness: 100, damping: 12, delay: 0.2 }}
-                    style={{ fontSize: 28, fontWeight: 700, color: card.color, fontFamily: 'var(--font-display)' }}
-                  >
-                    {card.value}
-                  </motion.div>
+                  <ChartBar size={12} weight="duotone" color="var(--accent)" />
+                  情报总量
                 </div>
-              ))}
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.5 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.15 }}
+                  style={{ fontSize: 36, fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-display)' }}
+                >
+                  {stats.total_items}
+                </motion.div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[
+                  { label: '数据来源', value: stats.total_sources, icon: Globe, color: 'var(--info)' },
+                  { label: '活跃图层', value: stats.by_layer.filter(l => l.count > 0).length, icon: Stack, color: 'var(--warning)' },
+                ].map(card => (
+                  <div key={card.label} style={{
+                    background: 'var(--bg-deep)', borderRadius: 'var(--radius-md)',
+                    padding: '12px 14px', flex: 1,
+                    border: '1px solid var(--glass-border)',
+                    boxShadow: 'var(--glass-inner-shadow)',
+                  }}>
+                    <div style={{
+                      fontSize: 9, color: 'var(--text-tertiary)',
+                      fontFamily: 'var(--font-mono)', letterSpacing: 1,
+                      display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4,
+                    }}>
+                      <card.icon size={11} weight="duotone" color={card.color} />
+                      {card.label}
+                    </div>
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.3 }}
+                      style={{ fontSize: 22, fontWeight: 700, color: card.color, fontFamily: 'var(--font-display)' }}
+                    >
+                      {card.value}
+                    </motion.div>
+                  </div>
+                ))}
+              </div>
             </motion.div>
 
             {/* Layer breakdown */}

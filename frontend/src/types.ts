@@ -54,6 +54,10 @@ export interface DashboardData {
   sources: SourceInfo[]
   layers: LayerSummary[]
   total_items: number
+  page: number
+  page_size: number
+  has_more: boolean
+  available_dates: string[]
   updated_at: string
 }
 
@@ -63,6 +67,7 @@ export interface AskRequest {
   start_date?: string
   end_date?: string
   layer?: string
+  skills?: string[]
 }
 
 export interface AskResponse {
@@ -101,6 +106,7 @@ export interface ReportRequest {
   days?: number
   layer?: string
   detail_level?: string
+  skills?: string[]
 }
 
 export interface ReportSection {
@@ -229,6 +235,7 @@ export interface SuperAnalysisRequest {
   question: string
   start_date?: string
   end_date?: string
+  skills?: string[]
 }
 
 export interface BayesianIntelItem {
@@ -250,7 +257,59 @@ export interface SuperAnalysisResponse {
   analysis: string
   relevant_items: BayesianIntelItem[]
   web_results: Array<{ title: string; snippet: string; url: string }>
-  model: string
+  model?: string
+}
+
+// ── Auth & User ──
+
+export interface UserInfo {
+  id: number
+  username: string
+  email: string
+  role: 'admin' | 'user'
+  is_active: boolean
+  created_at: string
+  last_login_at: string | null
+}
+
+export interface LoginResponse {
+  user: UserInfo
+  access_token: string
+  refresh_token: string
+}
+
+// ── Admin ──
+
+export interface AdminUserDetail {
+  id: number
+  username: string
+  email: string
+  role: 'admin' | 'user'
+  is_active: boolean
+  created_at: string
+  last_login_at: string | null
+  action_count: number
+}
+
+export interface InviteCodeInfo {
+  id: number
+  code: string
+  created_by: string | null
+  max_uses: number
+  current_uses: number
+  is_active: boolean
+  created_at: string
+  expires_at: string | null
+}
+
+export interface AdminStats {
+  total_users: number
+  active_7d: number
+  active_30d: number
+  daily_logins: Array<{ date: string; count: number }>
+  daily_actions: Array<{ date: string; count: number }>
+  top_users: Array<{ username: string; action_count: number }>
+  invite_code_usage: Array<{ code: string; uses: number }>
 }
 
 export const LAYER_META: Record<IntelLayer, { label: string; color: string }> = {

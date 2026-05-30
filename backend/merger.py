@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from backend.bronze_reader import BronzeDocument, scan_bronze
+from backend.bronze_reader import BronzeDocument
 
 
 # ── title normalisation ──
@@ -110,7 +110,15 @@ class MergeIndex:
 
 # ── build ──
 
-def build_merge_index(storage_root: str | Path) -> MergeIndex:
+import time as _time
+
+_MERGE_LOCK_TTL = 300  # 5 minutes — if lock is older than this, assume stale
+
+
+def build_merge_index(
+    storage_root: str | Path,
+    docs: list[BronzeDocument] | None = None,
+) -> MergeIndex:
     """Scan bronze storage and build a merge index.
 
     Documents are grouped by three keys in order of confidence:
@@ -120,9 +128,50 @@ def build_merge_index(storage_root: str | Path) -> MergeIndex:
 
     Union-find is used so that transitive matches (A matches B by URL,
     B matches C by title) end up in the same group.
+
+    If *docs* is provided, uses those directly (caller is responsible for
+    loading, e.g. via Indexer). Otherwise falls back to scan_bronze().
     """
     root = Path(storage_root)
-    docs = scan_bronze(root)
+    lock_path = root / "_merge.lock"
+
+    # Check for recent lock file first
+    try:
+        lock_age = _time.time() - lock_path.stat().st_mtime
+        if lock_age < _MERGE_LOCK_TTL:
+            existing = load_merge_index(root)
+            if existing is not None:
+                return existing
+    except OSError:
+        pass
+
+    # Atomic lock acquisition via O_CREAT|O_EXCL
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(_time.time()).encode())
+        os.close(fd)
+    except FileExistsError:
+        existing = load_merge_index(root)
+        if existing is not None:
+            return existing
+        lock_path.write_text(str(_time.time()))
+
+    try:
+        return _build_merge_index(root, docs)
+    finally:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _build_merge_index(
+    root: Path,
+    docs: list[BronzeDocument] | None = None,
+) -> MergeIndex:
+    if docs is None:
+        from backend.bronze_reader import scan_bronze
+        docs = scan_bronze(root)
     if not docs:
         return MergeIndex(
             generated_at=datetime.now(timezone.utc).isoformat(),

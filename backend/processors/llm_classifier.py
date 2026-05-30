@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 
 import httpx
 
@@ -18,7 +19,7 @@ from backend.llm_config import (
     LLM_BASE_URL,
     LLM_MODEL,
     CLASSIFY_TIMEOUT,
-    create_llm_client,
+    get_llm_client,
 )
 from backend.models import IntelLayer
 from backend.processors.classifier import classify as keyword_classify
@@ -97,19 +98,24 @@ async def classify_with_llm(title: str, content: str) -> tuple[IntelLayer, str, 
             {"role": "user", "content": text},
         ],
         "temperature": 0.0,
-        "max_tokens": 128,
+        "max_tokens": 512,
     }
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            async with create_llm_client(timeout=CLASSIFY_TIMEOUT) as client:
+            async with get_llm_client(timeout=CLASSIFY_TIMEOUT) as client:
                 r = await client.post(
-                    f"{LLM_BASE_URL}/chat/completions",
-                    json=payload,
-                )
+                        f"{LLM_BASE_URL}/chat/completions",
+                        json=payload,
+                    )
             if r.status_code == 200:
                 result = r.json()
-                raw = result["choices"][0]["message"]["content"].strip()
+                choices = result.get("choices", [])
+                if not choices:
+                    log.warning("LLM classify returned empty choices (attempt %d/%d)", attempt, MAX_RETRIES)
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raw = choices[0]["message"]["content"].strip()
 
                 # Try JSON parse first
                 try:
@@ -131,7 +137,11 @@ async def classify_with_llm(title: str, content: str) -> tuple[IntelLayer, str, 
                 if raw_lower.startswith("```"):
                     lines = raw_lower.split("\n")
                     raw_lower = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-                layer_key = raw_lower.split()[0].strip().rstrip(".,;:!?\"'")
+                words = raw_lower.split()
+                if not words:
+                    log.warning("LLM classifier returned empty text, falling back to keyword")
+                    return (keyword_classify(content), "", "")
+                layer_key = words[0].strip().rstrip(".,;:!?\"'")
                 try:
                     return (IntelLayer(layer_key), "", "")
                 except ValueError:
@@ -153,6 +163,7 @@ async def classify_with_llm(title: str, content: str) -> tuple[IntelLayer, str, 
         except Exception as exc:
             log.warning("LLM classify request failed (%s) attempt %d/%d",
                         exc, attempt, MAX_RETRIES)
+            log.warning("LLM classify traceback: %s", traceback.format_exc())
             await asyncio.sleep(2 ** attempt)
 
     return (keyword_classify(content), "", "")

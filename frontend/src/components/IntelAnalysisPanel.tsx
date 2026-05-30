@@ -43,7 +43,7 @@ export default function IntelAnalysisPanel({ onClose, isMobile }: Props) {
         maxWidth: isMobile ? '100%' : '94vw',
         maxHeight: isMobile ? '100%' : '82vh',
         borderRadius: isMobile ? 0 : 'var(--radius-lg)',
-        zIndex: 1000, overflow: 'hidden',
+        zIndex: 'var(--z-panel)', overflow: 'hidden',
         boxShadow: 'var(--shadow-diffuse)',
         fontFamily: 'var(--font-ui)',
       }}

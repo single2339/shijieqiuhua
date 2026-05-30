@@ -103,7 +103,7 @@ export default function SourcePanel({ sources, expanded, onToggle, isMobile }: P
           background: 'var(--glass-bg)',
           border: '1px solid var(--glass-border)',
           borderRight: 'none', borderRadius: 'var(--radius-sm) 0 0 var(--radius-sm)',
-          cursor: 'pointer', zIndex: 150, color: 'var(--text-tertiary)',
+          cursor: 'pointer', zIndex: 'var(--z-layer-panel)', color: 'var(--text-tertiary)',
           fontSize: 9, writingMode: 'vertical-rl', letterSpacing: 2,
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',
@@ -122,7 +122,7 @@ export default function SourcePanel({ sources, expanded, onToggle, isMobile }: P
             initial={{ x: 212 }}
             animate={{ x: 0 }}
             exit={{ x: 212 }}
-            transition={{ type: 'spring', stiffness: 100, damping: 22 }}
+            transition={{ type: 'spring', stiffness: 100, damping: 20 }}
             className="glass-panel"
             style={{
               position: 'fixed', right: 0, top: 44,
@@ -130,7 +130,7 @@ export default function SourcePanel({ sources, expanded, onToggle, isMobile }: P
               borderLeft: '1px solid var(--glass-border)',
               borderTop: 'none', borderBottom: 'none', borderRight: 'none',
               borderRadius: 0,
-              zIndex: 120,
+              zIndex: 'var(--z-source-panel)',
               display: 'flex', flexDirection: 'column',
               overflow: 'hidden',
             }}

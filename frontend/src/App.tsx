@@ -1,10 +1,12 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { MagnifyingGlass, FileText, ChartBar, ArrowsClockwise, Database, Rows, MapPin, Brain, List } from '@phosphor-icons/react'
+import { Routes, Route, useNavigate } from 'react-router-dom'
+import { MagnifyingGlass, FileText, ChartBar, ArrowsClockwise, Database, Rows, MapPin, Brain, List, CaretLeft, CaretRight, User, SignOut, Gear } from '@phosphor-icons/react'
 import type { IntelItem, IntelLayer, DashboardData } from './types'
 import { LAYER_META } from './types'
-import { fetchDashboard } from './api'
+import { useAuth } from './contexts/AuthContext'
 import { useIsMobile } from './hooks/useMediaQuery'
+import { useDashboardData } from './hooks/useDashboardData'
 import MapView from './components/MapView'
 import LayerPanel from './components/LayerPanel'
 import IntelCard from './components/IntelCard'
@@ -17,8 +19,24 @@ import IntelAnalysisPanel from './components/IntelAnalysisPanel'
 import SuperAnalysisPanel from './components/SuperAnalysisPanel'
 import MobileMenu from './components/MobileMenu'
 import StatusDot from './components/StatusDot'
+import LoginPage from './components/LoginPage'
+import RegisterPage from './components/RegisterPage'
+import AdminPanel from './components/AdminPanel'
 
 const ALL_LAYERS: IntelLayer[] = ['nature', 'economy', 'finance', 'politics', 'military', 'aviation', 'technology', 'society', 'energy', 'agriculture', 'health', 'cyber']
+
+const SHIMMER_STYLE: React.CSSProperties = {
+  backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.04) 50%, var(--bg-elevated) 75%)',
+  backgroundSize: '200% 100%',
+  animation: 'shimmer 1.5s ease-in-out infinite',
+}
+
+const SKELETON_ITEM_STYLE: React.CSSProperties = {
+  height: 40, borderRadius: 'var(--radius-md)',
+  background: 'var(--bg-elevated)',
+  backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.03) 50%, var(--bg-elevated) 75%)',
+  backgroundSize: '200% 100%',
+}
 
 function LiveClock() {
   const [time, setTime] = useState(new Date())
@@ -62,73 +80,49 @@ function ActionBtn({ icon, label, onClick, accent }: ActionBtnProps) {
   )
 }
 
-export default function App() {
+function Dashboard() {
   const isMobile = useIsMobile()
-  const [data, setData] = useState<DashboardData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { user, isAuthenticated, isAdmin, logout } = useAuth()
+  const navigate = useNavigate()
   const [activeLayers, setActiveLayers] = useState<Set<IntelLayer>>(new Set(ALL_LAYERS))
   const [selectedItem, setSelectedItem] = useState<IntelItem | null>(null)
-  const [lastUpdated, setLastUpdated] = useState('---')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [collecting, setCollecting] = useState(false)
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10))
   const [activePanel, setActivePanel] = useState<string | null>(null)
   const [showFeeds, setShowFeeds] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
 
-  const loadData = useCallback(async () => {
-    try {
-      const d = await fetchDashboard(startDate || undefined, endDate || undefined)
-      setData(d)
-      setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
-      setError(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '情报数据加载失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [startDate, endDate])
+  const {
+    data, loading, error, lastUpdated, collecting,
+    feedPage, feedItems, loadingMore,
+    loadData, loadMoreItems, triggerCollect,
+  } = useDashboardData(startDate, endDate, selectedDate)
 
-  useEffect(() => { loadData(); const id = setInterval(loadData, 10_000); return () => clearInterval(id) }, [loadData])
+  const availableDates = data?.available_dates ?? []
+  const currentDateIndex = availableDates.indexOf(selectedDate)
+  const hasPrevDate = currentDateIndex < availableDates.length - 1
+  const hasNextDate = currentDateIndex > 0
 
-  const triggerCollect = useCallback(async () => {
-    setCollecting(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/collect', { method: 'POST' })
-      const result = await res.json()
-      if (result.status === 'started' || result.status === 'running') {
-        const poll = setInterval(async () => {
-          try {
-            const sr = await fetch('/api/collect/status')
-            const st = await sr.json()
-            if (st.status === 'completed') {
-              clearInterval(poll)
-              await loadData()
-              setCollecting(false)
-            } else if (st.status === 'error') {
-              clearInterval(poll)
-              setError(st.message || '采集失败')
-              setCollecting(false)
-            }
-          } catch { clearInterval(poll); setError('采集状态检查失败'); setCollecting(false) }
-        }, 3000)
-      } else {
-        setCollecting(false)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '采集请求失败')
-      setCollecting(false)
+  const navigateDate = useCallback((direction: -1 | 1) => {
+    if (currentDateIndex === -1) return
+    const newIndex = currentDateIndex + direction
+    if (newIndex >= 0 && newIndex < availableDates.length) {
+      setSelectedDate(availableDates[newIndex])
     }
-  }, [loadData])
+  }, [currentDateIndex, availableDates])
+
+  const goToToday = useCallback(() => {
+    setSelectedDate(new Date().toISOString().slice(0, 10))
+  }, [])
 
   const toggleLayer = useCallback((layer: IntelLayer) => {
     setActiveLayers(prev => { const n = new Set(prev); n.has(layer) ? n.delete(layer) : n.add(layer); return n })
   }, [])
 
-  const filteredItems = (data?.intel_items ?? []).filter(i => activeLayers.has(i.layer))
+  const mapItems = useMemo(() => (data?.intel_items ?? []).filter(i => activeLayers.has(i.layer)), [data?.intel_items, activeLayers])
+  const feedFilteredItems = useMemo(() => feedItems.filter(i => activeLayers.has(i.layer)), [feedItems, activeLayers])
 
   const openPanel = (panel: string) => { setShowMenu(false); setActivePanel(panel) }
 
@@ -136,7 +130,7 @@ export default function App() {
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: 'var(--bg-deep)', position: 'relative' }}>
       {/* Full-screen Map */}
       <div style={{ position: 'absolute', inset: 0 }}>
-        {!loading && <MapView items={filteredItems} onSelect={setSelectedItem} />}
+        {!loading && <MapView items={mapItems} onSelect={setSelectedItem} />}
         <div className="map-grid-overlay" />
       </div>
 
@@ -144,7 +138,7 @@ export default function App() {
       <motion.header
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 80, damping: 18 }}
+        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
         className="glass-panel"
         style={{
           position: 'absolute', top: isMobile ? 8 : 12,
@@ -153,7 +147,7 @@ export default function App() {
           borderRadius: 'var(--radius-md)',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: isMobile ? '0 8px 0 10px' : '0 10px 0 14px',
-          zIndex: 200,
+          zIndex: 'var(--z-top-bar)',
           fontFamily: 'var(--font-mono)',
         }}
       >
@@ -181,6 +175,63 @@ export default function App() {
                 <MapPin size={10} weight="duotone" color="var(--text-tertiary)" />
                 来源 <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{data?.sources.length ?? '---'}</span>
               </span>
+              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => navigateDate(-1)}
+                disabled={!hasPrevDate}
+                className="interactive-btn"
+                style={{
+                  background: 'transparent', border: 'none',
+                  color: 'var(--text-tertiary)',
+                  cursor: hasPrevDate ? 'pointer' : 'default',
+                  padding: '2px 0', display: 'flex',
+                  opacity: hasPrevDate ? 0.7 : 0.25,
+                }}
+              >
+                <CaretLeft size={10} weight="bold" />
+              </motion.button>
+              <span style={{
+                fontSize: 9, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
+                fontWeight: 600, minWidth: 72, textAlign: 'center' as const,
+              }}>
+                {selectedDate === new Date().toISOString().slice(0, 10)
+                  ? '今天'
+                  : selectedDate.slice(5).replace('-', '月') + '日'}
+              </span>
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => navigateDate(1)}
+                disabled={!hasNextDate}
+                className="interactive-btn"
+                style={{
+                  background: 'transparent', border: 'none',
+                  color: 'var(--text-tertiary)',
+                  cursor: hasNextDate ? 'pointer' : 'default',
+                  padding: '2px 0', display: 'flex',
+                  opacity: hasNextDate ? 0.7 : 0.25,
+                }}
+              >
+                <CaretRight size={10} weight="bold" />
+              </motion.button>
+              {selectedDate !== new Date().toISOString().slice(0, 10) && (
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={goToToday}
+                  className="interactive-btn"
+                  style={{
+                    background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)',
+                    color: 'var(--accent)', cursor: 'pointer',
+                    padding: '1px 6px', borderRadius: 3,
+                    fontSize: 8, fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  今天
+                </motion.button>
+              )}
             </>
           )}
           {isMobile && (
@@ -193,11 +244,38 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6, fontSize: 10 }}>
           {isMobile ? (
             <>
+              {isAuthenticated ? (
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
+                  onClick={() => navigate('/admin')}
+                  className="interactive-btn mobile-touch-target"
+                  style={{
+                    background: 'transparent', border: 'none',
+                    color: isAdmin ? 'var(--accent)' : 'var(--text-tertiary)',
+                    cursor: 'pointer', padding: 4,
+                    display: isAdmin ? 'flex' : 'none',
+                  }}
+                >
+                  <Gear size={14} weight="bold" />
+                </motion.button>
+              ) : (
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
+                  onClick={() => navigate('/login')}
+                  className="interactive-btn mobile-touch-target"
+                  style={{
+                    background: 'transparent', border: 'none',
+                    color: 'var(--accent)', cursor: 'pointer', padding: 4,
+                  }}
+                >
+                  <User size={14} weight="bold" />
+                </motion.button>
+              )}
               <StatusDot loading={loading} error={!!error} />
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={loadData}
+                onClick={() => loadData()}
                 className="interactive-btn mobile-touch-target"
                 style={{
                   background: 'transparent', border: 'none',
@@ -237,14 +315,14 @@ export default function App() {
                 }}
               >
                 <MagnifyingGlass size={10} color="var(--accent)" weight="duotone" />
-                向AI分析师提问
+                情报查询
               </motion.button>
               <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
               <StatusDot loading={loading} error={!!error} />
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={loadData}
+                onClick={() => loadData()}
                 title="刷新"
                 className="interactive-btn"
                 style={{
@@ -279,6 +357,62 @@ export default function App() {
               <ActionBtn icon={<ChartBar size={10} weight="duotone" />} label="分析" onClick={() => setActivePanel('analysis')} />
               <ActionBtn icon={<Rows size={10} weight="duotone" />} label="来源" onClick={() => setShowSources(!showSources)} />
               <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
+              {isAuthenticated && isAdmin && (
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => navigate('/admin')}
+                  className="interactive-btn"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 3,
+                    background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)',
+                    borderRadius: 'var(--radius-sm)', padding: '1px 6px',
+                    color: 'var(--accent)', fontSize: 9,
+                    fontFamily: 'var(--font-mono)', cursor: 'pointer',
+                  }}
+                >
+                  <Gear size={9} weight="bold" />
+                  管理
+                </motion.button>
+              )}
+              {isAuthenticated ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <User size={10} weight="duotone" color="var(--text-tertiary)" />
+                  <span style={{ fontSize: 9, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{user?.username}</span>
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={logout}
+                    className="interactive-btn"
+                    style={{
+                      background: 'transparent', border: 'none',
+                      color: 'var(--text-tertiary)', cursor: 'pointer',
+                      padding: '1px 3px', display: 'flex',
+                    }}
+                    title="退出登录"
+                  >
+                    <SignOut size={10} weight="bold" />
+                  </motion.button>
+                </div>
+              ) : (
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => navigate('/login')}
+                  className="interactive-btn"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)',
+                    borderRadius: 'var(--radius-sm)', padding: '1px 8px',
+                    color: 'var(--accent)', fontSize: 9,
+                    fontFamily: 'var(--font-mono)', cursor: 'pointer',
+                  }}
+                >
+                  <User size={9} weight="bold" />
+                  登录
+                </motion.button>
+              )}
+              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
               <LiveClock />
             </>
           )}
@@ -300,13 +434,77 @@ export default function App() {
         />
       )}
 
+      {/* Mobile Date Navigation */}
+      {isMobile && (
+        <motion.div
+          initial={{ y: -10, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.15 }}
+          className="glass-panel"
+          style={{
+            position: 'absolute', top: 52, left: 8, right: 8,
+            height: 32, borderRadius: 'var(--radius-md)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            zIndex: 'var(--z-layer-panel)',
+            border: '1px solid var(--glass-border)',
+          }}
+        >
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => navigateDate(-1)}
+            disabled={!hasPrevDate}
+            style={{
+              background: 'transparent', border: 'none',
+              color: 'var(--text-tertiary)', cursor: hasPrevDate ? 'pointer' : 'default',
+              padding: 4, display: 'flex', opacity: hasPrevDate ? 0.7 : 0.25,
+            }}
+          >
+            <CaretLeft size={12} weight="bold" />
+          </motion.button>
+          <span style={{
+            fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
+            fontWeight: 600, minWidth: 72, textAlign: 'center' as const,
+          }}>
+            {selectedDate === new Date().toISOString().slice(0, 10)
+              ? '今天'
+              : selectedDate.slice(5).replace('-', '月') + '日'}
+          </span>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => navigateDate(1)}
+            disabled={!hasNextDate}
+            style={{
+              background: 'transparent', border: 'none',
+              color: 'var(--text-tertiary)', cursor: hasNextDate ? 'pointer' : 'default',
+              padding: 4, display: 'flex', opacity: hasNextDate ? 0.7 : 0.25,
+            }}
+          >
+            <CaretRight size={12} weight="bold" />
+          </motion.button>
+          {selectedDate !== new Date().toISOString().slice(0, 10) && (
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={goToToday}
+              style={{
+                background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)',
+                color: 'var(--accent)', cursor: 'pointer',
+                padding: '2px 8px', borderRadius: 3,
+                fontSize: 9, fontFamily: 'var(--font-mono)',
+              }}
+            >
+              今天
+            </motion.button>
+          )}
+        </motion.div>
+      )}
+
       {/* Layer Panel — desktop: left sidebar; mobile: horizontal strip below top bar */}
       {isMobile ? (
         <motion.div
           initial={{ y: -10, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ delay: 0.2 }}
-          style={{ position: 'absolute', top: 52, left: 4, right: 4, zIndex: 150 }}
+          style={{ position: 'absolute', top: 88, left: 4, right: 4, zIndex: 'var(--z-layer-panel)' }}
         >
           <div
             className="glass-panel mobile-layer-strip"
@@ -360,8 +558,8 @@ export default function App() {
         <motion.div
           initial={{ x: -40, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 70, damping: 16, delay: 0.3 }}
-          style={{ position: 'absolute', left: 8, top: 56, zIndex: 150 }}
+          transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.3 }}
+          style={{ position: 'absolute', left: 8, top: 56, zIndex: 'var(--z-layer-panel)' }}
         >
           <LayerPanel layers={data?.layers ?? []} activeLayers={activeLayers} onToggle={toggleLayer} />
         </motion.div>
@@ -413,12 +611,12 @@ export default function App() {
               boxShadow: '0 0 6px var(--accent-glow)',
             }}
           />
-          情报流 ({filteredItems.length})
+          情报流 ({mapItems.length})
         </motion.div>
 
         <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}
-          onMouseEnter={e => { (e.currentTarget.firstChild as HTMLElement)?.style.setProperty('animation-play-state', 'paused') }}
-          onMouseLeave={e => { (e.currentTarget.firstChild as HTMLElement)?.style.setProperty('animation-play-state', 'running') }}
+          onMouseEnter={e => { (e.currentTarget.firstElementChild as HTMLElement | null)?.style.setProperty('animation-play-state', 'paused') }}
+          onMouseLeave={e => { (e.currentTarget.firstElementChild as HTMLElement | null)?.style.setProperty('animation-play-state', 'running') }}
         >
           <div style={{
             display: 'flex', alignItems: 'center', gap: 32,
@@ -428,7 +626,7 @@ export default function App() {
           }}>
             {[0, 1].map(copy => (
               <div key={copy} style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
-                {filteredItems.slice(0, 60).map(item => {
+                {mapItems.slice(0, 60).map(item => {
                   const meta = LAYER_META[item.layer]
                   const pct = Math.round(item.confidence * 100)
                   return (
@@ -481,16 +679,19 @@ export default function App() {
               bottom: isMobile ? 40 : 32,
               left: 0, right: 0,
               height: isMobile ? '50vh' : 200,
-              zIndex: 180,
+              zIndex: 'var(--z-feed-expanded)',
               borderTop: '1px solid var(--glass-border)',
               borderRadius: 0,
               overflow: 'hidden',
             }}
           >
             <MessageFeed
-              items={filteredItems}
+              items={feedFilteredItems}
               onSelect={(item) => { setSelectedItem(item); setShowFeeds(false) }}
               selectedId={selectedItem?.id ?? null}
+              hasMore={data?.has_more ?? false}
+              loadingMore={loadingMore}
+              onLoadMore={loadMoreItems}
             />
           </motion.div>
         )}
@@ -541,7 +742,7 @@ export default function App() {
               border: '1px solid rgba(220,38,38,0.25)',
               color: 'var(--danger)', padding: isMobile ? '10px 14px' : '8px 16px',
               borderRadius: 'var(--radius-md)',
-              zIndex: 2000, fontSize: isMobile ? 12 : 11,
+              zIndex: 'var(--z-overlay)', fontSize: isMobile ? 12 : 11,
               fontFamily: 'var(--font-mono)',
               boxShadow: '0 0 20px rgba(220,38,38,0.1)',
               display: 'flex', alignItems: 'center', gap: 12,
@@ -553,7 +754,7 @@ export default function App() {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              onClick={loadData}
+              onClick={() => loadData()}
               style={{
                 background: 'rgba(220,38,38,0.1)', border: '1px solid rgba(220,38,38,0.25)',
                 color: 'var(--danger)', padding: '3px 10px', borderRadius: 'var(--radius-sm)',
@@ -574,7 +775,7 @@ export default function App() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
             style={{
-              position: 'fixed', inset: 0, zIndex: 3000,
+              position: 'fixed', inset: 0, zIndex: 'var(--z-loading)',
               background: 'var(--bg-deep)',
             }}
           >
@@ -583,32 +784,39 @@ export default function App() {
                 margin: isMobile ? 8 : 12, height: 36, borderRadius: 'var(--radius-md)',
                 display: 'flex', alignItems: 'center', padding: '0 14px',
               }}>
-                <div style={{ width: 60, height: 10, borderRadius: 99, background: 'var(--bg-elevated)', animation: 'shimmer 2s linear infinite', backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.04) 50%, var(--bg-elevated) 75%)', backgroundSize: '200% 100%' }} />
+                <div style={{ ...SHIMMER_STYLE, width: 60, height: 10, borderRadius: 99, animationDuration: '2s' }} />
                 <div style={{ flex: 1 }} />
-                <div style={{ width: 80, height: 10, borderRadius: 99, background: 'var(--bg-elevated)', animation: 'shimmer 2s linear infinite 0.2s', backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.04) 50%, var(--bg-elevated) 75%)', backgroundSize: '200% 100%' }} />
+                <div style={{ ...SHIMMER_STYLE, width: 80, height: 10, borderRadius: 99, animationDuration: '2s', animationDelay: '0.2s' }} />
               </div>
               <div style={{ flex: 1, display: 'flex', gap: 12, padding: '0 16px 12px' }}>
                 {!isMobile && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 44 }}>
                     {[...Array(8)].map((_, i) => (
                       <div key={i} style={{
-                        height: 40, borderRadius: 'var(--radius-md)',
-                        background: 'var(--bg-elevated)',
+                        ...SKELETON_ITEM_STYLE,
                         opacity: 1 - i * 0.08,
-                        animation: 'shimmer 1.5s ease-in-out infinite',
                         animationDelay: `${i * 0.1}s`,
-                        backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.03) 50%, var(--bg-elevated) 75%)',
-                        backgroundSize: '200% 100%',
                       }} />
                     ))}
                   </div>
                 )}
-                <div style={{ flex: 1, borderRadius: 'var(--radius-md)', background: 'var(--bg-elevated)', animation: 'shimmer 1.5s ease-in-out infinite', backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.03) 50%, var(--bg-elevated) 75%)', backgroundSize: '200% 100%' }} />
+                <div style={{ ...SKELETON_ITEM_STYLE, flex: 1 }} />
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="/admin" element={<AdminPanel />} />
+      <Route path="/*" element={<Dashboard />} />
+    </Routes>
   )
 }

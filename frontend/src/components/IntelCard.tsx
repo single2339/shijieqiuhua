@@ -239,10 +239,10 @@ function SourceListPopover({ sources }: { sources: string[] }) {
         <>
           <div
             onClick={() => setOpen(false)}
-            style={{ position: 'fixed', inset: 0, zIndex: 1099 }}
+            style={{ position: 'fixed', inset: 0, zIndex: 'var(--z-intel-card)' }}
           />
           <div style={{
-            position: 'absolute', bottom: '120%', left: 0, zIndex: 1100,
+            position: 'absolute', bottom: '120%', left: 0, zIndex: 'var(--z-intel-tooltip)',
             background: 'var(--bg-surface)', border: '1px solid var(--glass-border)',
             borderRadius: 'var(--radius-sm)', padding: '6px 10px',
             boxShadow: 'var(--shadow-diffuse)', minWidth: 120,
@@ -274,7 +274,7 @@ export default function IntelCard({ item, onClose, isMobile }: Props) {
       initial={{ y: 20, opacity: 0, scale: 0.96 }}
       animate={{ y: 0, opacity: 1, scale: 1 }}
       exit={{ y: 20, opacity: 0, scale: 0.96 }}
-      transition={{ type: 'spring', stiffness: 120, damping: 22 }}
+      transition={{ type: 'spring', stiffness: 100, damping: 20 }}
       className={isMobile ? 'glass-panel mobile-bottom-sheet' : 'glass-panel'}
       style={{
         position: 'fixed',
@@ -286,7 +286,7 @@ export default function IntelCard({ item, onClose, isMobile }: Props) {
         maxHeight: isMobile ? '80vh' : undefined,
         overflowY: isMobile ? 'auto' : undefined,
         borderRadius: isMobile ? 'var(--radius-lg) var(--radius-lg) 0 0' : 'var(--radius-lg)',
-        padding: isMobile ? 14 : 16, zIndex: 1000,
+        padding: isMobile ? 14 : 16, zIndex: 'var(--z-panel)',
         border: `1px solid ${meta.color}22`,
         boxShadow: `var(--shadow-diffuse), 0 0 60px rgba(16,185,129,0.03)`,
         fontFamily: 'var(--font-ui)',

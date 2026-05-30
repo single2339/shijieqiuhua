@@ -9,7 +9,7 @@ import re
 
 import httpx
 
-from backend.llm_config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, create_llm_client
+from backend.llm_config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, get_llm_client
 
 log = logging.getLogger(__name__)
 
@@ -58,11 +58,11 @@ async def translate_with_llm(text: str) -> str | None:
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            async with create_llm_client(timeout=60) as client:
+            async with get_llm_client(timeout=60) as client:
                 r = await client.post(
-                    f"{LLM_BASE_URL}/chat/completions",
-                    json=payload,
-                )
+                        f"{LLM_BASE_URL}/chat/completions",
+                        json=payload,
+                    )
             if r.status_code == 200:
                 result = r.json()
                 translated = result["choices"][0]["message"]["content"].strip()

@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Brain, PaperPlaneRight, FadersHorizontal, X, Atom, Download, Globe, ArrowUpRight } from '@phosphor-icons/react'
-import { superAnalyze } from '../api'
+import { Brain, PaperPlaneRight, X, Atom, Download, Globe, LinkSimple } from '@phosphor-icons/react'
+import type { SuperAnalysisProgress } from '../api'
 import type { SuperAnalysisResponse } from '../types'
-import { parseAnalysis, highlightText, generateMarkdown } from '../lib/markdown'
+import { useSuperAnalysis } from '../hooks/useSuperAnalysis'
+import { parseAnalysis, highlightText, generateHTML } from '../lib/markdown'
 import type { Block } from '../lib/markdown'
-import SuperAnalysisSidebar from './SuperAnalysisSidebar'
 
 interface Props { onClose: () => void; isMobile?: boolean }
 
@@ -20,7 +20,7 @@ const panelVariants = {
   hidden: { opacity: 0, scale: 0.96, y: 10 },
   visible: {
     opacity: 1, scale: 1, y: 0,
-    transition: { type: 'spring' as const, stiffness: 90, damping: 20, mass: 0.8 },
+    transition: { type: 'spring' as const, stiffness: 100, damping: 20 },
   },
   exit: { opacity: 0, scale: 0.96, y: 10, transition: { duration: 0.18 } },
 }
@@ -29,7 +29,7 @@ const contentVariants = {
   hidden: { opacity: 0, y: 12 },
   visible: {
     opacity: 1, y: 0,
-    transition: { type: 'spring' as const, stiffness: 80, damping: 18, delay: 0.12 },
+    transition: { type: 'spring' as const, stiffness: 100, damping: 20, delay: 0.12 },
   },
 }
 
@@ -40,79 +40,180 @@ const shimmerGradient = {
   },
 }
 
-// ── Component ──
+// ── Reasoning phases (real progress from backend) ──
+
+const phaseMeta: Record<string, { label: string; icon: string }> = {
+  collecting: { label: '情报整理', icon: '库' },
+  crossmatching: { label: '关联匹配', icon: '证' },
+  analyzing: { label: '推理结论', icon: '智' },
+  // legacy phases kept for backward compatibility
+  bayesian: { label: '情报整理', icon: '算' },
+  searching: { label: '情报整理', icon: '网' },
+  scanning: { label: '情报整理', icon: '库' },
+  done: { label: '完成', icon: '✓' },
+  error: { label: '出错', icon: '✗' },
+}
+
+const detailLabels: Record<string, string> = {
+  total_docs: '文档总数',
+  processed: '已处理',
+  relevant_count: '相关情报',
+  internal_count: '内部数据',
+  web_count: '网络数据',
+}
+
+function ProgressDisplay({ progress, displayPercent }: { progress: SuperAnalysisProgress; displayPercent: number }) {
+  const meta = phaseMeta[progress.phase] || { label: progress.message || '处理中...', icon: '··' }
+  const elapsed = Math.floor(progress.elapsed_seconds)
+  const min = Math.floor(elapsed / 60)
+  const sec = elapsed % 60
+  const elapsedStr = min > 0 ? `${min} 分 ${sec} 秒` : `${sec} 秒`
+
+  // Sort phases in logical order for the progress bar
+  const orderedPhases = ['collecting', 'crossmatching', 'analyzing']
+  const currentIdx = orderedPhases.indexOf(progress.phase)
+  const activePhase = currentIdx >= 0 ? progress.phase : null
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* Current phase */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <motion.div
+          animate={{ scale: [1, 1.05, 1], opacity: [0.8, 1, 0.8] }}
+          transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+          style={{
+            width: 44, height: 44, borderRadius: 'var(--radius-md)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-mono)',
+            background: 'rgba(13,148,136,0.08)',
+            color: 'var(--accent)',
+            border: '2px solid rgba(13,148,136,0.15)',
+          }}
+        >
+          {meta.icon}
+        </motion.div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>
+            {meta.label}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            {progress.message || '处理中...'}
+          </span>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+            {displayPercent}%
+          </span>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            {elapsedStr}
+          </div>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{
+        width: '100%', height: 4, borderRadius: 2,
+        background: 'var(--bg-elevated)',
+        overflow: 'hidden',
+      }}>
+        <motion.div
+          animate={{ width: `${Math.max(displayPercent, 2)}%` }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
+          style={{
+            height: '100%', borderRadius: 2,
+            background: 'linear-gradient(90deg, var(--accent), #0d9488 60%, #06b6d4)',
+            backgroundSize: '200% 100%',
+          }}
+        />
+      </div>
+
+      {/* Phase timeline */}
+      <div style={{ display: 'flex', gap: 0, justifyContent: 'space-between' }}>
+        {orderedPhases.map((phase, i) => {
+          const phaseIdx = orderedPhases.indexOf(activePhase || '')
+          const state: 'done' | 'active' | 'pending' =
+            i < phaseIdx ? 'done' :
+            i === phaseIdx ? 'active' :
+            'pending'
+          const meta = phaseMeta[phase]
+
+          return (
+            <div key={phase} style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+              flex: 1, maxWidth: 60,
+            }}>
+              <div style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: state === 'done' ? 'var(--success)' :
+                  state === 'active' ? 'var(--accent)' :
+                  'var(--border-subtle)',
+                transition: 'background 0.4s ease',
+              }} />
+              <span style={{
+                fontSize: 8, textAlign: 'center',
+                color: state === 'active' ? 'var(--accent)' :
+                  state === 'done' ? 'var(--text-secondary)' :
+                  'var(--text-tertiary)',
+                fontFamily: 'var(--font-mono)',
+                opacity: state === 'pending' ? 0.4 : 1,
+                transition: 'opacity 0.4s ease, color 0.4s ease',
+              }}>
+                {meta?.label || phase}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {progress.detail && Object.keys(progress.detail).length > 0 && (
+        <div style={{
+          display: 'flex', gap: 16, padding: '8px 12px',
+          background: 'rgba(0,0,0,0.02)', borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--glass-border)',
+        }}>
+          {Object.entries(progress.detail).map(([key, val]) => {
+            const label = detailLabels[key] || key
+            return (
+              <div key={key} style={{ display: 'flex', gap: 4, fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>{label}:</span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{String(val)}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <motion.div
+        animate={{ opacity: [0.25, 0.5, 0.25] }}
+        transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+        style={{ color: 'var(--text-tertiary)', fontSize: 11, fontFamily: 'var(--font-mono)', letterSpacing: 0.5, textAlign: 'center' }}
+      >
+        {'超级分析通常需要 1-5 分钟，复杂问题可能更久'}
+      </motion.div>
+    </div>
+  )
+}
 
 export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
-  const [question, setQuestion] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<SuperAnalysisResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [showFilters, setShowFilters] = useState(false)
-  const [expandedItem, setExpandedItem] = useState<number | null>(null)
-  const [showWebResults, setShowWebResults] = useState(false)
-  const [activeTab, setActiveTab] = useState<'intel' | 'web'>('intel')
-  const inputRef = useRef<HTMLInputElement>(null)
+  const {
+    question, setQuestion, loading, result, error, progress, displayPercent,
+    handleSubmit, inputRef,
+  } = useSuperAnalysis()
   const panelRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { if (!loading) inputRef.current?.focus() }, [loading])
-  useEffect(() => () => abortRef.current?.abort(), [])
   useEffect(() => {
     if (result && contentRef.current) contentRef.current.scrollTop = 0
   }, [result])
 
-  const handleSubmit = async () => {
-    const q = question.trim()
-    if (!q || loading) return
-
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    setLoading(true)
-    setError(null)
-    setResult(null)
-
-    try {
-      const timeoutId = setTimeout(() => controller.abort(), 120_000)
-      const res = await superAnalyze(
-        { question: q, start_date: startDate, end_date: endDate },
-        controller.signal,
-      )
-      clearTimeout(timeoutId)
-      setResult(res)
-      abortRef.current = null
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        if (controller.signal.aborted && abortRef.current === controller) {
-          setError('分析请求超时（120秒），请简化问题后重试')
-        }
-      } else if (err instanceof TypeError) {
-        setError('网络连接失败，请检查网络后重试')
-      } else if (err instanceof Error) {
-        setError(err.message.startsWith('API error')
-          ? `服务端错误：${err.message}`
-          : `请求失败：${err.message}`)
-      } else {
-        setError('分析请求失败，请重试')
-      }
-    } finally {
-      if (abortRef.current === controller) abortRef.current = null
-      setLoading(false)
-    }
-  }
-
   const handleDownload = useCallback(() => {
     if (!result) return
-    const md = generateMarkdown(result)
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+    const html = generateHTML(result)
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `super-analysis-${Date.now()}.md`
+    a.download = `super-analysis-${Date.now()}.html`
     a.click()
     URL.revokeObjectURL(url)
   }, [result])
@@ -127,10 +228,10 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
       exit="hidden"
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, zIndex: 2000,
+        position: 'fixed', inset: 0, zIndex: 'var(--z-overlay)',
         background: 'rgba(30,27,24,0.06)',
         backdropFilter: 'blur(2px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 'max(20px, 4vw)',
       }}
     >
       <motion.div
@@ -167,7 +268,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Brain size={18} weight="duotone" color="var(--accent)" />
             <span style={{
-              fontSize: 13, fontWeight: 700,
+              fontSize: 15, fontWeight: 700,
               color: 'var(--text-primary)',
               letterSpacing: '-0.01em',
               fontFamily: 'var(--font-display)',
@@ -207,32 +308,14 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                   border: '1px solid rgba(16,185,129,0.15)',
                   color: '#059669', cursor: 'pointer',
                   padding: '6px 14px', borderRadius: 'var(--radius-sm)',
-                  fontSize: 10, fontWeight: 600,
+                  fontSize: 12, fontWeight: 600,
                   fontFamily: 'var(--font-mono)',
                 }}
               >
-                <Download size={12} weight="duotone" />
-                {'下载 Markdown'}
+                <Download size={14} weight="duotone" />
+                {'下载 HTML'}
               </motion.button>
             )}
-
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => setShowFilters(!showFilters)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-                background: showFilters ? 'rgba(13,148,136,0.05)' : 'rgba(0,0,0,0.02)',
-                border: showFilters ? '1px solid rgba(13,148,136,0.12)' : '1px solid var(--glass-border)',
-                color: showFilters ? 'var(--accent)' : 'var(--text-tertiary)',
-                cursor: 'pointer',
-                padding: '6px 12px', borderRadius: 'var(--radius-sm)',
-                fontSize: 10, fontFamily: 'var(--font-mono)',
-              }}
-            >
-              <FadersHorizontal size={12} weight="duotone" />
-              {'日期筛选'}
-            </motion.button>
 
             <motion.button
               whileHover={{ scale: 1.08, rotate: 90 }}
@@ -250,42 +333,6 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
             </motion.button>
           </div>
         </div>
-
-        {/* ── Date filters (collapsible) ── */}
-        <AnimatePresence>
-          {showFilters && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              style={{ overflow: 'hidden', flexShrink: 0 }}
-            >
-              <div style={{
-                display: 'flex', gap: 10, padding: '8px 20px',
-                borderBottom: '1px solid var(--glass-border)',
-                background: 'rgba(0,0,0,0.01)',
-              }}>
-                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                  style={{
-                    background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-                    color: 'var(--text-primary)', padding: '5px 10px',
-                    borderRadius: 'var(--radius-sm)', fontSize: 10,
-                    fontFamily: 'var(--font-mono)', width: 130,
-                  }} />
-                <span style={{ color: 'var(--text-tertiary)', fontSize: 10, display: 'flex', alignItems: 'center' }}>
-                  {'至'}
-                </span>
-                <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                  style={{
-                    background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-                    color: 'var(--text-primary)', padding: '5px 10px',
-                    borderRadius: 'var(--radius-sm)', fontSize: 10,
-                    fontFamily: 'var(--font-mono)', width: 130,
-                  }} />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* ── Body: asymmetric split ── */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -314,7 +361,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <div style={{
-                      fontSize: 14, fontWeight: 600,
+                      fontSize: 16, fontWeight: 600,
                       color: 'var(--text-primary)',
                       fontFamily: 'var(--font-display)',
                       letterSpacing: '-0.01em', lineHeight: 1.4,
@@ -323,7 +370,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{
-                        fontSize: 10, lineHeight: 1.7, color: 'var(--text-tertiary)',
+                        fontSize: 12, lineHeight: 1.7, color: 'var(--text-tertiary)',
                         display: 'flex', alignItems: 'center', gap: 8,
                       }}>
                         <span style={{
@@ -333,7 +380,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                         {'分析框架：假设陈述 → 先验评估 → 证据分析 → 后验更新 → 结论'}
                       </div>
                       <div style={{
-                        fontSize: 10, lineHeight: 1.7, color: 'var(--text-tertiary)',
+                        fontSize: 12, lineHeight: 1.7, color: 'var(--text-tertiary)',
                         display: 'flex', alignItems: 'center', gap: 8,
                       }}>
                         <span style={{
@@ -355,7 +402,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                 animate={{ opacity: 1, y: 0 }}
                 style={{
                   padding: '14px 18px',
-                  color: 'var(--danger)', fontSize: 11,
+                  color: 'var(--danger)', fontSize: 13,
                   background: 'rgba(220,38,38,0.03)',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid rgba(220,38,38,0.08)',
@@ -367,64 +414,14 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
               </motion.div>
             )}
 
-            {/* Loading — skeleton shimmer */}
+            {/* Loading — animated reasoning phases */}
             {loading && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 0' }}
+                style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, padding: '12px 0' }}
               >
-                <div style={{
-                  position: 'relative', height: 28, width: '45%',
-                  borderRadius: 'var(--radius-sm)', background: 'rgba(0,0,0,0.04)', overflow: 'hidden',
-                }}>
-                  <motion.div
-                    variants={shimmerGradient}
-                    animate="animate"
-                    style={{
-                      position: 'absolute', inset: 0, width: '60%',
-                      background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.5) 50%, transparent 100%)',
-                    }}
-                  />
-                </div>
-                {[85, 92, 70, 88, 55].map((w, i) => (
-                  <div key={i} style={{
-                    position: 'relative', height: 12, width: `${w}%`,
-                    borderRadius: 4, background: 'rgba(0,0,0,0.03)', overflow: 'hidden',
-                  }}>
-                    <motion.div
-                      variants={shimmerGradient}
-                      animate="animate"
-                      style={{
-                        position: 'absolute', inset: 0, width: '60%',
-                        background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)',
-                      }}
-                    />
-                  </div>
-                ))}
-                <div style={{
-                  position: 'relative', height: 80, width: '100%',
-                  borderRadius: 'var(--radius-sm)', background: 'rgba(0,0,0,0.025)', overflow: 'hidden', marginTop: 8,
-                }}>
-                  <motion.div
-                    variants={shimmerGradient}
-                    animate="animate"
-                    style={{
-                      position: 'absolute', inset: 0, width: '40%',
-                      background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)',
-                    }}
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
-                  <motion.div
-                    animate={{ opacity: [0.3, 0.7, 0.3] }}
-                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                    style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent)' }}
-                  />
-                  <span style={{ color: 'var(--text-tertiary)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
-                    {'深度推理中 — 搜索网络数据 · 评估证据 · 计算后验'}
-                  </span>
-                </div>
+                {progress && <ProgressDisplay progress={progress} displayPercent={displayPercent} />}
               </motion.div>
             )}
 
@@ -436,80 +433,13 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                 animate="visible"
                 style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
               >
-                {/* Web results badge */}
-                {result.web_results.length > 0 && (
-                  <motion.button
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setShowWebResults(!showWebResults)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-                      background: showWebResults ? 'rgba(13,148,136,0.04)' : 'rgba(13,148,136,0.015)',
-                      border: showWebResults ? '1px solid rgba(13,148,136,0.12)' : '1px solid rgba(13,148,136,0.06)',
-                      borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                      fontSize: 10, color: 'var(--text-secondary)',
-                      fontFamily: 'var(--font-mono)', textAlign: 'left',
-                    }}
-                  >
-                    <Globe size={14} weight="duotone" color="var(--accent)" />
-                    <span>
-                      {'网络搜索到 '}
-                      <strong style={{ color: 'var(--accent)' }}>{result.web_results.length}</strong>
-                      {' 条相关数据'}
-                    </span>
-                    <span style={{ fontSize: 9, opacity: 0.35, marginLeft: 'auto' }}>
-                      {showWebResults ? '收起' : '展开'}
-                    </span>
-                  </motion.button>
-                )}
-
-                {/* Web results expanded */}
-                <AnimatePresence>
-                  {showWebResults && result.web_results.length > 0 && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      style={{
-                        overflow: 'hidden', borderRadius: 'var(--radius-sm)',
-                        border: '1px solid rgba(13,148,136,0.06)',
-                      }}
-                    >
-                      <div style={{
-                        display: 'flex', flexDirection: 'column', gap: 6,
-                        padding: '10px 14px', maxHeight: 180, overflowY: 'auto',
-                      }}>
-                        {result.web_results.map((wr, idx) => (
-                          <div key={idx} style={{
-                            fontSize: 9, color: 'var(--text-tertiary)', lineHeight: 1.6,
-                            padding: '6px 0',
-                            borderBottom: idx < result.web_results.length - 1 ? '1px solid var(--glass-border)' : 'none',
-                          }}>
-                            <a href={wr.url} target="_blank" rel="noopener noreferrer"
-                              style={{
-                                color: 'var(--text-secondary)', fontWeight: 600,
-                                textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4,
-                              }}>
-                              {wr.title || `结果 ${idx + 1}`}
-                              <ArrowUpRight size={9} weight="bold" />
-                            </a>
-                            <div style={{ marginTop: 2, opacity: 0.6 }}>{wr.snippet}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
                 {/* Rendered analysis blocks */}
-                <div style={{ fontSize: 12, lineHeight: 1.9, color: 'var(--text-primary)' }}>
+                <div style={{ fontSize: 14, lineHeight: 1.9, color: 'var(--text-primary)' }}>
                   {analysisBlocks.map((block, idx) => {
                     if (block.type === 'h2') {
                       return (
                         <div key={idx} style={{
-                          fontSize: 14, fontWeight: 700, color: 'var(--accent)',
+                          fontSize: 17, fontWeight: 700, color: 'var(--accent)',
                           marginTop: idx > 0 ? 22 : 0, marginBottom: 10, paddingBottom: 8,
                           borderBottom: '1px solid var(--glass-border)',
                           fontFamily: 'var(--font-display)', letterSpacing: '-0.01em',
@@ -521,7 +451,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                     if (block.type === 'h3') {
                       return (
                         <div key={idx} style={{
-                          fontSize: 11, fontWeight: 600, color: 'var(--text-primary)',
+                          fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
                           marginTop: 14, marginBottom: 8, paddingLeft: 10,
                           borderLeft: '2px solid var(--accent)',
                         }}>
@@ -532,7 +462,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                     if (block.type === 'list') {
                       return (
                         <div key={idx} style={{
-                          fontSize: 11, lineHeight: 1.8, color: 'var(--text-secondary)',
+                          fontSize: 13, lineHeight: 1.8, color: 'var(--text-secondary)',
                           marginBottom: 4, paddingLeft: 4, display: 'flex', gap: 8,
                         }}>
                           <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
@@ -548,7 +478,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                           margin: '8px 0', padding: '12px 16px',
                           background: 'rgba(30,27,24,0.03)', borderRadius: 'var(--radius-sm)',
                           border: '1px solid var(--glass-border)', fontFamily: 'var(--font-mono)',
-                          fontSize: 9, lineHeight: 1.7, color: 'var(--text-secondary)',
+                          fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)',
                           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                         }}>
                           {block.text}
@@ -563,7 +493,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                         }}>
                           <table style={{
                             width: '100%', borderCollapse: 'collapse',
-                            fontSize: 10, fontFamily: 'var(--font-mono)',
+                            fontSize: 12, fontFamily: 'var(--font-mono)',
                           }}>
                             <thead>
                               <tr style={{ background: 'rgba(0,0,0,0.02)' }}>
@@ -571,7 +501,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                                   <th key={hi} style={{
                                     padding: '7px 12px', textAlign: 'left',
                                     fontWeight: 600, color: 'var(--text-primary)',
-                                    fontSize: 9, borderBottom: '1px solid var(--glass-border)',
+                                    fontSize: 11, borderBottom: '1px solid var(--glass-border)',
                                   }}>
                                     {h}
                                   </th>
@@ -585,7 +515,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                                     <td key={ci} style={{
                                       padding: '6px 12px', color: 'var(--text-secondary)',
                                       borderBottom: ri < block.rows.length - 1 ? '1px solid var(--glass-border)' : 'none',
-                                      fontSize: 9,
+                                      fontSize: 11,
                                     }}>
                                       {cell}
                                     </td>
@@ -599,7 +529,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                     }
                     return (
                       <div key={idx} style={{
-                        fontSize: 11, lineHeight: 1.9, color: 'var(--text-secondary)',
+                        fontSize: 13, lineHeight: 1.9, color: 'var(--text-secondary)',
                         marginBottom: 8,
                       }}>
                         {highlightText(block.text)}
@@ -611,15 +541,136 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
             )}
           </div>
 
-          {/* ── RIGHT: Sidebar ── */}
-          {result && (
-            <SuperAnalysisSidebar
-              result={result}
-              expandedItem={expandedItem}
-              setExpandedItem={setExpandedItem}
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-            />
+          {/* ── RIGHT: Sidebar — web results + relevant items (asymmetric split) ── */}
+          {result && (result.web_results.length > 0 || result.relevant_items.length > 0) && (
+            <div style={{
+              width: 280, flexShrink: 0,
+              borderLeft: '1px solid var(--glass-border)',
+              overflowY: 'auto',
+              background: 'rgba(0,0,0,0.01)',
+              display: 'flex', flexDirection: 'column',
+            }}>
+              {/* Web results section */}
+              {result.web_results.length > 0 && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--glass-border)' }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    marginBottom: 10,
+                    fontSize: 10, fontWeight: 600, color: 'var(--text-secondary)',
+                    fontFamily: 'var(--font-mono)', letterSpacing: 0.5,
+                  }}>
+                    <Globe size={12} weight="duotone" color="var(--text-tertiary)" />
+                    网络参考
+                    <span style={{
+                      fontSize: 8, color: 'var(--text-tertiary)', opacity: 0.6,
+                      marginLeft: 'auto',
+                    }}>
+                      {result.web_results.length} 条
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {result.web_results.slice(0, 8).map((wr, i) => (
+                      <a
+                        key={i}
+                        href={wr.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'block', textDecoration: 'none',
+                          padding: '6px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--glass-border)',
+                          background: 'var(--bg-surface)',
+                          transition: 'border-color 0.15s ease',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)' }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--glass-border)' }}
+                      >
+                        <div style={{
+                          display: 'flex', alignItems: 'flex-start', gap: 4,
+                          fontSize: 10, lineHeight: 1.4, color: 'var(--text-primary)',
+                          fontWeight: 500, marginBottom: 2,
+                        }}>
+                          <LinkSimple size={10} weight="bold" color="var(--text-tertiary)" style={{ flexShrink: 0, marginTop: 1 }} />
+                          <span style={{
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                          }}>
+                            {wr.title || wr.url}
+                          </span>
+                        </div>
+                        {wr.snippet && (
+                          <div style={{
+                            fontSize: 9, color: 'var(--text-tertiary)', lineHeight: 1.4,
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                            marginTop: 2,
+                          }}>
+                            {wr.snippet}
+                          </div>
+                        )}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Relevant intel items section */}
+              {result.relevant_items.length > 0 && (
+                <div style={{ padding: '14px 16px', flex: 1 }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    marginBottom: 10,
+                    fontSize: 10, fontWeight: 600, color: 'var(--text-secondary)',
+                    fontFamily: 'var(--font-mono)', letterSpacing: 0.5,
+                  }}>
+                    <Brain size={12} weight="duotone" color="var(--text-tertiary)" />
+                    相关情报
+                    <span style={{
+                      fontSize: 8, color: 'var(--text-tertiary)', opacity: 0.6,
+                      marginLeft: 'auto',
+                    }}>
+                      {result.relevant_items.length} 条
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {result.relevant_items.map((item, i) => (
+                      <div key={i} style={{
+                        padding: '6px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--glass-border)',
+                        background: 'var(--bg-surface)',
+                      }}>
+                        <div style={{
+                          fontSize: 10, fontWeight: 500, color: 'var(--text-primary)',
+                          lineHeight: 1.4, marginBottom: 3,
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        }}>
+                          {item.title}
+                        </div>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontSize: 8, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)',
+                        }}>
+                          <span>{item.source}</span>
+                          <span style={{ opacity: 0.4 }}>|</span>
+                          <span>{item.date}</span>
+                          <span style={{ opacity: 0.4 }}>|</span>
+                          <span style={{
+                            color: item.confidence >= 0.7 ? 'var(--success)' :
+                              item.confidence >= 0.4 ? 'var(--warning)' : 'var(--danger)',
+                            fontWeight: 600,
+                          }}>
+                            {Math.round(item.confidence * 100)}%
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -641,7 +692,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
               border: '1px solid var(--border-subtle)',
               color: 'var(--text-primary)', padding: '10px 14px',
               borderRadius: 'var(--radius-sm)',
-              fontSize: 11, fontFamily: 'var(--font-ui)',
+              fontSize: 13, fontFamily: 'var(--font-ui)',
               outline: 'none',
               transition: 'border-color 0.2s, box-shadow 0.2s',
             }}
@@ -666,7 +717,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
               color: loading || !question.trim() ? 'var(--text-tertiary)' : '#ffffff',
               padding: '10px 22px', borderRadius: 'var(--radius-sm)',
               cursor: loading || !question.trim() ? 'default' : 'pointer',
-              fontSize: 11, fontWeight: 600,
+              fontSize: 13, fontWeight: 600,
               fontFamily: 'var(--font-mono)',
               opacity: loading || !question.trim() ? 0.3 : 1,
               transition: 'opacity 0.15s',

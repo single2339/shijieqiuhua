@@ -1,5 +1,6 @@
 """RSS feed scraper implementation."""
 
+import asyncio
 import calendar
 import logging
 import os
@@ -28,17 +29,19 @@ logger = logging.getLogger(__name__)
 class RSSScraper(BaseScraper):
     """Scraper for RSS/Atom feeds."""
 
-    def __init__(self, sources: List[RSSSourceConfig], http_client: httpx.AsyncClient):
+    def __init__(self, sources: List[RSSSourceConfig], http_client: httpx.AsyncClient, local_client: httpx.AsyncClient | None = None):
         """Initialize RSS scraper.
 
         Args:
             sources: List of RSS feed configurations
-            http_client: Shared async HTTP client
+            http_client: Shared async HTTP client (proxied for external URLs)
+            local_client: Direct HTTP client for localhost URLs (bypasses proxy)
         """
         super().__init__({"sources": sources}, http_client)
+        self._local_client = local_client
 
     async def fetch(self, since: datetime) -> List[ContentItem]:
-        """Fetch RSS feed items.
+        """Fetch RSS feed items concurrently.
 
         Args:
             since: Only fetch items published after this time
@@ -46,16 +49,17 @@ class RSSScraper(BaseScraper):
         Returns:
             List[ContentItem]: Fetched content items
         """
-        items = []
-        sources = self.config["sources"]
+        sources = [s for s in self.config["sources"] if s.enabled]
+        sem = asyncio.Semaphore(5)
 
-        for source in sources:
-            if not source.enabled:
-                continue
+        async def _fetch_one(source: RSSSourceConfig) -> List[ContentItem]:
+            async with sem:
+                return await self._fetch_feed(source, since)
 
-            feed_items = await self._fetch_feed(source, since)
-            items.extend(feed_items)
-
+        results = await asyncio.gather(*[_fetch_one(s) for s in sources])
+        items: list[ContentItem] = []
+        for result in results:
+            items.extend(result)
         return items
 
     async def _fetch_feed(
@@ -82,8 +86,10 @@ class RSSScraper(BaseScraper):
                 str(source.url),
             )
 
-            # Fetch feed content
-            response = await self.client.get(feed_url, follow_redirects=True)
+            # Use direct client for localhost URLs (proxy can't route them)
+            is_localhost = feed_url.startswith("http://127.0.0.1") or feed_url.startswith("http://localhost")
+            fetch_client = self._local_client if is_localhost and self._local_client else self.client
+            response = await fetch_client.get(feed_url, follow_redirects=True)
             response.raise_for_status()
 
             # Parse feed

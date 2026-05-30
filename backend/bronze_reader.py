@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import List
 
 
+QUEUE_DB_FILENAME = "queue.db"
+MERGE_INDEX_FILENAME = "_merge_index.json"
+
+
 class BronzeDocument:
     def __init__(self, raw: dict) -> None:
         self.raw = raw
@@ -34,7 +38,7 @@ def scan_bronze(storage_root: str | Path) -> List[BronzeDocument]:
         return docs
 
     for json_file in sorted(root.rglob("*.json")):
-        if json_file.name == "queue.db":
+        if json_file.name in (QUEUE_DB_FILENAME, MERGE_INDEX_FILENAME):
             continue
         try:
             data = json.loads(json_file.read_text(encoding="utf-8"))

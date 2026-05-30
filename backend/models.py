@@ -82,6 +82,10 @@ class DashboardData(BaseModel):
     sources: list[SourceInfo]
     layers: list[LayerSummary]
     total_items: int
+    page: int = 1
+    page_size: int = 100
+    has_more: bool = False
+    available_dates: list[str] = Field(default_factory=list)
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -91,12 +95,13 @@ class AskRequest(BaseModel):
     start_date: str = ""
     end_date: str = ""
     layer: str = ""
+    skills: list[str] = Field(default_factory=list)
 
 
 class AskResponse(BaseModel):
     answer: str
     references: list[dict] = Field(default_factory=list)
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
 
 
 # ── Dashboard Stats ──
@@ -129,6 +134,7 @@ class ReportRequest(BaseModel):
     days: int = 7
     layer: str = ""
     detail_level: str = "standard"  # "brief", "standard", "deep"
+    skills: list[str] = Field(default_factory=list)
 
 
 class ReportSection(BaseModel):
@@ -250,6 +256,7 @@ class SuperAnalysisRequest(BaseModel):
     question: str
     start_date: str = ""
     end_date: str = ""
+    skills: list[str] = Field(default_factory=list)
 
 
 class BayesianIntelItem(BaseModel):
@@ -271,4 +278,4 @@ class SuperAnalysisResponse(BaseModel):
     analysis: str
     relevant_items: list[BayesianIntelItem] = Field(default_factory=list)
     web_results: list[dict] = Field(default_factory=list)
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"

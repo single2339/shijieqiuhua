@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import type { IntelItem } from '../types'
 import { LAYER_META } from '../types'
@@ -6,13 +7,31 @@ interface Props {
   items: IntelItem[]
   onSelect: (item: IntelItem) => void
   selectedId: string | null
+  hasMore?: boolean
+  loadingMore?: boolean
+  onLoadMore?: () => void
 }
 
 function layerLabel(l: IntelItem['layer']) {
   return LAYER_META[l].label
 }
 
-export default function MessageFeed({ items, onSelect, selectedId }: Props) {
+export default function MessageFeed({ items, onSelect, selectedId, hasMore, loadingMore, onLoadMore }: Props) {
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const onLoadMoreRef = useRef(onLoadMore)
+  onLoadMoreRef.current = onLoadMore
+
+  useEffect(() => {
+    if (!onLoadMore || !hasMore) return
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) onLoadMoreRef.current?.() },
+      { rootMargin: '100px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [onLoadMore, hasMore])
   if (!items.length) return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -27,7 +46,7 @@ export default function MessageFeed({ items, onSelect, selectedId }: Props) {
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
       <div style={{
-        position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-surface)',
+        position: 'sticky', top: 0, zIndex: 'var(--z-map-controls)', background: 'var(--bg-surface)',
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '6px 14px', borderBottom: '1px solid var(--glass-border)',
         fontFamily: 'var(--font-mono)', fontSize: 9,
@@ -46,7 +65,7 @@ export default function MessageFeed({ items, onSelect, selectedId }: Props) {
               key={item.id}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.008, duration: 0.2 }}
+              transition={{ delay: (i % 50) * 0.008, duration: 0.2 }}
               onClick={() => onSelect(item)}
               className="msg-feed-item"
               style={{
@@ -98,6 +117,17 @@ export default function MessageFeed({ items, onSelect, selectedId }: Props) {
             </motion.div>
           )
         })}
+        <div ref={sentinelRef} style={{ height: 1 }} />
+        {loadingMore && (
+          <div style={{ textAlign: 'center', padding: '8px 0', color: 'var(--text-tertiary)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+            加载中...
+          </div>
+        )}
+        {!hasMore && items.length > 0 && (
+          <div style={{ textAlign: 'center', padding: '8px 0', color: 'var(--text-tertiary)', fontSize: 9, fontFamily: 'var(--font-mono)', opacity: 0.5 }}>
+            — 全部 {items.length} 条 —
+          </div>
+        )}
       </div>
     </div>
   )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys as _sys
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import List
 import asyncio
 import logging
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
 # ── load .env from project root ──
@@ -20,13 +21,14 @@ if _dotenv.exists():
     import dotenv
     dotenv.load_dotenv(_dotenv)
 
-from fastapi import FastAPI, Query, Request
+import httpx
+from fastapi import Depends, FastAPI, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-import httpx
 
 from backend.bronze_reader import scan_bronze, scan_bronze_async
+from backend.indexer import Indexer
 from backend.models import (
     AnalysisInterpretRequest,
     AnalysisInterpretResponse,
@@ -66,97 +68,77 @@ from backend.models import (
 from backend.processors.classifier import classify
 from backend.processors.llm_classifier import classify_with_llm
 from backend.processors.location import extract_location, extract_location_with_fallback
-from backend.processors.analysis import (
-    analyze_gaps,
-    compute_corroboration,
-    compute_risk_heatmap,
-    compute_timeline,
-    detect_anomalies,
-    extract_entity_graph,
-)
 from backend.seed_data import main as reseed
-from backend.collectors.horizon_bridge import HorizonBridge
 from backend.merger import build_merge_index, load_merge_index
-
-# ── import yao-bayesian-skill engine ──
-SKILL_DIR = Path.home() / ".cc-switch" / "skills" / "yao-bayesian-skill" / "scripts"
-_sys.path.insert(0, str(SKILL_DIR))
-from bayesian_decision_report import apply_odds_update  # type: ignore[import-untyped]
 
 RESEED_INTERVAL = 30  # seconds
 HORIZON_INTERVAL = 15 * 60  # 15 minutes between Horizon scraper runs
 MERGE_HOUR_UTC = 3  # daily merge at 03:00 UTC (Beijing 11:00)
 COLLECTOR_MODE = os.environ.get("OSINT_COLLECTOR", "horizon")  # "demo" or "horizon"
 
-async def reseed_loop():
-    """Regenerate test data every RESEED_INTERVAL seconds (demo mode)."""
-    while True:
-        try:
-            loop = asyncio.get_running_loop()
-            ts = datetime.now(timezone.utc).isoformat()
-            await loop.run_in_executor(None, lambda: reseed(clear=True, seed=ts))
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            log.exception("reseed_loop iteration failed")
-        await asyncio.sleep(RESEED_INTERVAL)
+# ── Agent system ──
+from backend.agents.config import is_agent_mode
+from backend.agents.registry import AgentRegistry
+from backend.agents.base import AgentCallbacks, AgentEvent
+from backend.agents.models import AgentTask as AgentTaskModel
+from backend.agents.intelligence._bayesian import compute_bayesian
+from backend.websocket.manager import ws_manager
+from backend.auth.routes import router as auth_router, get_current_user
+from backend.auth.admin_routes import router as admin_router
+from backend.auth.tracking import record_activity
+
+# Import agent modules so they self-register via AgentRegistry
+import backend.agents.collectors.api_collectors  # noqa: F401
+import backend.agents.collectors.rss_collector  # noqa: F401
+import backend.agents.collectors.social_collectors  # noqa: F401
+import backend.agents.processors.bayesian_scoring  # noqa: F401
+import backend.agents.processors.pipeline  # noqa: F401
+import backend.agents.processors.classification  # noqa: F401
+import backend.agents.processors.location_extraction  # noqa: F401
+import backend.agents.processors.summarization  # noqa: F401
+import backend.agents.processors.translation  # noqa: F401
+import backend.agents.system.indexer  # noqa: F401
+import backend.agents.system.merger  # noqa: F401
+import backend.agents.system.orchestrator  # noqa: F401
+import backend.agents.intelligence.interpretation  # noqa: F401
+import backend.agents.intelligence.qa_analyst  # noqa: F401
+import backend.agents.intelligence.report_writer  # noqa: F401
+import backend.agents.intelligence.super_analyst  # noqa: F401
+import backend.agents.analysis.anomaly_detector  # noqa: F401
+import backend.agents.analysis.corroboration  # noqa: F401
+import backend.agents.analysis.entity_graph  # noqa: F401
+import backend.agents.analysis.gap_analyzer  # noqa: F401
+import backend.agents.analysis.risk_heatmap  # noqa: F401
+import backend.agents.analysis.timeline  # noqa: F401
 
 
-async def horizon_loop():
-    """Collect real content via Horizon scrapers every HORIZON_INTERVAL seconds."""
-    bridge = HorizonBridge(STORAGE)
-    try:
-        while True:
-            try:
-                await bridge.collect_and_store(hours=48)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                log.exception("horizon_loop iteration failed")
-            await asyncio.sleep(HORIZON_INTERVAL)
-    finally:
-        await bridge.close()
+def _ws_callbacks(channel: str = "collection") -> AgentCallbacks:
+    """Build AgentCallbacks that broadcast events to WebSocket clients."""
+    async def on_event(event: AgentEvent):
+        await ws_manager.broadcast(channel, event.event_type, {
+            "agent_id": event.agent_id,
+            "message": event.message,
+            "data": event.data,
+        })
 
+    async def on_status_change(agent_id: str, old, new):
+        await ws_manager.broadcast(channel, "status_change", {
+            "agent_id": agent_id,
+            "old_status": old.value,
+            "new_status": new.value,
+        })
 
-def _run_merge() -> dict:
-    """Synchronous merge execution. Runs in thread pool. Invalidates dashboard cache."""
-    index = build_merge_index(STORAGE)
-    import logging
-    log = logging.getLogger("uvicorn")
-    log.info("Merge complete: %d docs -> %d groups (%d orphaned)",
-             index.total_docs, index.total_groups, len(index.orphaned_doc_ids))
-    return {"total_docs": index.total_docs, "total_groups": index.total_groups}
+    async def on_error(agent_id: str, error: str):
+        await ws_manager.broadcast(channel, "error", {
+            "agent_id": agent_id,
+            "error": error,
+        })
 
-
-async def merge_loop():
-    """Run content merging daily at MERGE_HOUR_UTC. Also runs on first startup."""
-    while True:
-        try:
-            now = datetime.now(timezone.utc)
-            index_path = STORAGE / "_merge_index.json"
-            needs_run = True
-            if index_path.exists():
-                try:
-                    data = json.loads(index_path.read_text(encoding="utf-8"))
-                    gen_date = datetime.fromisoformat(data.get("generated_at", "")).date()
-                    if gen_date == now.date():
-                        needs_run = False
-                except (json.JSONDecodeError, KeyError, ValueError, OSError):
-                    log.warning("merge_loop: failed to read merge index, will re-merge")
-            if needs_run:
-                loop = asyncio.get_running_loop()
-                _dashboard_cache.clear()
-                await loop.run_in_executor(None, _run_merge)
-            next_run = now.replace(hour=MERGE_HOUR_UTC, minute=0, second=0, microsecond=0)
-            if next_run <= now:
-                next_run += timedelta(days=1)
-            await asyncio.sleep((next_run - datetime.now(timezone.utc)).total_seconds())
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            log.exception("merge_loop iteration failed")
-            await asyncio.sleep(3600)
-
+    return AgentCallbacks(
+        on_event=on_event,
+        on_status_change=on_status_change,
+        on_error=on_error,
+    )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -165,15 +147,42 @@ async def lifespan(app: FastAPI):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: reseed(clear=True))
 
-    tasks: list[asyncio.Task] = []
-    if COLLECTOR_MODE == "demo":
-        tasks.append(asyncio.create_task(reseed_loop()))
-    else:
-        tasks.append(asyncio.create_task(horizon_loop()))
-    tasks.append(asyncio.create_task(merge_loop()))
+    # Initialize indexer and build index if needed
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _init_indexer)
+
+    # Pre-warm dashboard cache for today's date
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    def _build_safe():
+        try:
+            _build_items(start_date=today, end_date=today)
+        except Exception:
+            log.exception("Failed to pre-warm dashboard cache")
+    loop.run_in_executor(None, _build_safe)
+
+    # Periodic reindex to pick up newly collected files
+    async def _reindex_loop():
+        while True:
+            await asyncio.sleep(300)  # every 5 minutes
+            try:
+                n = await loop.run_in_executor(None, _get_indexer().incremental_update)
+                if n:
+                    log.info("Periodic reindex: %d new docs", n)
+            except Exception:
+                log.exception("Periodic reindex failed")
+
+    _reindex_task = asyncio.create_task(_reindex_loop())
+
+    # ── Agent orchestrator ──
+    from backend.agents.system.orchestrator import OrchestratorAgent
+    _agent_orch = OrchestratorAgent(storage_root=STORAGE, callbacks=_ws_callbacks())
+    await _agent_orch.start_collection_loop()
+    await _agent_orch.start_merge_loop()
     yield
-    for t in tasks:
-        t.cancel()
+    if _indexer is not None:
+        _indexer.close()
+    if _agent_orch is not None:
+        await _agent_orch.stop()
 
 
 app = FastAPI(title="OSINT Network API", version="1.0.0", lifespan=lifespan)
@@ -190,11 +199,96 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request body size limit — reject oversized payloads early
+_MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_BODY_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "请求体过大"})
+    return await call_next(request)
+
+
+# ── Auth routes ──
+app.include_router(auth_router, prefix="/api/auth")
+app.include_router(admin_router, prefix="/api/admin")
+
+# Cache-Control middleware — short TTL for live data, longer for analysis snapshots
+_CACHE_RULES: dict[str, str] = {
+    "/api/dashboard": "public, max-age=10",
+    "/api/stats": "public, max-age=10",
+    "/api/health": "no-cache",
+    "/api/analysis/": "public, max-age=60",
+}
+
+
+@app.middleware("http")
+async def cache_control_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if response.status_code >= 400:
+        return response
+    path = request.url.path
+    for prefix, cc in _CACHE_RULES.items():
+        if path == prefix or (prefix.endswith("/") and path.startswith(prefix)):
+            response.headers["Cache-Control"] = cc
+            break
+    return response
+
 # ── Simple in-memory rate limiter ──
 _rate_limit_store: dict[str, list[float]] = {}
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX = 120    # max requests per window per IP
 _RATE_LIMIT_WRITE_MAX = 20  # stricter for POST endpoints
+
+# ── Public API paths (no auth required) ──
+_PUBLIC_PREFIXES = ("/api/health", "/api/auth/", "/api/admin/", "/api/dashboard", "/api/stats")
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if any(path == p or (p.endswith("/") and path.startswith(p)) for p in _PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    from backend.auth import service
+    token = request.cookies.get("osint_access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    payload = service.decode_token(token) if token else None
+
+    if payload is None:
+        # Access token missing or expired — try refresh token
+        refresh_token = request.cookies.get("osint_refresh_token")
+        if refresh_token:
+            try:
+                result = service.refresh_access_token(refresh_token)
+                new_access = result["access_token"]
+                new_refresh = result["refresh_token"]
+                # Inject new access token so downstream Depends(get_current_user) can read it
+                request._headers["authorization"] = f"Bearer {new_access}"
+                response = await call_next(request)
+                response.set_cookie(
+                    "osint_access_token", new_access,
+                    httponly=True, secure=False, samesite="lax",
+                    max_age=3600, path="/",
+                )
+                response.set_cookie(
+                    "osint_refresh_token", new_refresh,
+                    httponly=True, secure=False, samesite="lax",
+                    max_age=7 * 24 * 3600, path="/",
+                )
+                return response
+            except ValueError:
+                pass
+
+        return JSONResponse(status_code=401, content={"detail": "未提供认证令牌"})
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -210,11 +304,35 @@ async def rate_limit_middleware(request: Request, call_next):
     window.append(now)
     _rate_limit_store[client_ip] = window
     if len(_rate_limit_store) > 4096:
-        _rate_limit_store.clear()
+        oldest = sorted(_rate_limit_store.keys(), key=lambda k: min(_rate_limit_store[k] or [0]))[:1024]
+        for k in oldest:
+            del _rate_limit_store[k]
     return await call_next(request)
 
 
 STORAGE = Path(__file__).resolve().parent.parent / "bronze_storage"
+_indexer: Indexer | None = None
+
+
+def _get_indexer() -> Indexer:
+    global _indexer
+    if _indexer is None:
+        _indexer = Indexer(STORAGE)
+    return _indexer
+
+
+def _init_indexer() -> None:
+    """Build or verify the SQLite index. Runs synchronously in thread pool."""
+    idx = _get_indexer()
+    if idx.count() == 0:
+        t0 = __import__("time").time()
+        n = idx.build_index()
+        elapsed = __import__("time").time() - t0
+        logging.getLogger("uvicorn").info("Indexer built: %d docs in %.1fs", n, elapsed)
+    else:
+        n = idx.incremental_update()
+        if n:
+            logging.getLogger("uvicorn").info("Indexer incremental: %d new docs", n)
 
 # ── Dashboard cache to avoid recomputing on every poll ──
 _dashboard_cache: dict[str, tuple[float, object]] = {}
@@ -255,155 +373,11 @@ def _resolve_source_name(doc) -> str:
     return doc.source_system
 
 
-def _get_layer(doc) -> IntelLayer:
-    """Read IntelLayer from document extensions (set by LLM during collection).
-
-    Falls back to keyword classifier if no stored layer found.
-    """
-    ext = getattr(doc, "extensions", {}) or {}
-    if isinstance(ext, dict):
-        meta = ext.get("horizon_metadata", {})
-        if isinstance(meta, dict) and meta.get("layer"):
-            try:
-                return IntelLayer(meta["layer"])
-            except ValueError:
-                pass
-    return classify(doc.text)
-
-
-# ── yao-bayesian-skill evidence framework ──
-
-SOURCE_PRIORS: dict[str, dict] = {
-    "high": {"probability": 0.70, "quality": "B", "source_class": "high-credibility"},
-    "medium": {"probability": 0.55, "quality": "C", "source_class": "medium-credibility"},
-    "low": {"probability": 0.40, "quality": "D", "source_class": "low-credibility"},
-    "kol": {"probability": 0.30, "quality": "D", "source_class": "kol"},
-    "unknown": {"probability": 0.40, "quality": "D", "source_class": "unknown"},
-}
-
-HIGH_SOURCES = {"reuters", "ap", "ap-news", "bbc", "afp", "npr", "nytimes",
-                "the-guardian", "guardian", "cnn", "el-pais", "le-monde", "france24", "dw"}
-MEDIUM_SOURCES = {"al-jazeera", "al-monitor", "euronews", "ansa", "repubblica",
-                  "all-africa", "el-universal", "un-news"}
-LOW_SOURCES = {"bellingcat", "arstechnica", "bleeping-computer", "medium", "rferl", "fdd"}
-
-
-KOL_SOURCES = {"oryx", "perun", "ralee85", "geoconfirmed", "osinttechnical", "war-mapper", "rybar",
-               "suriyak-maps", "southfront", "redspotted-nro", "covert-cabal", "ukikaski",
-               "trent-telenko", "defmon3", "middle-east-monitor", "visual-politik",
-               "biggers-geopolitics", "ukraine-frontline", "marksian", "casual-scholar",
-               "boston-roundface", "shapan-war", "guancha-kol",
-               "intel-crab", "mt-anderson", "eliot-higgins", "christo-grozev",
-               "hi-sutton", "simplicius-thinker", "andrew-perpetua", "tatarigami-ua",
-               "jeffrey-lewis", "phillips-obrien", "mick-ryan", "franz-gady",
-               "alex-mercouris", "brian-berletic", "michael-kofman"}
-
-
-def source_prior_class(src: str) -> str:
-    s = src.lower().strip()
-    if s in KOL_SOURCES:
-        return "kol"
-    for name in HIGH_SOURCES:
-        if name in s:
-            return "high"
-    for name in MEDIUM_SOURCES:
-        if name in s:
-            return "medium"
-    for name in LOW_SOURCES:
-        if name in s:
-            return "low"
-    return "unknown"
-
-
-def compute_bayesian(text: str, source_system: str = "") -> tuple:
-    """
-    Use yao-bayesian-skill odds-update with evidence quality tiers (A-E).
-    Evidence parameters differ by source type: KOL sources get lower priors
-    and weaker evidence weights, reflecting lack of institutional verification.
-    Returns (posterior, trace, verdict, method, prior_quality, prior_class, evidence_items).
-    """
-    if not text.strip():
-        return (0.5, [0.5], Verdict.UNCERTAIN, "", "", "", [])
-
-    prior_class = source_prior_class(source_system)
-    prior_info = SOURCE_PRIORS[prior_class]
-    prior = prior_info["probability"]
-
-    # Source-type-dependent evidence configuration
-    # KOLs (individual social-media analysts) have weaker cross-source and
-    # authority evidence; institutions have stronger corroboration factors.
-    if prior_class == "kol":
-        evidence_list = [
-            {"name": "content-specificity", "likelihood_ratio": 2.0, "direction": "support", "dependency_discount": 0.7},
-            {"name": "cross-source",          "likelihood_ratio": 1.5, "direction": "support", "dependency_discount": 1.0},
-            {"name": "temporal",              "likelihood_ratio": 1.4, "direction": "support", "dependency_discount": 1.0},
-            {"name": "verifiable-numbers",    "likelihood_ratio": 1.8, "direction": "support", "dependency_discount": 0.8},
-            {"name": "source-authority",      "likelihood_ratio": 0.5, "direction": "support", "dependency_discount": 1.0},
-        ]
-        ev_items_out = [
-            dict(name="content-specificity", quality="C", lr=2.0, dep_discount=0.7, direction="support"),
-            dict(name="cross-source", quality="D", lr=1.5, dep_discount=1.0, direction="support"),
-            dict(name="temporal", quality="C", lr=1.4, dep_discount=1.0, direction="support"),
-            dict(name="verifiable-numbers", quality="C", lr=1.8, dep_discount=0.8, direction="support"),
-            dict(name="source-authority", quality="D", lr=0.5, dep_discount=1.0, direction="support"),
-        ]
-    elif prior_class in ("high", "medium"):
-        evidence_list = [
-            {"name": "content-specificity", "likelihood_ratio": 3.0, "direction": "support", "dependency_discount": 0.7},
-            {"name": "cross-source",          "likelihood_ratio": 5.0, "direction": "support", "dependency_discount": 1.0},
-            {"name": "temporal",              "likelihood_ratio": 1.6, "direction": "support", "dependency_discount": 1.0},
-            {"name": "verifiable-numbers",    "likelihood_ratio": 2.5, "direction": "support", "dependency_discount": 0.8},
-            {"name": "source-authority",      "likelihood_ratio": 1.2, "direction": "support", "dependency_discount": 1.0},
-        ]
-        ev_items_out = [
-            dict(name="content-specificity", quality="B", lr=3.0, dep_discount=0.7, direction="support"),
-            dict(name="cross-source", quality="A", lr=5.0, dep_discount=1.0, direction="support"),
-            dict(name="temporal", quality="C", lr=1.6, dep_discount=1.0, direction="support"),
-            dict(name="verifiable-numbers", quality="B", lr=2.5, dep_discount=0.8, direction="support"),
-            dict(name="source-authority", quality="B", lr=1.2, dep_discount=1.0, direction="support"),
-        ]
-    else:  # low / unknown
-        evidence_list = [
-            {"name": "content-specificity", "likelihood_ratio": 2.0, "direction": "support", "dependency_discount": 0.7},
-            {"name": "cross-source",          "likelihood_ratio": 2.0, "direction": "support", "dependency_discount": 1.0},
-            {"name": "temporal",              "likelihood_ratio": 1.3, "direction": "support", "dependency_discount": 1.0},
-            {"name": "verifiable-numbers",    "likelihood_ratio": 1.5, "direction": "support", "dependency_discount": 0.8},
-            {"name": "source-authority",      "likelihood_ratio": 0.8, "direction": "support", "dependency_discount": 1.0},
-        ]
-        ev_items_out = [
-            dict(name="content-specificity", quality="D", lr=2.0, dep_discount=0.7, direction="support"),
-            dict(name="cross-source", quality="D", lr=2.0, dep_discount=1.0, direction="support"),
-            dict(name="temporal", quality="D", lr=1.3, dep_discount=1.0, direction="support"),
-            dict(name="verifiable-numbers", quality="D", lr=1.5, dep_discount=0.8, direction="support"),
-            dict(name="source-authority", quality="D", lr=0.8, dep_discount=1.0, direction="support"),
-        ]
-
-    posterior, log, _, _ = apply_odds_update(prior, evidence_list)
-
-    # Build trace for frontend chart
-    trace = [prior]
-    current = prior
-    for e in evidence_list:
-        p, _, _, _ = apply_odds_update(current, [e])
-        current = p
-        trace.append(round(p, 4))
-
-    if posterior >= 0.7:
-        verdict = Verdict.VERIFIED
-    elif posterior <= 0.3:
-        verdict = Verdict.FALSE
-    else:
-        verdict = Verdict.UNCERTAIN
-
-    return (round(posterior, 3), trace, verdict, "odds-update",
-            prior_info["quality"], prior_info["source_class"], ev_items_out)
-
-
 @app.get("/api/dashboard", response_model=DashboardData)
-async def get_dashboard(start_date: str = "", end_date: str = ""):
+async def get_dashboard(start_date: str = "", end_date: str = "", date: str = "", page: int = 1, page_size: int = 100):
     import time as _time
 
-    cache_key = f"{start_date}|{end_date}"
+    cache_key = f"{start_date}|{end_date}|{date}|{page}|{page_size}"
     cached = _dashboard_cache.get(cache_key)
     if cached:
         ts, data = cached
@@ -411,12 +385,21 @@ async def get_dashboard(start_date: str = "", end_date: str = ""):
             return data
 
     def _process() -> DashboardData:
-        items = _build_items(start_date=start_date, end_date=end_date)
+        # When date is set, use it as both start and end for single-day view
+        s_date = start_date
+        e_date = end_date
+        if date:
+            s_date = date
+            e_date = date
+        all_items = _build_items(start_date=s_date, end_date=e_date)
 
-        # Build source_map from multi-source items
+        # Get available dates from SQLite index directly (fast)
+        available_dates = _get_indexer().get_available_dates()
+
+        # Build source_map and layer_counts from ALL items (aggregates are full)
         source_map: dict[str, dict] = {}
         now_ts = datetime.now(timezone.utc).isoformat()
-        for item in items:
+        for item in all_items:
             for src_name in item.sources:
                 if not src_name:
                     continue
@@ -430,7 +413,7 @@ async def get_dashboard(start_date: str = "", end_date: str = ""):
                     source_map[src_name]["last"] = last
 
         layer_counts: dict[IntelLayer, list[float]] = {l: [] for l in IntelLayer}
-        for item in items:
+        for item in all_items:
             layer_counts[item.layer].append(item.confidence)
 
         layers = [
@@ -443,11 +426,22 @@ async def get_dashboard(start_date: str = "", end_date: str = ""):
             for name, info in sorted(source_map.items(), key=lambda x: x[1]["credibility"], reverse=True)
         ]
 
+        # Paginate intel_items
+        total = len(all_items)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged_items = all_items[start:end]
+        has_more = end < total
+
         return DashboardData(
-            intel_items=items,
+            intel_items=paged_items,
             sources=sources,
             layers=layers,
-            total_items=len(items),
+            total_items=total,
+            page=page,
+            page_size=page_size,
+            has_more=has_more,
+            available_dates=available_dates,
         )
 
     loop = asyncio.get_running_loop()
@@ -466,9 +460,7 @@ async def health():
     ts, count = _health_count_cache
     if _time.time() - ts < DASHBOARD_CACHE_TTL:
         return {"status": "ok", "bronze_docs": count}
-    loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, lambda: scan_bronze(STORAGE))
-    count = len(docs)
+    count = _get_indexer().count()
     _health_count_cache = (_time.time(), count)
     return {"status": "ok", "bronze_docs": count}
 
@@ -483,15 +475,10 @@ async def trigger_collect(hours: int = 48):
     if _collect_task and not _collect_task.done():
         return {"status": "running", "message": "采集任务正在进行中"}
 
-    async def _run():
-        bridge = HorizonBridge(STORAGE)
-        try:
-            return await bridge.collect_and_store(hours=hours)
-        finally:
-            await bridge.close()
-
-    _collect_task = asyncio.create_task(_run())
-    return {"status": "started", "message": "采集任务已启动，将在后台执行"}
+    orch = AgentRegistry.create("orchestrator", callbacks=_ws_callbacks())
+    task = AgentTaskModel(task_type="collect", params={"action": "collect", "hours": hours})
+    _collect_task = asyncio.create_task(orch.run(task))
+    return {"status": "started", "message": "采集任务已启动"}
 
 
 @app.get("/api/collect/status")
@@ -513,10 +500,11 @@ async def collect_status():
 @app.post("/api/merge")
 async def trigger_merge():
     """Manually trigger the daily content merge task."""
-    loop = asyncio.get_running_loop()
     _dashboard_cache.clear()
-    result = await loop.run_in_executor(None, _run_merge)
-    return {"status": "ok", **result}
+    result = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: build_merge_index(STORAGE)
+    )
+    return {"status": "ok", "groups": result.total_groups, "total_docs": result.total_docs}
 
 
 @app.post("/api/reclassify")
@@ -529,52 +517,45 @@ async def trigger_reclassify(force: bool = Query(False)):
     """
     import time as _time
 
-    loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, lambda: scan_bronze(STORAGE))
+    idx = _get_indexer()
+    docs = idx.get_all()
 
-    # Build {raw_document_id: path} lookup for O(1) updates
-    id_to_path: dict[str, Path] = {}
-    for p in STORAGE.rglob("*.json"):
-        if p.name == "queue.db":
-            continue
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            did = data.get("raw_document_id", "")
-            if did:
-                id_to_path[did] = p
-        except (json.JSONDecodeError, OSError):
-            continue
+    # Build {raw_document_id: path} lookup from indexer
+    conn = idx._get_conn()
+    rows = conn.execute("SELECT raw_document_id, file_path FROM bronze_index").fetchall()
+    id_to_path: dict[str, Path] = {r[0]: Path(r[1]) for r in rows if r[1]}
 
     total = len(docs)
     updated = 0
     skipped = 0
     failed = 0
+    batch_size = 5
 
-    for doc in docs:
+    sem = asyncio.Semaphore(3)
+
+    async def _reclassify_one(doc) -> dict:
+        """Reclassify a single document. Returns {"result": "updated"|"skipped"|"failed"}."""
         ext = doc.extensions or {}
         meta = ext.get("horizon_metadata", {}) if isinstance(ext, dict) else {}
         has_layer = isinstance(meta, dict) and meta.get("layer")
         has_location = isinstance(meta, dict) and meta.get("location_country")
 
-        # Skip if both layer and location are present (unless force)
         if has_layer and has_location and not force:
-            skipped += 1
-            continue
+            return {"result": "skipped"}
 
         title = ""
         if isinstance(ext, dict):
             title = ext.get("horizon_title", "") or ext.get("summary", "") or ""
 
-        try:
-            layer, country, city = await classify_with_llm(title, doc.text)
-        except Exception:
-            failed += 1
-            continue
+        async with sem:
+            try:
+                layer, country, city = await classify_with_llm(title, doc.text)
+            except Exception:
+                return {"result": "failed"}
 
         json_path = id_to_path.get(doc.raw_document_id)
         if json_path is None:
-            failed += 1
-            continue
+            return {"result": "failed"}
 
         try:
             data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -592,13 +573,23 @@ async def trigger_reclassify(force: bool = Query(False)):
             exts["horizon_metadata"] = h_meta
             data["extensions"] = exts
             json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            updated += 1
+            return {"result": "updated"}
         except (json.JSONDecodeError, OSError) as e:
             log.warning("Failed to update %s: %s", json_path, e)
-            failed += 1
+            return {"result": "failed"}
 
-        # Rate limit: brief delay between LLM calls
-        await asyncio.sleep(0.05)
+    for i in range(0, total, batch_size):
+        batch = docs[i:i + batch_size]
+        results = await asyncio.gather(*[_reclassify_one(doc) for doc in batch])
+        for r in results:
+            if r["result"] == "updated":
+                updated += 1
+            elif r["result"] == "skipped":
+                skipped += 1
+            else:
+                failed += 1
+        if i + batch_size < total:
+            await asyncio.sleep(0.1)
 
     _dashboard_cache.clear()
     return {
@@ -610,108 +601,46 @@ async def trigger_reclassify(force: bool = Query(False)):
     }
 
 
+@app.post("/api/reindex")
+async def trigger_reindex():
+    """Rebuild or incrementally update the SQLite index from bronze JSON files."""
+    idx = _get_indexer()
+    before = idx.count()
+    new = idx.incremental_update()
+    after = idx.count()
+    _dashboard_cache.clear()
+    return {
+        "status": "ok",
+        "before": before,
+        "new": new,
+        "after": after,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # LLM helper — reusable DeepSeek call for Q&A and reports
 # ═══════════════════════════════════════════════════════════════
 
-from backend.llm_config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, create_llm_client
-
-
-async def _llm_chat(system: str, user: str, temperature: float = 0.3) -> str | None:
-    """Call DeepSeek LLM with system + user messages. Returns content or None."""
-    if not LLM_API_KEY:
-        return None
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": temperature,
-    }
-    try:
-        async with create_llm_client() as client:
-            r = await client.post(f"{LLM_BASE_URL}/chat/completions", json=payload)
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
-        log.warning("LLM chat returned status %d: %s", r.status_code, r.text[:200])
-    except httpx.HTTPError as exc:
-        log.warning("LLM chat HTTP error: %s", exc)
-    except Exception:
-        log.exception("LLM chat unexpected error")
-    return None
 
 
 # ═══════════════════════════════════════════════════════════════
 # 1 — AI Analyst Q&A
 # ═══════════════════════════════════════════════════════════════
 
-_SYSTEM_QA = (
-    "你是一名专业的情报分析师。基于提供的上下文情报数据，用简体中文回答用户的问题。"
-    "引用具体的情报来源和时间，保持客观、准确。如果数据不足以回答，请明确指出。"
-    "不编造信息，不添加外部知识。"
-)
-
-
 @app.post("/api/ask", response_model=AskResponse)
 async def ask_question(req: AskRequest):
     """AI尝识者问答 — 基于现有情报数据回答问题。"""
-    docs = await scan_bronze_async(STORAGE)
-    seen: set[str] = set()
-    relevant: list[dict] = []
-
-    for doc in docs:
-        text = doc.text
-        if not text:
-            continue
-        body_hash = hashlib.md5(text.encode()).hexdigest()
-        if body_hash in seen:
-            continue
-        seen.add(body_hash)
-
-        ext = doc.extensions or {}
-        title = ext.get("summary", "") or ext.get("horizon_title", "") or text[:80]
-        layer = _get_layer(doc)
-        if req.layer and layer.value != req.layer:
-            continue
-
-        captured = doc.captured_at[:10] if doc.captured_at else ""
-        if req.start_date and captured < req.start_date:
-            continue
-        if req.end_date and captured > req.end_date:
-            continue
-
-        relevant.append({
-            "title": title.split("\n")[0],
-            "content": text[:500],
-            "source": doc.source_system,
-            "date": captured,
-            "layer": layer.value,
-        })
-
-        if len(relevant) >= 30:
-            break
-
-    if not relevant:
-        return AskResponse(answer="系统暂无相关情报数据可供分析。", references=[])
-
-    # Build context for LLM
-    context_lines = []
-    for i, r in enumerate(relevant, 1):
-        context_lines.append(
-            f"[{i}] {r['date']} | {r['source']} | {r['layer']}\n"
-            f"    标题: {r['title']}\n"
-            f"    内容: {r['content'][:300]}\n"
-        )
-    context = "\n".join(context_lines)
-    user_prompt = f"## 情报数据\n\n{context}\n\n## 问题\n\n{req.question}"
-
-    answer = await _llm_chat(_SYSTEM_QA, user_prompt)
-    refs = [{"title": r["title"], "source": r["source"], "date": r["date"]} for r in relevant[:10]]
-
+    agent = AgentRegistry.create("qa_analyst", indexer=_get_indexer())
+    task = AgentTaskModel(task_type="qa", params={
+        "question": req.question,
+        "layer": req.layer,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
+    }, skills=req.skills)
+    result = await agent.run(task)
     return AskResponse(
-        answer=answer or "AI分析暂时不可用（API密钥未配置或请求失败）。",
-        references=refs,
+        answer=result.data.get("answer", "分析失败"),
+        references=result.data.get("references", []),
     )
 
 
@@ -807,235 +736,67 @@ async def dashboard_stats(start_date: str = "", end_date: str = ""):
 # 3 — Auto Situation Report
 # ═══════════════════════════════════════════════════════════════
 
-_SYSTEM_REPORT = (
-    "你是一名专业的情报分析官。根据提供的上下文情报数据，生成一份结构化中文态势简报。"
-    "简报格式要求：\n"
-    "1. 先给出整体态势总结（150字以内）\n"
-    "2. 按主题分节，每节以「## 标题」开头\n"
-    "3. 每节包含3-5条关键发现，每条控制在80字以内\n"
-    "4. 对关键数据点标注情报来源和日期\n"
-    "5. 最后附置信度评估\n\n"
-    "只使用提供的情报数据，不编造信息。"
-)
-
-
 @app.post("/api/report", response_model=SituationReport)
 async def generate_report(req: ReportRequest):
     """生成指定主题/地区的中文情报态势简报。"""
-    docs = scan_bronze(STORAGE)
-    seen: set[str] = set()
-    relevant: list[dict] = []
-    source_set: set[str] = set()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=req.days)
-
-    for doc in docs:
-        text = doc.text
-        if not text:
-            continue
-        body_hash = hashlib.md5(text.encode()).hexdigest()
-        if body_hash in seen:
-            continue
-        seen.add(body_hash)
-
-        captured_raw = doc.captured_at
-        if captured_raw:
-            try:
-                dt = datetime.fromisoformat(captured_raw)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                if dt < cutoff:
-                    continue
-            except ValueError:
-                continue
-
-        ext = doc.extensions or {}
-        title = ext.get("summary", "") or ext.get("horizon_title", "") or text[:80]
-
-        # Filter by topic/country if specified
-        combined = (title + " " + text[:500]).lower()
-        if req.topic and req.topic.lower() not in combined and req.topic not in combined:
-            continue
-        if req.country:
-            loc = extract_location(text)
-            if loc is None or loc[0] != req.country:
-                continue
-
-        layer = _get_layer(doc)
-        if req.layer and layer.value != req.layer:
-            continue
-
-        src_name = doc.source_system or doc.collector_id
-        source_set.add(src_name)
-        relevant.append({
-            "title": title.split("\n")[0],
-            "content": text[:500],
-            "source": src_name,
-            "date": doc.captured_at[:10] if doc.captured_at else "",
-            "layer": layer.value,
-        })
-
-        if len(relevant) >= 50:
-            break
-
-    if not relevant:
-        return SituationReport(
-            title=f"态势简报：{req.topic or req.country or '全局'}",
-            summary="指定条件下无可用情报数据。",
-            item_count=0,
-            source_count=0,
-        )
-
-    # Build context for LLM
-    context_lines = []
-    for i, r in enumerate(relevant, 1):
-        context_lines.append(
-            f"[{i}] {r['date']} | {r['source']} | {r['layer']}\n"
-            f"    标题: {r['title']}\n"
-            f"    内容: {r['content'][:300]}\n"
-        )
-    context = "\n".join(context_lines)
-
-    topic_desc = req.topic or req.country or "全局态势"
-    user_prompt = f"## 情报数据（{len(relevant)}条）\n\n{context}\n\n## 简报主题\n\n{topic_desc}\n\n请生成结构化中文态势简报。"
-
-    result = await _llm_chat(_SYSTEM_REPORT, user_prompt)
-
-    if not result:
-        # Fallback: generate a simple structured report without LLM
-        sections = []
-        by_layer_local: dict[str, list[str]] = {}
-        for r in relevant:
-            by_layer_local.setdefault(r["layer"], []).append(r["title"])
-        for layer, titles in by_layer_local.items():
-            sections.append(ReportSection(
-                heading=f"## {layer} 层面",
-                body="\n".join(f"- {t}" for t in titles[:10]),
-            ))
-        return SituationReport(
-            title=f"态势简报：{topic_desc}",
-            summary=f"共{len(relevant)}条情报，来自{len(source_set)}个来源。AI简报生成暂不可用，以下为数据汇总。",
-            sections=sections,
-            item_count=len(relevant),
-            source_count=len(source_set),
-        )
-
-    # Parse structured output — sections separated by ##
-    lines = result.split("\n")
-    summary = ""
-    sections = []
-    current_heading = ""
-    current_body: list[str] = []
-    for line in lines:
-        if line.startswith("## "):
-            if current_heading:
-                sections.append(ReportSection(heading=current_heading, body="\n".join(current_body).strip()))
-            current_heading = line
-            current_body = []
-        elif line.strip() and not summary:
-            summary = line.strip()
-        else:
-            current_body.append(line)
-    if current_heading:
-        sections.append(ReportSection(heading=current_heading, body="\n".join(current_body).strip()))
-
+    agent = AgentRegistry.create("report_writer", indexer=_get_indexer())
+    task = AgentTaskModel(task_type="report", params={
+        "topic": req.topic,
+        "country": req.country,
+        "layer": req.layer,
+        "days": req.days,
+    }, skills=req.skills)
+    result = await agent.run(task)
+    data = result.data
+    sections = [ReportSection(**s) for s in data.get("sections", [])]
     return SituationReport(
-        title=f"态势简报：{topic_desc}",
-        summary=summary or f"共{len(relevant)}条情报，来自{len(source_set)}个来源",
+        title=data.get("title", "态势简报"),
+        summary=data.get("summary", ""),
         sections=sections,
-        item_count=len(relevant),
-        source_count=len(source_set),
+        item_count=data.get("item_count", 0),
+        source_count=data.get("source_count", 0),
     )
-
-
-# ═══════════════════════════════════════════════════════════════
-# 4 — New Data Source Collectors (USGS, CISA, OpenSky)
-# ═══════════════════════════════════════════════════════════════
 
 
 @app.get("/api/collect/usgs")
 async def collect_usgs():
     """Fetch latest USGS earthquake data (past 7 days, M2.5+)."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                "https://earthquake.usgs.gov/fdsnws/event/1/query",
-                params={"format": "geojson", "minmagnitude": 2.5, "orderby": "time", "limit": 50},
-            )
-        data = r.json()
-        events = []
-        for feat in data.get("features", []):
-            props = feat.get("properties", {})
-            coords = feat.get("geometry", {}).get("coordinates", [0, 0, 0])
-            events.append({
-                "id": f"usgs-{props.get('id', props.get('code', ''))}",
-                "title": f"地震: {props.get('place', '未知')} — M{props.get('mag', '?')}",
-                "content": f"地震{props.get('place', '未知地区')}，" +
-                           f"震级{props.get('mag', '?')}，深度{coords[2]}km。" +
-                           f"时间: {props.get('time', '')}。" +
-                           f"详情: {props.get('url', '')}",
-                "lat": coords[1],
-                "lng": coords[0],
-                "source": "usgs",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-        return {"status": "ok", "events": events}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
+    agent = AgentRegistry.create("usgs_collector")
+    task = AgentTaskModel(task_type="collect")
+    result = await agent.run(task)
+    return result.data
 
 @app.get("/api/collect/cisa")
 async def collect_cisa():
     """Fetch latest CISA known exploited vulnerabilities."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-            )
-        data = r.json()
-        vulns = []
-        for item in data.get("vulnerabilities", [])[:20]:
-            vulns.append({
-                "id": f"cisa-{item.get('cveID', '')}",
-                "title": f"CVE: {item.get('cveID', '')} — {item.get('vulnerabilityName', '')}",
-                "content": f"漏洞描述: {item.get('shortDescription', '')}。" +
-                           f"供应商: {item.get('vendorProject', '')}。" +
-                           f"利用已活跃: {item.get('knownRansomwareCampaignUse', '未知')}。" +
-                           f"CVE: {item.get('cveID', '')}",
-                "source": "cisa",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-        return {"status": "ok", "vulnerabilities": vulns}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
+    agent = AgentRegistry.create("cisa_collector")
+    task = AgentTaskModel(task_type="collect")
+    result = await agent.run(task)
+    return result.data
 
 @app.get("/api/collect/opensky")
 async def collect_opensky():
     """Fetch flight tracking stats from OpenSky Network."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get("https://opensky-network.org/api/states/all")
-        data = r.json()
-        states = data.get("states", [])[:50]
-        flights = []
-        for s in states:
-            flights.append({
-                "icao24": s[0],
-                "callsign": (s[1] or "").strip(),
-                "origin_country": s[2],
-                "lat": s[6],
-                "lng": s[5],
-                "altitude": s[7],
-                "velocity": s[9],
-            })
-        return {"status": "ok", "flights_in_view": len(flights), "flights": flights}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
+    agent = AgentRegistry.create("opensky_collector")
+    task = AgentTaskModel(task_type="collect")
+    result = await agent.run(task)
+    return result.data
 
 # ═══════════════════════════════════════════════════════════════
 # Shared helper — build IntelItems from bronze docs
 # ═══════════════════════════════════════════════════════════════
+
+def _get_layer(doc) -> IntelLayer:
+    ext = getattr(doc, "extensions", {}) or {}
+    if isinstance(ext, dict):
+        meta = ext.get("horizon_metadata", {})
+        if isinstance(meta, dict) and meta.get("layer"):
+            try:
+                return IntelLayer(meta["layer"])
+            except ValueError:
+                pass
+    return classify(doc.text)
+
 
 def _build_items(
     start_date: str = "",
@@ -1049,7 +810,7 @@ def _build_items(
     When a merge index exists, items are built from merged groups with
     multi-source ``sources`` lists. Otherwise falls back to 1:1 doc→item.
     """
-    docs = scan_bronze(STORAGE)
+    docs = _get_indexer().get_all()
     items: list[IntelItem] = []
 
     if not docs:
@@ -1069,6 +830,14 @@ def _build_items(
     ) -> IntelItem | None:
         """Build a single IntelItem from a document + source list."""
         ext = doc.extensions or {}
+
+        # Apply date filter early — before expensive operations
+        captured = captured_at[:10] if captured_at else ""
+        if start_date and captured < start_date:
+            return None
+        if end_date and captured > end_date:
+            return None
+
         title = ext.get("summary", text[:80]).split("\n")[0] or f"Intel from {sources[0] if sources else doc.source_system}"
         summary = ext.get("summary") or text[:300]
 
@@ -1077,11 +846,6 @@ def _build_items(
         layer = _get_layer(doc)
         src_name = sources[0] if sources else (doc.source_system or doc.collector_id)
 
-        captured = captured_at[:10] if captured_at else ""
-        if start_date and captured < start_date:
-            return None
-        if end_date and captured > end_date:
-            return None
         if layer_filter and layer.value != layer_filter:
             return None
         if country_filter and country_filter.lower() not in (country or "").lower():
@@ -1127,7 +891,9 @@ def _build_items(
             if primary is None or not primary.text:
                 continue
             for gd in group.documents:
-                seen_docs.add(gd.get("doc_id", ""))
+                did = gd.get("doc_id", "")
+                if did:
+                    seen_docs.add(did)
 
             item = _make_item(
                 text=primary.text,
@@ -1187,6 +953,7 @@ def _build_items(
                 if limit and len(items) >= limit:
                     break
 
+    items.sort(key=lambda x: x.captured_at or "", reverse=True)
     return items
 
 
@@ -1221,484 +988,494 @@ async def _build_items_async(
 @app.get("/api/analysis/timeline", response_model=TimelineResult)
 async def analysis_timeline(start_date: str = "", end_date: str = "", layer: str = "", country: str = ""):
     items = await _build_items_async(start_date=start_date, end_date=end_date, layer_filter=layer, country_filter=country)
-    result = compute_timeline(items)
-    return TimelineResult(**result)
+    agent = AgentRegistry.create("timeline")
+    task = AgentTaskModel(task_type="analysis", params={"items": items})
+    result = await agent.run(task)
+    return TimelineResult(**result.data)
 
 
 @app.get("/api/analysis/entities", response_model=EntityGraphResult)
 async def analysis_entities():
     items = await _build_items_async()
-    result = extract_entity_graph(items)
-    return EntityGraphResult(**result)
+    agent = AgentRegistry.create("entity_graph")
+    task = AgentTaskModel(task_type="analysis", params={"items": items})
+    result = await agent.run(task)
+    return EntityGraphResult(**result.data)
 
 
 @app.get("/api/analysis/corroboration", response_model=CorroborationResult)
 async def analysis_corroboration():
     items = await _build_items_async()
-    result = compute_corroboration(items)
-    return CorroborationResult(**result)
+    agent = AgentRegistry.create("corroboration")
+    task = AgentTaskModel(task_type="analysis", params={"items": items})
+    result = await agent.run(task)
+    return CorroborationResult(**result.data)
 
 
 @app.get("/api/analysis/anomalies", response_model=AnomalyResult)
 async def analysis_anomalies(start_date: str = "", end_date: str = ""):
     items = await _build_items_async(start_date=start_date, end_date=end_date)
-    result = detect_anomalies(items)
-    return AnomalyResult(**result)
+    agent = AgentRegistry.create("anomaly_detector")
+    task = AgentTaskModel(task_type="analysis", params={"items": items})
+    result = await agent.run(task)
+    return AnomalyResult(**result.data)
 
 
 @app.get("/api/analysis/risk-heatmap", response_model=RiskHeatmapResult)
 async def analysis_risk_heatmap():
     items = await _build_items_async()
-    result = compute_risk_heatmap(items)
-    return RiskHeatmapResult(**result)
+    agent = AgentRegistry.create("risk_heatmap")
+    task = AgentTaskModel(task_type="analysis", params={"items": items})
+    result = await agent.run(task)
+    return RiskHeatmapResult(**result.data)
 
 
 @app.get("/api/analysis/gaps", response_model=GapAnalysisResult)
 async def analysis_gaps():
     items = await _build_items_async()
-    result = analyze_gaps(items)
-    return GapAnalysisResult(**result)
+    agent = AgentRegistry.create("gap_analyzer")
+    task = AgentTaskModel(task_type="analysis", params={"items": items})
+    result = await agent.run(task)
+    return GapAnalysisResult(**result.data)
 
 
-# ── AI Interpretation prompts ──
 
-_ANALYSIS_PROMPTS: dict[str, str] = {
-    "timeline": (
-        "你是一名专业的情报分析官。基于以下时间线统计数据，用简体中文进行阶段性分析总结"
-        "（200-400字）：识别事件发展的关键阶段、转折点和时间模式。"
-        "只使用提供的数据，不编造信息。"
-    ),
-    "entities": (
-        "你是一名专业的情报网络分析师。基于以下实体关联数据，用简体中文分析情报网络结构"
-        "（200-400字）：识别人物、组织和地点之间的关键节点、聚类和桥梁实体。"
-        "只使用提供的数据，不编造信息。"
-    ),
-    "corroboration": (
-        "你是一名专业的情报来源分析官。基于以下信源一致性数据，用简体中文分析报道格局"
-        "（200-400字）：识别信息茧房、独立验证最强的报道，以及可能存在的虚假信息。"
-        "只使用提供的数据，不编造信息。"
-    ),
-    "anomalies": (
-        "你是一名专业的情报预警分析官。基于以下异常检测数据，用简体中文解释可能的原因"
-        "（200-400字）：对检测到的情报量异常激增提出合理解释假设。"
-        "只使用提供的数据，不编造信息。"
-    ),
-    "risk-heatmap": (
-        "你是一名战略风险评估专家。基于以下区域风险数据，用简体中文进行战略评估"
-        "（200-400字）：分析高风险区域的风险驱动因素和可能的地缘政治影响。"
-        "只使用提供的数据，不编造信息。"
-    ),
-    "gaps": (
-        "你是一名情报采集规划专家。基于以下情报缺口数据，用简体中文提出采集优先级建议"
-        "（200-400字）：建议优先填补哪些缺口以及可能的采集策略。"
-        "只使用提供的数据，不编造信息。"
-    ),
-}
+# ── Processing API ──
 
+from pydantic import BaseModel as PydanticBase, Field as PydanticField
+
+class TranslateRequest(PydanticBase):
+    text: str
+
+class TranslateResponse(PydanticBase):
+    translated: str
+
+@app.post("/api/process/translate", response_model=TranslateResponse)
+async def process_translate(req: TranslateRequest):
+    agent = AgentRegistry.create("translator")
+    task = AgentTaskModel(task_type="translate", params={"text": req.text})
+    result = await agent.run(task)
+    return TranslateResponse(translated=result.data.get("translated", req.text))
+
+
+class SummarizeRequest(PydanticBase):
+    text: str
+
+class SummarizeResponse(PydanticBase):
+    summary: str
+
+@app.post("/api/process/summarize", response_model=SummarizeResponse)
+async def process_summarize(req: SummarizeRequest):
+    agent = AgentRegistry.create("summarizer")
+    task = AgentTaskModel(task_type="summarize", params={"text": req.text})
+    result = await agent.run(task)
+    return SummarizeResponse(summary=result.data.get("summary", req.text))
+
+
+class ClassifyRequest(PydanticBase):
+    title: str = ""
+    content: str
+
+class ClassifyResponse(PydanticBase):
+    layer: str
+    country: str
+    city: str
+
+@app.post("/api/process/classify", response_model=ClassifyResponse)
+async def process_classify(req: ClassifyRequest):
+    agent = AgentRegistry.create("classifier")
+    task = AgentTaskModel(task_type="classify", params={"title": req.title, "content": req.content})
+    result = await agent.run(task)
+    return ClassifyResponse(**result.data)
+
+
+class LocateRequest(PydanticBase):
+    text: str
+
+class LocateResponse(PydanticBase):
+    country: str
+    city: str
+    lat: float
+    lng: float
+
+@app.post("/api/process/locate", response_model=LocateResponse)
+async def process_locate(req: LocateRequest):
+    agent = AgentRegistry.create("location_extractor")
+    task = AgentTaskModel(task_type="locate", params={"text": req.text})
+    result = await agent.run(task)
+    return LocateResponse(**result.data)
+
+
+class BayesianScoreRequest(PydanticBase):
+    text: str
+    source_system: str = ""
+
+class BayesianScoreResponse(PydanticBase):
+    posterior: float
+    verdict: str
+    prior_quality: str
+    prior_class: str
+    evidence_items: list[dict]
+
+@app.post("/api/process/bayesian-score", response_model=BayesianScoreResponse)
+async def process_bayesian_score(req: BayesianScoreRequest):
+    agent = AgentRegistry.create("bayesian_scorer")
+    task = AgentTaskModel(task_type="bayesian_score", params={
+        "text": req.text,
+        "source_system": req.source_system,
+    })
+    result = await agent.run(task)
+    return BayesianScoreResponse(**result.data)
+
+
+class PipelineRequest(PydanticBase):
+    text: str
+    title: str = ""
+    source_system: str = ""
+    translate: bool = True
+    summarize: bool = True
+    classify: bool = True
+    locate: bool = True
+    bayesian: bool = True
+    skills: list[str] = PydanticField(default_factory=list)
+
+@app.post("/api/process/pipeline")
+async def process_pipeline(req: PipelineRequest):
+    """Run full processing pipeline: translate → summarize → classify → locate → bayesian."""
+    agent = AgentRegistry.create("collection_pipeline", callbacks=_ws_callbacks())
+    task = AgentTaskModel(task_type="pipeline", params={
+        "text": req.text,
+        "title": req.title,
+        "source_system": req.source_system,
+        "translate": req.translate,
+        "summarize": req.summarize,
+        "classify": req.classify,
+        "locate": req.locate,
+        "bayesian": req.bayesian,
+    }, skills=req.skills)
+    result = await agent.run(task)
+    return result.data
+
+
+@app.get("/api/skills")
+async def list_skills():
+    from backend.agents.skill import SkillLoader
+    names = SkillLoader.list_all()
+    result = []
+    for name in names:
+        try:
+            s = SkillLoader.load(name)
+            result.append({
+                "name": s.name,
+                "description": s.description,
+                "agent_types": s.agent_types,
+            })
+        except Exception:
+            pass
+    return {"skills": result}
+
+
+@app.get("/api/agent/status")
+async def agent_status():
+    from backend.agents.config import is_agent_mode
+    from backend.agents.skill import SkillLoader
+    agents = {}
+    for aid in sorted(AgentRegistry.list_all()):
+        cls = AgentRegistry.get(aid)
+        agents[aid] = {
+            "type": cls.agent_type.value,
+            "model": cls.agent_id,  # placeholder — real config loaded at init
+        }
+    by_type = {}
+    for aid, info in agents.items():
+        t = info["type"]
+        by_type.setdefault(t, []).append(aid)
+    return {
+        "agent_mode": is_agent_mode(),
+        "total_agents": len(agents),
+        "by_type": by_type,
+        "skills_available": SkillLoader.list_all(),
+    }
+
+# ── WebSocket ──
+
+@app.websocket("/ws/{channel}")
+async def websocket_endpoint(ws: WebSocket, channel: str):
+    await ws_manager.connect(channel, ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except Exception:
+        pass
+    finally:
+        ws_manager.disconnect(channel, ws)
 
 @app.post("/api/analysis/interpret", response_model=AnalysisInterpretResponse)
 async def analysis_interpret(req: AnalysisInterpretRequest):
     """Generate AI interpretation for any analysis view."""
-    system_prompt = _ANALYSIS_PROMPTS.get(req.analysis_type, _ANALYSIS_PROMPTS["timeline"])
-    context_json = json.dumps(req.context, ensure_ascii=False, indent=2)
-    user_prompt = f"## 分析数据\n\n{context_json}\n\n请生成分析解读。"
-    result = await _llm_chat(system_prompt, user_prompt, temperature=0.3)
+    agent = AgentRegistry.create("interpretation")
+    task = AgentTaskModel(task_type="interpret", params={
+        "analysis_type": req.analysis_type,
+        "context": req.context,
+    })
+    result = await agent.run(task)
     return AnalysisInterpretResponse(
-        analysis_type=req.analysis_type,
-        interpretation=result or "AI分析暂时不可用（API密钥未配置或请求失败）。",
+        analysis_type=result.data.get("analysis_type", req.analysis_type),
+        interpretation=result.data.get("interpretation", "分析失败"),
     )
 
 
-# ═══════════════════════════════════════════════════════════════
-# 8 — Super Bayesian Analysis
-# ═══════════════════════════════════════════════════════════════
-
-_SYSTEM_SUPER_ANALYSIS = (
-    "你是一名专业的贝叶斯情报分析师，严格遵循 Yao Bayesian Skill 方法论对情报数据进行结构化决策分析。"
-    "\n\n"
-    "## 核心方法论\n\n"
-    "### 证据质量分级（A-E）\n"
-    "| 等级 | 典型来源 | 使用方式 |\n"
-    "|------|----------|----------|\n"
-    "| A | 元分析、系统综述、官方统计数据 | 强先验或强更新输入 |\n"
-    "| B | 同行评审论文、公共数据集、行业标准 | 中等强度先验或更新 |\n"
-    "| C | 结构化专家访谈、内部历史数据、实地证据 | 可用但需明确注明限制 |\n"
-    "| D | LLM推测、类比、常识、非正式启发 | 仅限弱先验 |\n"
-    "| E | 博客、营销文案、社交帖子、未归属声明 | 不得作为核心证据 |\n\n"
-    "### 先验构建规则\n"
-    "- 先验类别（high-credibility/medium-credibility/low-credibility/kol/unknown）对应不同的先验概率和等效样本量（ESS）\n"
-    "- 弱先验规则：若先验主要来自常识、类比或模型推测，必须标注为弱先验，降低ESS，扩大灵敏度范围\n"
-    "- 必须记录：先验来源摘要、参考类、来源质量等级、等效样本量、可能使先验失效的因素\n\n"
-    "### 贝叶斯更新公式（Odds-Update）\n"
-    "```\n"
-    "prior_odds = P(H) / (1 - P(H))\n"
-    "对于每条证据 i:\n"
-    "  base_lr = evidence.lr（若 direction='against' 则取 1/lr）\n"
-    "  effective_lr = exp(ln(base_lr) × dependency_discount)\n"
-    "  applied_lr = effective_lr  （即依赖折扣后的有效似然比）\n"
-    "  odds = odds × applied_lr\n"
-    "posterior_P = odds / (1 + odds)\n"
-    "```\n"
-    "依赖折扣（dependency_discount）关键原则：不能盲目相乘重叠证据。当多个信号可能来自同一底层来源时，降低依赖折扣并解释重叠风险。\n\n"
-    "### 自然频率转换\n"
-    "必须将主要结果转换为具体频率陈述：\n"
-    "\"在 100 个类似案例中，先验预期约有 X 个成立。综合当前证据后，预期变更为约 Y 个成立。\"\n\n"
-    "### 决策就绪度评估\n"
-    "| 分数区间 | 状态 | 含义 |\n"
-    "|----------|------|------|\n"
-    "| 0.00-0.44 | collecting / 仍需补信息 | 关键信息仍缺失 |\n"
-    "| 0.45-0.74 | nearly-ready / 接近可决策 | 1-2个缺口仍有意义 |\n"
-    "| 0.75-1.00 | ready / 可以决策 | 具备正式决策条件 |\n\n"
-    "### 强制性区分\n"
-    "报告中每个数字都必须标注来源类别：\n"
-    "- **observed（观测值）**：来自数据直接观测\n"
-    "- **estimated（估计值）**：基于判断的估计\n"
-    "- **assumed（假定值）**：基于政策或效用假设\n\n"
-    "### 建议置信度\n"
-    "- **medium-high / 把握较高**：稳定性 good，无严重警告，无 D/E 级证据\n"
-    "- **medium / 把握一般**：稳定性 mixed，或有 1 条警告，或有 D/E 级证据\n"
-    "- **low / 把握偏低**：稳定性 unstable，或 ≥2 条警告，或 ≥2 条 D/E 级证据\n\n"
-    "## 分析报告结构\n\n"
-    "你的回答必须严格按照以下 7 个部分组织：\n\n"
-    "## 1. 决策摘要\n"
-    "- **核心假设 H**：将用户问题转化为一个可检验的假设，用一句话清晰陈述\n"
-    "- **一句话结论**：先给结论，再讲为什么\n"
-    "- **建议行动**：现在应该做什么？给出明确的行动建议\n\n"
-    "## 2. 先验分析\n"
-    "- **先验概率 P(H)**：基于情报源整体可信度分布估算\n"
-    "- **先验来源**：引用的情报源类型和数量\n"
-    "- **等效样本量（ESS）**：大致估算\n"
-    "- **来源质量**：整体评定（A-E）\n"
-    "- **先验可能失效的条件**：什么情况下先验不对\n"
-    "- **先验有效范围**：90% 可信区间（下限-上限）\n"
-    "- 标注每个数字是 observed/estimated/assumed\n\n"
-    "## 3. 证据分析\n"
-    "以表格形式逐条列出关键证据（至少 5-10 条）：\n"
-    "| # | 证据来源 | 内容摘要 | 质量 | 方向 | LR | 依赖折扣 | 有效LR |\n"
-    "|---|---|---|---|---|---|---|---|\n"
-    "每一条证据解读必须包含：\n"
-    "- 观测到了什么\n"
-    "- 为什么支持或反对 H\n"
-    "- LR 取值的理由（基于具体性、信源交叉验证、时效性）\n"
-    "- 依赖折扣的理由（证据之间是否部分重叠）\n\n"
-    "## 4. 贝叶斯更新计算\n"
-    "展示完整的 odds-update 链：\n"
-    "```\n"
-    "初始先验 P(H) = X.XX → 先验 odds = Y.YY\n"
-    "证据1（名称, LR_eff=Z.ZZ）→ odds₁ = Y.YY × Z.ZZ = A.AA\n"
-    "证据2（名称, LR_eff=W.WW）→ odds₂ = A.AA × W.WW = B.BB\n"
-    "...\n"
-    "最终后验 odds = M.MM → P(H|E) = N.NN\n"
-    "```\n"
-    "- 标注每次更新的 delta（变化幅度）\n"
-    "- 识别关键转折证据（使概率变化最大的证据）\n\n"
-    "## 5. 后验结论\n"
-    "- **后验概率 P(H|E)**：最终概率估算值和区间\n"
-    "- **自然频率**：在 100 个类似情境中，预期约有多少个成立\n"
-    "- **判断等级**：verified（基本确认，P≥0.7）/ likely（可能性较高，0.5≤P<0.7）/ uncertain（不确定，0.3≤P<0.5）/ unlikely（可能性较低，0.1≤P<0.3）/ false（基本排除，P<0.1）\n"
-    "- **建议置信度**：low/medium/medium-high，并说明理由\n"
-    "- **决策就绪度**：0-1 评分，当前是否可以据此决策\n\n"
-    "## 6. 灵敏度分析\n"
-    "- **先验变动**：如果先验概率偏高/偏低 30%，后验结论是否稳健？\n"
-    "- **证据权重变动**：如果关键证据的 LR 被高估或低估，结论会翻转吗？\n"
-    "- **最坏情况/最好情况**：极端情况下的后验范围\n"
-    "- **稳定性分类**：stable（所有场景结论一致）/ mixed（2种不同结论）/ unstable（3种以上不同结论）\n"
-    "- 如果不稳定，建议优先收集哪类信息\n\n"
-    "## 7. 下一步信息收集建议\n"
-    "- 当前最需要补充什么信息？列出 1-3 项\n"
-    "- 每项信息对决策的预期影响\n"
-    "- 什么证据会改变当前建议？\n"
-    "- 何时重新打开此决策？\n\n"
-    "## 警告与限制\n"
-    "- 明确列出分析中的不确定性来源\n"
-    "- 标注弱证据（D/E 级）及其对结论的影响\n"
-    "- 如果存在证据依赖性，说明重叠风险\n"
-    "- 说明此分析的适用范围和局限\n\n"
-    "## 约束\n"
-    "- 只使用提供的情报数据和网络搜索结果，不编造信息\n"
-    "- 网络搜索结果作为补充参考，权重低于系统情报数据\n"
-    "- 每个数字必须标注 observed/estimated/assumed\n"
-    "- 先验概率必须参考提供的情报源可信度分布\n"
-    "- 每个部分的结论必须引用具体情报作为支撑\n"
-    "- 如果证据质量等级低（C/D/E 为主），必须降低建议置信度并扩大误差范围\n"
-    "- D/E 级证据达到 2 条或以上时，必须在结论中明确标注\"把握偏低\""
-)
-
-
-async def _search_bing(query: str, topn: int = 8) -> list[dict]:
-    """Search a single query on Bing with auto language detection.
-
-    Uses cn.bing.com for Chinese queries, www.bing.com for English/international.
-    Forces mkt=en-US for English queries to get international results regardless of geo-IP.
-    """
-    import urllib.parse
-    from bs4 import BeautifulSoup
-
-    # Detect query language: if >30% Chinese chars, use cn.bing.com
-    chinese_chars = sum(1 for c in query if '一' <= c <= '鿿')
-    is_chinese = len(query) > 0 and chinese_chars / len(query) > 0.3
-
-    if is_chinese:
-        bing_host = "cn.bing.com"
-        accept_lang = "zh-CN,zh;q=0.9,en;q=0.8"
-        mkt_param = ""
-    else:
-        bing_host = "www.bing.com"
-        accept_lang = "en-US,en;q=0.9,zh;q=0.8"
-        mkt_param = "&mkt=en-US&setlang=en"
-
-    results: list[dict] = []
-
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            resp = await client.get(
-                f"https://{bing_host}/search?q={urllib.parse.quote(query)}&count=20{mkt_param}",
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept-Language": accept_lang,
-                },
-            )
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Each result is an <li> with class containing "b_algo"
-            for li in soup.find_all("li", class_=lambda c: c and "b_algo" in c):
-                if len(results) >= topn:
-                    break
-
-                # Title + URL: <h2><a href="...">title</a></h2>
-                h2 = li.find("h2")
-                a_tag = h2.find("a", href=True) if h2 else None
-                if not a_tag:
-                    # Fallback: any direct <a> with a real URL
-                    a_tag = li.find("a", href=lambda h: h and h.startswith("http"))
-
-                if not a_tag:
-                    continue
-
-                url = a_tag["href"]
-                title = a_tag.get_text(" ", strip=True)
-                if not title:
-                    continue
-
-                # Snippet: <div class="b_caption"><p>...</p></div>
-                caption = li.find(class_="b_caption")
-                p_tag = caption.find("p") if caption else None
-                if not p_tag:
-                    # Fallback: first <p> in the result block
-                    p_tag = li.find("p")
-                snippet = p_tag.get_text(" ", strip=True) if p_tag else ""
-                if not snippet:
-                    continue
-
-                # URL normalization
-                if url.startswith("//"):
-                    url = "https:" + url
-                elif url.startswith("/"):
-                    url = f"https://{bing_host}" + url
-
-                results.append({
-                    "title": title,
-                    "snippet": snippet[:300],
-                    "url": url,
-                })
-
-    except httpx.HTTPError as exc:
-        log.warning("Bing search HTTP error for %r: %s", query[:80], exc)
-    except Exception as exc:
-        log.warning("Bing search failed for %r: %s", query[:80], exc)
-
-    return results
-
-
-async def _gen_search_queries(question: str) -> list[str]:
-    """Return the raw user question as the search query.
-
-    The full user input is used directly — no LLM rewriting, no keyword
-    extraction, no recency variants.  The user's original wording is the
-    best search query.
-    """
-    return [question]
-
-
-async def _web_search(query: str) -> list[dict]:
-    """Search the web using Bing China with multiple query formulations.
-
-    Runs 2-3 parallel Bing searches with different query formulations
-    (original, keyword-only, recency variant) to maximize coverage.
-    Bing returns ~8 results per query; duplicates are removed.
-    """
-    qs = await _gen_search_queries(query)
-    tasks = [_search_bing(q, topn=8) for q in qs]
-    all_results = await asyncio.gather(*tasks)
-
-    seen: set[str] = set()
-    merged: list[dict] = []
-    for results in all_results:
-        for r in results:
-            if r["url"] not in seen:
-                seen.add(r["url"])
-                merged.append(r)
-    return merged[:15]
+@app.get("/api/super-analysis/progress")
+async def super_analysis_progress():
+    """获取超级分析的实时进度。"""
+    from backend.processors.progress import get_progress
+    return get_progress()
 
 
 @app.post("/api/super-analysis", response_model=SuperAnalysisResponse)
 async def super_analysis(req: SuperAnalysisRequest):
     """超级分析 — 结合贝叶斯框架对用户问题进行结构化情报分析。"""
+    from backend.processors.progress import reset_progress, mark_finished, mark_error
 
-    def _score_docs() -> list[tuple[int, dict]]:
-        """CPU-bound: scan bronze, classify, compute Bayesian — runs in thread pool."""
-        docs = scan_bronze(STORAGE)
-        seen: set[str] = set()
-        scored: list[tuple[int, dict]] = []
-        q_tokens = set(req.question.lower().split())
+    reset_progress()
+    agent = AgentRegistry.create("super_analyst", storage_root=STORAGE)
+    task = AgentTaskModel(task_type="super_analysis", params={
+        "question": req.question,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
+    }, skills=req.skills)
+    try:
+        result = await agent.run(task)
+    except Exception as e:
+        mark_error(str(e))
+        raise
+    data = result.data
+    items = [BayesianIntelItem(**item) for item in data.get("relevant_items", [])]
+    mark_finished()
+    return SuperAnalysisResponse(
+        question=data.get("question", req.question),
+        analysis=data.get("analysis", "分析失败"),
+        relevant_items=items,
+        web_results=data.get("web_results", []),
+    )
 
-        for doc in docs:
-            text = doc.text
-            if not text:
-                continue
-            body_hash = hashlib.md5(text.encode()).hexdigest()
-            if body_hash in seen:
-                continue
-            seen.add(body_hash)
 
-            ext = doc.extensions or {}
-            title = ext.get("summary", "") or ext.get("horizon_title", "") or text[:80]
-            layer = _get_layer(doc)
-            captured = doc.captured_at[:10] if doc.captured_at else ""
+# ═══════════════════════════════════════════════════════════════
+# OpenCode Agent Proxy Routes (Phase 1)
+# ═══════════════════════════════════════════════════════════════
 
-            if req.start_date and captured < req.start_date:
-                continue
-            if req.end_date and captured > req.end_date:
-                continue
+OPENCODE_URL = os.getenv("OPENCODE_URL", "http://127.0.0.1:3001")
+OPENCODE_BIN = os.getenv("OPENCODE_BIN", "/usr/local/bin/opencode")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-            posterior, trace, verdict, method, prior_quality, prior_class, evidence_items = compute_bayesian(
-                text, doc.source_system
-            )
 
-            text_tokens = set((title + " " + text[:300]).lower().split())
-            score = len(q_tokens & text_tokens) if q_tokens else 0
+def _parse_opencode_output(stdout: str) -> str:
+    """Parse opencode run --format json output, extracting all text parts."""
+    parts: list[str] = []
+    tool_results: list[str] = []
+    for line in stdout.strip().split("\n"):
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+            if event.get("type") == "text":
+                text = event.get("part", {}).get("text", "")
+                if text:
+                    parts.append(text)
+            elif event.get("type") == "tool_use":
+                part = event.get("part", {})
+                state = part.get("state", {})
+                output = state.get("output", "")
+                if output and "Error executing" not in output:
+                    tool_results.append(output[:200])
+        except (json.JSONDecodeError, KeyError):
+            continue
+    if parts:
+        return "\n".join(parts)
+    if tool_results:
+        return "工具调用结果:\n" + "\n---\n".join(tool_results[:5])
+    return stdout[:500] if stdout.strip() else "Agent 未产生文本输出，请尝试重新提问。"
 
-            scored.append((score, {
-                "title": title.split("\n")[0],
-                "source": doc.source_system,
-                "date": captured,
-                "layer": layer.value,
-                "confidence": round(posterior, 3),
-                "verdict": verdict.value if hasattr(verdict, "value") else str(verdict),
-                "prior_class": prior_class,
-                "prior_probability": SOURCE_PRIORS.get(prior_class, SOURCE_PRIORS["unknown"])["probability"],
-                "evidence_items": [
-                    {"name": e["name"], "quality": e["quality"], "lr": e["lr"], "direction": e["direction"]}
-                    for e in evidence_items
-                ],
-                "bayesian_trace": [round(t, 4) for t in trace],
-                "content_snippet": text[:200],
-            }))
 
-        scored.sort(key=lambda x: -x[0])
-        return scored[:20]
+async def _run_opencode_agent(agent: str, prompt: str, timeout: int = 180) -> str:
+    """Run an OpenCode agent via subprocess and return the text output."""
+    env = os.environ.copy()
+    # Ensure LLM credentials are passed (dotenv may have loaded them into os.environ)
+    for key in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"):
+        if key not in env:
+            env[key] = os.getenv(key, "")
+    proc = await asyncio.create_subprocess_exec(
+        OPENCODE_BIN, "run",
+        "--agent", agent,
+        "--format", "json",
+        "--permission-mode", "acceptEdits",
+        prompt,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=_PROJECT_ROOT,
+        env=env,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+        if stderr_text:
+            log.warning("opencode stderr [%s]: %s", agent, stderr_text[:500])
+        output = stdout.decode("utf-8", errors="replace") if stdout else ""
+        text_count = output.count('"type":"text"')
+        log.info("opencode [%s] output=%d bytes, text_events=%d", agent, len(output), text_count)
+        if not output.strip():
+            log.warning("opencode produced no stdout for agent=%s prompt=%s", agent, prompt[:100])
+        return _parse_opencode_output(output)
+    except asyncio.TimeoutError:
+        proc.kill()
+        log.warning("opencode timeout for agent=%s after %ds", agent, timeout)
+        raise
 
-    loop = asyncio.get_running_loop()
-    top_scored = await loop.run_in_executor(None, _score_docs)
-    top_items = [item for _, item in top_scored]
 
-    # Web search for supplementary context
-    web_results = await _web_search(req.question)
-
-    if not top_items and not web_results:
-        return SuperAnalysisResponse(
-            question=req.question,
-            analysis="系统暂无相关情报数据可供贝叶斯分析。",
-            relevant_items=[],
-            web_results=[],
+@app.post("/api/intel/ask", response_model=AskResponse)
+async def intel_ask(req: AskRequest, request: Request, user: dict = Depends(get_current_user)):
+    """Q&A via OpenCode QA Agent, with local fallback."""
+    _ip = request.client.host if request.client else ""
+    record_activity(user["id"], "ask_question", {"question": req.question[:200]}, ip_address=_ip)
+    try:
+        filters = []
+        if req.layer:
+            filters.append(f"layer={req.layer}")
+        if req.start_date:
+            filters.append(f"from {req.start_date}")
+        if req.end_date:
+            filters.append(f"to {req.end_date}")
+        prompt = req.question
+        if filters:
+            prompt = f"{req.question}\n\nFilters: {', '.join(filters)}"
+        answer = await _run_opencode_agent("qa-analyst", prompt)
+        return AskResponse(answer=answer or "分析完成，暂无文本输出", references=[])
+    except Exception:
+        agent = AgentRegistry.create("qa_analyst", indexer=_get_indexer())
+        task = AgentTaskModel(task_type="qa", params={
+            "question": req.question,
+            "layer": req.layer,
+            "start_date": req.start_date,
+            "end_date": req.end_date,
+        }, skills=req.skills)
+        result = await agent.run(task)
+        return AskResponse(
+            answer=result.data.get("answer", "分析失败"),
+            references=result.data.get("references", []),
         )
 
-    # ── Cross-reference web results with internal items ──
-    # Build a mapping: internal_item_index → [matching web result indices]
-    used_web: set[int] = set()
-    item_web_map: dict[int, list[int]] = {i: [] for i in range(len(top_items))}
 
-    if web_results and top_items:
-        for wi, wr in enumerate(web_results):
-            web_text = (wr.get("title", "") + " " + wr.get("snippet", "")).lower()
-            web_tokens = set(web_text.split())
-            if not web_tokens:
-                continue
-            best_score = 0
-            best_item = -1
-            for ii, item in enumerate(top_items):
-                item_text = (item["title"] + " " + item["content_snippet"]).lower()
-                item_tokens = set(item_text.split())
-                overlap = len(web_tokens & item_tokens)
-                if overlap > best_score:
-                    best_score = overlap
-                    best_item = ii
-            if best_score >= 3 and best_item >= 0:
-                item_web_map[best_item].append(wi)
-                used_web.add(wi)
+@app.post("/api/intel/report", response_model=SituationReport)
+async def intel_report(req: ReportRequest, request: Request, user: dict = Depends(get_current_user)):
+    """Report generation via OpenCode Report Writer Agent, with local fallback."""
+    _ip = request.client.host if request.client else ""
+    record_activity(user["id"], "generate_report", {"topic": (req.topic or "")[:200]}, ip_address=_ip)
+    try:
+        prompt_parts = [f"请生成一份情报报告。主题：{req.topic or '综合情报'}", f"时间范围：最近{req.days or 7}天"]
+        if req.country:
+            prompt_parts.append(f"国家：{req.country}")
+        if req.layer:
+            prompt_parts.append(f"领域：{req.layer}")
+        if req.detail_level:
+            prompt_parts.append(f"详细程度：{req.detail_level}")
+        answer = await _run_opencode_agent("report-writer", "\n".join(prompt_parts), timeout=180)
+        return SituationReport(
+            title=req.topic or "情报报告",
+            summary=answer or "生成完成，暂无文本输出",
+            sections=[],
+            item_count=0,
+            source_count=0,
+        )
+    except Exception:
+        agent = AgentRegistry.create("report_writer", storage_root=STORAGE)
+        task = AgentTaskModel(task_type="report", params={
+            "topic": req.topic,
+            "country": req.country,
+            "days": req.days,
+            "layer": req.layer,
+            "detail_level": req.detail_level,
+        }, skills=req.skills)
+        result = await agent.run(task)
+        return SituationReport(
+            title=result.data.get("title", "报告"),
+            summary=result.data.get("summary", "生成失败"),
+            sections=result.data.get("sections", []),
+            item_count=result.data.get("item_count", 0),
+            source_count=result.data.get("source_count", 0),
+        )
 
-    # ── Build unified context ──
-    context_parts: list[str] = []
 
-    if top_items:
-        context_parts.append(f"=== 统一证据分析（{len(top_items)}条内部情报 + {len(web_results)}条网络数据） ===\n")
-        context_parts.append("每条内部情报若有关联网络数据，已标注在「网络佐证」下。\n")
+@app.post("/api/intel/super-analysis", response_model=SuperAnalysisResponse)
+async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user: dict = Depends(get_current_user)):
+    """Super analysis — Bayesian evidence evaluation + web search + LLM deep reasoning."""
+    from backend.processors.progress import reset_progress, mark_finished, mark_error
 
-        for i, item in enumerate(top_items):
-            evidence_str = ", ".join(
-                f"{e['name']}(LR={e['lr']}, {e['direction']})"
-                for e in item["evidence_items"]
-            )
-            context_parts.append(
-                f"[内部-{i+1}] {item['date']} | {item['source']} | {item['layer']}\n"
-                f"    标题: {item['title']}\n"
-                f"    内容摘要: {item['content_snippet'][:200]}\n"
-                f"    贝叶斯评估: 先验类别={item['prior_class']}, "
-                f"先验概率={item['prior_probability']}, "
-                f"后验置信度={item['confidence']}, 判定={item['verdict']}\n"
-                f"    证据项: {evidence_str}\n"
-                f"    置信度追踪: {' → '.join(f'{t:.2f}' for t in item['bayesian_trace'])}\n"
-            )
+    _ip = request.client.host if request.client else ""
+    record_activity(user["id"], "super_analysis", {"question": req.question[:200]}, ip_address=_ip)
 
-            # Attach matching web results as corroboration
-            matched_web = item_web_map.get(i, [])
-            if matched_web:
-                context_parts.append("    ── 网络佐证 ──\n")
-                for wi in matched_web:
-                    wr = web_results[wi]
-                    context_parts.append(
-                        f"    [Web-{wi+1}] {wr['snippet'][:250]}\n"
-                        f"        来源: {wr.get('url', 'N/A')}\n"
-                    )
-            context_parts.append("")
-
-    # Remaining unmatched web results
-    unmatched = [wr for wi, wr in enumerate(web_results) if wi not in used_web]
-    if unmatched:
-        context_parts.append("=== 其他网络参考（未直接匹配内部情报） ===\n")
-        for wr in unmatched:
-            context_parts.append(
-                f"- {wr['snippet'][:200]}\n"
-                f"  来源: {wr.get('url', 'N/A')}\n"
-            )
-        context_parts.append("")
-
-    context = "\n".join(context_parts)
-
-    user_prompt = (
-        f"{context}\n\n"
-        f"## 用户问题\n\n{req.question}\n\n"
-        f"请按照贝叶斯推理框架进行综合分析。内部情报和网络数据已交叉匹配，"
-        f"请将它们视为统一证据源：网络数据用于佐证或补充内部情报，"
-        f"分析时优先使用内部情报的贝叶斯评估作为基础。"
-    )
-
-    analysis = await _llm_chat(_SYSTEM_SUPER_ANALYSIS, user_prompt, temperature=0.3)
-
+    reset_progress()
+    try:
+        agent = AgentRegistry.create("super_analyst", storage_root=STORAGE)
+        task = AgentTaskModel(task_type="super_analysis", params={
+            "question": req.question,
+            "start_date": req.start_date,
+            "end_date": req.end_date,
+        }, skills=req.skills)
+        result = await agent.run(task)
+    except Exception as e:
+        mark_error(str(e))
+        raise
+    data = result.data
+    items = [BayesianIntelItem(**item) for item in data.get("relevant_items", [])]
+    mark_finished()
     return SuperAnalysisResponse(
-        question=req.question,
-        analysis=analysis or "AI分析暂时不可用（API密钥未配置或请求失败）。",
-        relevant_items=[BayesianIntelItem(**item) for item in top_items],
-        web_results=web_results,
+        question=data.get("question", req.question),
+        analysis=data.get("analysis", "分析失败"),
+        relevant_items=items,
+        web_results=data.get("web_results", []),
     )
+
+
+@app.post("/api/intel/build-embedding-index")
+async def intel_build_embedding_index(request: Request, user: dict = Depends(get_current_user)):
+    """Build/rebuilt the embedding semantic search index from all bronze documents."""
+    from backend.bronze_reader import scan_bronze
+    from backend.processors.embedding_index import EmbeddingIndex
+
+    _ip = request.client.host if request.client else ""
+    record_activity(user["id"], "build_embedding_index", {}, ip_address=_ip)
+
+    docs = scan_bronze(STORAGE)
+    if not docs:
+        return {"status": "error", "message": "无文档可供索引"}
+
+    index = EmbeddingIndex(STORAGE, index_dir="embedding_index")
+    count = index.build(docs)
+    return {"status": "ok", "message": f"索引构建完成，{count} 篇文档", "count": count}
+
+
+@app.post("/api/intel/interpret", response_model=AnalysisInterpretResponse)
+async def intel_interpret(req: AnalysisInterpretRequest, request: Request, user: dict = Depends(get_current_user)):
+    """AI interpretation via OpenCode Intel Interpreter Agent, with local fallback."""
+    _ip = request.client.host if request.client else ""
+    record_activity(user["id"], "interpret_analysis", {"analysis_type": req.analysis_type}, ip_address=_ip)
+    try:
+        prompt = f"请解读以下分析结果。\n分析类型：{req.analysis_type}"
+        if req.context:
+            prompt += f"\n上下文：{json.dumps(req.context, ensure_ascii=False)}"
+        answer = await _run_opencode_agent("intel-interpreter", prompt, timeout=180)
+        return AnalysisInterpretResponse(
+            analysis_type=req.analysis_type,
+            interpretation=answer or "解读完成，暂无文本输出",
+        )
+    except Exception:
+        agent = AgentRegistry.create("interpretation")
+        task = AgentTaskModel(task_type="interpret", params={
+            "analysis_type": req.analysis_type,
+            "context": req.context,
+        })
+        result = await agent.run(task)
+        return AnalysisInterpretResponse(
+            analysis_type=result.data.get("analysis_type", req.analysis_type),
+            interpretation=result.data.get("interpretation", "分析失败"),
+        )

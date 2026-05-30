@@ -13,17 +13,34 @@ import httpx
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+PROXY_URL = os.environ.get("PROXY_URL", "")
 
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = 300
 CLASSIFY_TIMEOUT = 30
 
 
-def create_llm_client(timeout: int = DEFAULT_TIMEOUT) -> httpx.AsyncClient:
-    """Return a new httpx.AsyncClient configured for LLM API calls."""
-    return httpx.AsyncClient(
-        timeout=timeout,
-        headers={
+def _build_client_kwargs(timeout: int) -> dict:
+    kwargs = {
+        "timeout": timeout,
+        "headers": {
             "Authorization": f"Bearer {LLM_API_KEY}",
             "Content-Type": "application/json",
         },
-    )
+    }
+    if PROXY_URL:
+        kwargs["proxy"] = PROXY_URL
+    return kwargs
+
+
+def get_llm_client(timeout: int = DEFAULT_TIMEOUT) -> httpx.AsyncClient:
+    """Return a NEW httpx.AsyncClient for LLM API calls.
+
+    Always creates a fresh client — no singleton caching — to prevent
+    stale connection-pool corruption over long-running processes.
+    Callers should use ``async with`` to ensure proper cleanup.
+    """
+    return httpx.AsyncClient(**_build_client_kwargs(timeout))
+
+
+# Deprecated alias — kept for backward compatibility.
+create_llm_client = get_llm_client

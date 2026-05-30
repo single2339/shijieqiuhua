@@ -1,0 +1,274 @@
+{
+  "title": {
+    "zh": "杭州银行市净率修复路径分析",
+    "en": "Hangzhou Bank P/B Ratio Recovery Analysis"
+  },
+  "question": {
+    "zh": "杭州银行的市净率能否在合理时间窗口内修复至1倍以上？",
+    "en": "Can Hangzhou Bank's P/B ratio recover to above 1.0 within a reasonable time window?"
+  },
+  "hypothesis": {
+    "zh": "杭州银行的PB将在2027年上半年突破1倍",
+    "en": "Hangzhou Bank's P/B ratio will break above 1.0 by H1 2027"
+  },
+  "time_horizon": {
+    "zh": "2026年5月至2028年12月（约2.5年）",
+    "en": "May 2026 to Dec 2028 (approx. 2.5 years)"
+  },
+  "decision_deadline": {
+    "zh": "2027年第一季度（2026年年报披露前后）",
+    "en": "Q1 2027 (around the 2026 annual report release)"
+  },
+  "success_metric": {
+    "zh": "杭州银行股价/每股净资产 >= 1.0",
+    "en": "Hangzhou Bank stock price / book value per share >= 1.0"
+  },
+  "domain": {
+    "zh": "金融投资 / A股银行股",
+    "en": "Financial investment / A-share bank stocks"
+  },
+  "current_state": {
+    "zh": "杭州银行（600926.SH）当前PB约0.85倍，ROE 14.65%，不良率0.76%，拨备覆盖率502%，核心一级资本充足率9.59%。A股42家上市银行全部处于破净状态（板块均值PB约0.54-0.65倍）。",
+    "en": "Hangzhou Bank (600926.SH) currently trades at ~0.85x P/B with ROE of 14.65%, NPL ratio of 0.76%, provision coverage of 502%, and CET1 ratio of 9.59%. All 42 A-share listed banks trade below book value (sector average P/B ~0.54-0.65x)."
+  },
+  "risk_tolerance": "medium",
+  "high_risk_domain": false,
+  "method": "odds-update",
+  "prior": {
+    "probability": 0.35,
+    "equivalent_sample_size": 20,
+    "source_summary": [
+      {
+        "zh": "A股42家上市银行全部处于破净状态，板块均值PB约0.54-0.65倍",
+        "en": "All 42 A-share listed banks trade below book value, with sector average P/B of 0.54-0.65x"
+      },
+      {
+        "zh": "即使经营质量优异的银行也面临板块整体估值下压的系统性力量",
+        "en": "Even high-quality banks face systemic downward pressure from sector-wide valuation compression"
+      }
+    ],
+    "source_quality": {
+      "zh": "中 - 来自公开市场数据的参考类统计",
+      "en": "Medium - Reference-class statistics from public market data"
+    },
+    "confidence": "medium"
+  },
+  "evidence": [
+    {
+      "name": {
+        "zh": "盈利能力",
+        "en": "Earnings power (ROE)"
+      },
+      "quality": "B",
+      "direction": "support",
+      "likelihood_ratio": 2.5,
+      "dependency_discount": 0.7,
+      "summary": {
+        "zh": "杭州银行14.65%的ROE在A股上市银行中排名前五。若戈登增长模型成立，理论合理PB约为1.93倍，当前0.85倍估值暗含市场对ROE将大幅下滑的预期，与经营趋势明显背离。",
+        "en": "Hangzhou Bank's 14.65% ROE ranks top 5 among A-share listed banks. Gordon growth model suggests fair P/B of ~1.93x. The current 0.85x implies market expects ROE to collapse, contradicting operating trends."
+      },
+      "notes": {
+        "zh": "国泰海通、东北证券预计2026-2028年净利润复合增速10-11%，ROE有望保持14-16%",
+        "en": "Guotai Haitan and Dongbei Securities expect 10-11% net profit CAGR for 2026-2028, ROE maintained at 14-16%"
+      }
+    },
+    {
+      "name": {
+        "zh": "资产质量",
+        "en": "Asset quality"
+      },
+      "quality": "B",
+      "direction": "support",
+      "likelihood_ratio": 2.0,
+      "dependency_discount": 0.7,
+      "summary": {
+        "zh": "不良率连续13个季度维持0.76%，拨备覆盖率长期高于500%，在A股银行中属第一梯队，存在大量隐藏价值可释放为利润。",
+        "en": "NPL ratio stable at 0.76% for 13 consecutive quarters, provision coverage above 500%, among the best in A-share banks. Excess provisions represent hidden value."
+      },
+      "notes": {
+        "zh": "个人经营贷不良率从0.93%升至1.52%，消费贷不良率从1.20%升至1.45%，需结构性关注",
+        "en": "Personal business loan NPL rose from 0.93% to 1.52%, consumer loan NPL from 1.20% to 1.45% — warrants monitoring"
+      }
+    },
+    {
+      "name": {
+        "zh": "收入加速与息差企稳",
+        "en": "Revenue acceleration & NIM stabilization"
+      },
+      "quality": "B",
+      "direction": "support",
+      "likelihood_ratio": 1.8,
+      "dependency_discount": 0.7,
+      "summary": {
+        "zh": "2026Q1营收增速回升至4.29%，利息净收入同比大增20.69%，净息差从1.36%企稳回升至约1.39%。利息净收入占营收约75%。",
+        "en": "Q1 2026 revenue growth recovered to 4.29%, net interest income surged 20.69% YoY, NIM stabilized at ~1.39% from 1.36%."
+      },
+      "notes": {
+        "zh": "若这一趋势延续，2026年全年营收增速有望回升至8-10%",
+        "en": "If this trend continues, full-year 2026 revenue growth could recover to 8-10%"
+      }
+    },
+    {
+      "name": {
+        "zh": "资本充足率",
+        "en": "Capital adequacy"
+      },
+      "quality": "B",
+      "direction": "support",
+      "likelihood_ratio": 0.6,
+      "dependency_discount": 1.0,
+      "summary": {
+        "zh": "核心一级资本充足率9.59%，低于A股上市城商行平均水平（约10.92%），是制约ROE维持高位的结构性约束。",
+        "en": "CET1 ratio of 9.59% is below the A-share city commercial bank average (~10.92%), constraining high ROE sustainability."
+      },
+      "notes": {
+        "zh": "'杭银转债'全额转股（149.94亿元）已于2025年完成，缓解了短期资本压力",
+        "en": "Full conversion of 14.994B yuan in convertible bonds completed in 2025, easing short-term capital pressure"
+      }
+    },
+    {
+      "name": {
+        "zh": "分红与股东回报",
+        "en": "Dividend & shareholder return"
+      },
+      "quality": "B",
+      "direction": "support",
+      "likelihood_ratio": 0.8,
+      "dependency_discount": 1.0,
+      "summary": {
+        "zh": "分红率21.89-26.08%，长期低于30%监管线。中国人寿减持、澳洲联邦银行清仓反映部分股东不满。",
+        "en": "Dividend payout ratio of 21.89-26.08% remains below the 30% regulatory guidance. China Life and CBA reductions reflect shareholder dissatisfaction."
+      },
+      "notes": {
+        "zh": "已明确'原则上每年实施两次现金分红'，分红率呈上升趋势",
+        "en": "HZB has committed to semi-annual cash dividends; payout ratio is on an upward trend"
+      }
+    },
+    {
+      "name": {
+        "zh": "管理层团队",
+        "en": "Management team"
+      },
+      "quality": "C",
+      "direction": "support",
+      "likelihood_ratio": 1.2,
+      "dependency_discount": 1.0,
+      "summary": {
+        "zh": "行长空缺11个月后于2026年3月补位完成，全员70后高管团队以内部培养为主，战略连贯性强。",
+        "en": "11-month CEO vacancy filled in March 2026. All-post-70s senior team is predominantly home-grown with strong strategic continuity."
+      },
+      "notes": {
+        "zh": "人事变动本身不会直接驱动PB修复，但不确定性已解除",
+        "en": "Management changes alone don't drive P/B recovery, but the uncertainty has been resolved"
+      }
+    },
+    {
+      "name": {
+        "zh": "政策与宏观环境",
+        "en": "Policy & macro environment"
+      },
+      "quality": "C",
+      "direction": "support",
+      "likelihood_ratio": 1.5,
+      "dependency_discount": 1.0,
+      "summary": {
+        "zh": "政府工作报告追加3000亿元特别国债补充银行资本，央行表态支持银行稳定净息差，逆周期让利阶段基本结束。",
+        "en": "Government adds 300B yuan special bonds for bank capital. PBOC signals NIM stabilization support. Counter-cyclical profit concessions largely ended."
+      },
+      "notes": {
+        "zh": "政策对国有大行倾斜更多，对城商行的利好传导链条更长",
+        "en": "Policies favor large state-owned banks; transmission to city commercial banks has a longer chain"
+      }
+    },
+    {
+      "name": {
+        "zh": "同业估值比较",
+        "en": "Peer valuation comparison"
+      },
+      "quality": "C",
+      "direction": "support",
+      "likelihood_ratio": 1.8,
+      "dependency_discount": 1.0,
+      "summary": {
+        "zh": "宁波银行PB约1.1倍、南京银行PB约1.05倍，杭州银行当前约15-30%折价。经营质量相近，估值差距构成均值回归压力。",
+        "en": "Ningbo Bank at ~1.1x P/B, Nanjing Bank at ~1.05x. Hangzhou Bank's 15-30% discount to similar-quality peers creates mean-reversion pressure."
+      },
+      "notes": {
+        "zh": "在基本面没有显著恶化的情况下，15%+的折价难以长期维持",
+        "en": "A 15%+ discount is unlikely to persist without significant fundamental deterioration"
+      }
+    },
+    {
+      "name": {
+        "zh": "历史PB修复趋势",
+        "en": "Historical P/B recovery trend"
+      },
+      "quality": "C",
+      "direction": "support",
+      "likelihood_ratio": 1.3,
+      "dependency_discount": 1.0,
+      "summary": {
+        "zh": "PB已从2023年的0.53倍修复至当前约0.85倍，涨幅约60%。市场已在逐步纠正此前的低估。当前仍低于历史均值约0.90倍。",
+        "en": "P/B recovered from 0.53x trough in 2023 to ~0.85x, a ~60% gain. Market is gradually correcting prior undervaluation. Still below historical average of ~0.90x."
+      },
+      "notes": {
+        "zh": "上方存在阻力",
+        "en": "Resistance overhead"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "name": {
+        "zh": "买入杭州银行股票",
+        "en": "Buy Hangzhou Bank stock"
+      },
+      "utility_if_h_true": 100,
+      "utility_if_h_false": -50
+    },
+    {
+      "name": {
+        "zh": "继续持有现有仓位",
+        "en": "Hold current position"
+      },
+      "utility_if_h_true": 40,
+      "utility_if_h_false": -10
+    },
+    {
+      "name": {
+        "zh": "等待2026年年报确认后买入",
+        "en": "Wait for 2026 annual report before buying"
+      },
+      "utility_if_h_true": 20,
+      "utility_if_h_false": 20
+    },
+    {
+      "name": {
+        "zh": "减持/卖出杭州银行股票",
+        "en": "Reduce/sell Hangzhou Bank stock"
+      },
+      "utility_if_h_true": -30,
+      "utility_if_h_false": 30
+    }
+  ],
+  "next_information": {
+    "candidates": [
+      {
+        "zh": "跟踪2026年Q2-Q4净息差季度环比数据，确认息差企稳趋势",
+        "en": "Monitor Q2-Q4 2026 NIM data quarter-over-quarter to confirm NIM stabilization trend"
+      },
+      {
+        "zh": "关注2026年中报营收增速是否回升至5%以上",
+        "en": "Watch if H1 2026 revenue growth recovers to above 5%"
+      },
+      {
+        "zh": "观察2026年度分红率是否提升至30%以上",
+        "en": "Observe if the 2026 dividend payout ratio increases to above 30%"
+      }
+    ]
+  },
+  "sensitivity": {
+    "prior_probabilities": [0.20, 0.35, 0.50],
+    "lr_power_factors": [0.75, 1.0, 1.25]
+  }
+}

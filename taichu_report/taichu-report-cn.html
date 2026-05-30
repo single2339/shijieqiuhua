@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>太初电子（太初元碁）投资前景分析报告</title>
+  <style>
+:root {
+  --bg: #f5f4ed;
+  --card: #faf9f5;
+  --ink: #141413;
+  --muted: #5e5d59;
+  --line: #e8e5da;
+  --accent: #1b365d;
+  --accent-soft: #eef2f7;
+  --warn: #8a4f2d;
+  --shadow: 0 0 0 1px rgba(209, 207, 197, 0.65);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, #eef2f7 0%, transparent 24%),
+    linear-gradient(180deg, #f8f7f1 0%, var(--bg) 100%);
+}
+
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  padding: 14px 0;
+  backdrop-filter: blur(18px);
+  background: rgba(245, 244, 237, 0.92);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-inner {
+  width: min(1120px, calc(100vw - 40px));
+  margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+}
+
+.brand-title {
+  font-size: 14px; font-weight: 700;
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+
+.brand-subtitle { font-size: 12px; color: var(--muted); }
+
+.menu {
+  display: flex; align-items: center; gap: 6px;
+  overflow-x: auto; min-width: 0;
+}
+
+.menu::-webkit-scrollbar { height: 6px; }
+
+.menu-link {
+  white-space: nowrap; text-decoration: none;
+  color: var(--muted); font-size: 13px;
+  padding: 8px 12px; border-radius: 999px;
+  transition: background 180ms ease, color 180ms ease;
+}
+
+.menu-link:hover { background: var(--accent-soft); color: var(--accent); }
+
+.action-button {
+  border: 1px solid var(--line); background: var(--accent); color: #faf9f5;
+  border-radius: 999px; padding: 8px 18px; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: transform 180ms ease;
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+
+.action-button:hover { transform: translateY(-1px); background: #24456f; }
+
+.page { width: min(1040px, calc(100vw - 48px)); margin: 36px auto 72px; }
+
+.section-anchor-offset { scroll-margin-top: 88px; }
+
+.hero, .section, .callout {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 24px; box-shadow: var(--shadow);
+}
+
+.hero { padding: 36px; margin-bottom: 28px; }
+
+.hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+
+h1 {
+  margin: 0 0 12px;
+  font-size: clamp(32px, 4vw, 52px); line-height: 1.05;
+  font-family: "Source Han Serif SC", "Songti SC", "Noto Serif CJK SC", "Georgia", serif;
+  font-weight: 500;
+}
+
+.summary-line {
+  font-size: 18px; line-height: 1.5; color: var(--muted); max-width: 34em;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px; margin-top: 24px;
+}
+
+.hero-grid { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+
+.metric-card {
+  border-radius: 18px; padding: 18px 18px 16px;
+  background: #f8f7f1; border: 1px solid var(--line);
+}
+
+.metric-label {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin-bottom: 6px;
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+
+.metric-value {
+  font-size: 28px; font-weight: 500; line-height: 1.1; color: var(--accent);
+  font-family: "Source Han Serif SC", "Songti SC", "Noto Serif CJK SC", "Georgia", serif;
+}
+
+.metric-text { font-size: 20px; }
+
+.section { padding: 28px 30px; margin-bottom: 20px; }
+
+h2 {
+  margin: 0 0 14px; font-size: 26px;
+  font-family: "Source Han Serif SC", "Songti SC", "Noto Serif CJK SC", "Georgia", serif;
+  font-weight: 500;
+  border-left: 3px solid var(--accent); padding-left: 10px;
+}
+
+h3 { margin: 18px 0 10px; font-size: 18px; font-weight: 500; }
+
+p, li { font-size: 15.5px; line-height: 1.55; }
+
+.hero p, .section > p, .callout p, .warning-list li { max-width: 70ch; }
+
+.section-kicker {
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+  font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+
+.table-wrap {
+  overflow-x: auto; margin-top: 14px;
+  border: 1px solid var(--line); border-radius: 18px; background: #fcfbf8;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+
+th, td {
+  border-bottom: 1px solid var(--line);
+  text-align: left; padding: 10px 8px; vertical-align: top;
+}
+
+th {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); background: #f3f1ea;
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+
+tbody tr:nth-child(even) { background: #f8f7f2; }
+
+.pill {
+  display: inline-block; padding: 4px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 12px; font-weight: 600;
+}
+
+.meter {
+  height: 10px; background: #eee7db; border-radius: 999px;
+  overflow: hidden; margin-top: 10px;
+}
+
+.meter > span {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, #d9a14e 100%);
+  border-radius: 999px;
+}
+
+.callout {
+  padding: 20px 24px; margin-top: 18px;
+  border-left: 3px solid var(--accent); background: #f7f6f1;
+}
+
+.warning-list li { color: var(--warn); }
+
+.muted-note { color: var(--muted); }
+
+.decision-banner {
+  margin-top: 18px; padding: 18px 20px; border-radius: 18px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, #f7f9fc 0%, #f1f4f8 100%);
+}
+
+.decision-banner-label {
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+  font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+
+.decision-banner-state {
+  margin-top: 6px; font-size: 30px; line-height: 1.1; color: var(--accent);
+  font-family: "Source Han Serif SC", "Songti SC", "Noto Serif CJK SC", "Georgia", serif;
+  font-weight: 500;
+}
+
+.decision-banner-text { margin: 10px 0 0; max-width: 860px; }
+
+.executive-panel { background: linear-gradient(180deg, #fcfbf8 0%, #f7f6f1 100%); }
+
+.executive-grid, .reason-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 16px;
+}
+
+.executive-card, .comparison-card, .reason-card {
+  border: 1px solid var(--line); border-radius: 18px;
+  padding: 18px 20px; background: #f8f7f1;
+}
+
+.executive-primary { background: linear-gradient(180deg, #f6f8fb 0%, #eef2f7 100%); }
+
+.action-list, .premise-list, .comparison-list { margin: 0; padding-left: 20px; }
+
+.action-list li, .premise-list li, .comparison-list li { margin-bottom: 10px; }
+
+.comparison-list li span { display: block; color: var(--muted); margin-top: 4px; }
+
+.reason-card h3 { margin-top: 6px; }
+
+.reason-label {
+  font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", sans-serif;
+  font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+
+.reason-card.risk { background: #fbf7f3; }
+
+.footer-note { margin-top: 18px; color: var(--muted); font-size: 14px; }
+
+@media print {
+  html, body { background: #f5f4ed !important; }
+
+  .topbar {
+    position: static; padding: 0 0 10mm;
+    background: transparent; border-bottom: 0; backdrop-filter: none;
+  }
+
+  .topbar-inner { width: auto; display: block; }
+
+  .menu, .report-actions, .hero-meta, .meter { display: none !important; }
+
+  .page { width: auto; margin: 0; }
+
+  .hero, .section, .callout {
+    box-shadow: none; break-inside: avoid-page;
+  }
+
+  .hero, .section { padding-left: 0; padding-right: 0; }
+
+  .table-wrap { break-inside: avoid-page; background: #fcfbf8; }
+
+  table { font-size: 12px; }
+}
+
+@media (max-width: 640px) {
+  .topbar { padding: 10px 0; }
+
+  .topbar-inner { width: calc(100vw - 20px); flex-direction: column; gap: 10px; }
+
+  .menu { width: 100%; }
+
+  .page { width: calc(100vw - 24px); margin: 12px auto 32px; }
+
+  .executive-grid, .reason-grid { grid-template-columns: 1fr; }
+
+  .hero, .section, .callout { padding: 20px; border-radius: 18px; }
+}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div>
+        <div class="brand-title">投资决策分析报告</div>
+        <div class="brand-subtitle">太初电子（太初元碁）· 2026年5月</div>
+      </div>
+      <nav class="menu">
+        <a class="menu-link" href="#summary">结论摘要</a>
+        <a class="menu-link" href="#action-plan">行动建议</a>
+        <a class="menu-link" href="#why">判断依据</a>
+        <a class="menu-link" href="#decision">问题定义</a>
+        <a class="menu-link" href="#evidence">证据评估</a>
+        <a class="menu-link" href="#update">概率更新</a>
+        <a class="menu-link" href="#actions">行动比较</a>
+        <a class="menu-link" href="#sensitivity">敏感性</a>
+        <a class="menu-link" href="#warnings">风险提示</a>
+      </nav>
+      <div class="report-actions">
+        <button class="action-button" type="button" onclick="prepareAndPrint()">下载 PDF</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- HERO -->
+    <section class="hero section-anchor-offset" id="summary">
+      <h1>太初电子（太初元碁）投资前景分析报告</h1>
+      <p class="summary-line">基于公开信息和结构化概率方法的投资决策分析：当前后验概率约为 <strong>69.2%</strong>；在现有证据下，更优的行动是 <strong>立即投资（参与B+轮）</strong>，但由于存在关键信息缺口，建议先补充财务和基准测试数据后再做最终决策。</p>
+
+      <div class="decision-banner">
+        <div class="decision-banner-label">综合判断</div>
+        <div class="decision-banner-state">可以推进</div>
+        <p class="decision-banner-text">当前判断偏向正面，可以往前走，但仍建议按推荐节奏推进。目前的建议属于把握偏低，换一组合理假设，结论可能有轻微摆动。建议在最终决策前优先获取经审计财务数据和独立基准测试结果。</p>
+      </div>
+
+      <div class="hero-meta">
+        <span class="pill">中文报告</span>
+        <span class="pill">基于公开信息</span>
+        <span class="pill">风险投资 / 私募股权投资</span>
+        <span class="pill">决策支持，不构成投资建议</span>
+      </div>
+
+      <div class="grid hero-grid">
+        <div class="metric-card">
+          <div class="metric-label">后验概率</div>
+          <div class="metric-value">69.2%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">后验区间</div>
+          <div class="metric-value metric-text">28.4% – 93.8%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">推荐行动</div>
+          <div class="metric-value metric-text">立即投资（参与B+轮）</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">建议信心</div>
+          <div class="metric-value metric-text">低</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">首选行动阈值</div>
+          <div class="metric-value">25.0%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">结论稳定性</div>
+          <div class="metric-value metric-text">混合</div>
+        </div>
+      </div>
+      <div class="meter" aria-hidden="true"><span style="width: 69.2%"></span></div>
+    </section>
+
+    <!-- ACTION PLAN -->
+    <section class="section executive-panel section-anchor-offset" id="action-plan">
+      <div class="section-kicker">执行摘要</div>
+      <div class="executive-grid">
+        <article class="executive-card executive-primary">
+          <h2>你现在该怎么做</h2>
+          <ol class="action-list">
+            <li><strong>立即投资（参与B+轮）</strong> —— 当前证据支持推进投资，期望值显著高于观望和放弃。</li>
+            <li>在最终打款前，<strong>优先获取太初电子经审计的财务报表</strong>（近2年营收、毛利率、净亏损/利润）。</li>
+            <li>如果到 2026年Q3（B+轮融资窗口期）前没有出现新的明显负面信息，就按这个方案执行。</li>
+          </ol>
+        </article>
+        <article class="executive-card">
+          <h2>这份建议成立的前提</h2>
+          <ul class="premise-list">
+            <li><strong>时间窗口：</strong>3-5年（2026-2031）</li>
+            <li><strong>成立条件：</strong>成功IPO或并购退出，且投资回报倍数（MOIC）≥5x</li>
+            <li><strong>最晚决策时间：</strong>2026年Q3（B+轮融资窗口期）</li>
+            <li><strong>风险领域：</strong>本报告仅用于辅助决策，不替代持牌专业人士的正式判断</li>
+          </ul>
+          <p class="muted-note">当前存在关键信息缺口（财务数据未公开、无独立基准测试），建议先补充剩余信息再进入最终决策。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- WHY -->
+    <section class="section section-anchor-offset" id="why">
+      <div class="section-kicker">先讲人话，再讲数据</div>
+      <h2>为什么这样判断</h2>
+      <div class="reason-grid">
+        <article class="reason-card">
+          <div class="reason-label">支持判断</div>
+          <h3>团队与技术基因</h3>
+          <p>核心团队脱胎于国家超算无锡中心（神威·太湖之光）与清华大学计算机系高性能计算所，三次获得戈登·贝尔奖。异构众核架构源自E级超算技术积累，与主流GPU路线形成差异化。</p>
+        </article>
+        <article class="reason-card">
+          <div class="reason-label">支持判断</div>
+          <h3>商业化验证与收入增长</h3>
+          <p>年均营收增长超100%，参与河南空港（近10亿元）、无锡、盐城、延安等多地智算中心建设。服务200+客户，支撑1200P+算力需求。与汉腾科技签署五大万卡集群合作协议。</p>
+        </article>
+        <article class="reason-card risk">
+          <div class="reason-label">拉低判断</div>
+          <h3>竞争烈度</h3>
+          <p>国产AI芯片赛道拥挤：寒武纪（已盈利上市）、摩尔线程（市值3000亿+）、壁仞科技（港股递表）、燧原科技（IPO辅导中）等。市场最终可能收敛至2-3家头部企业。</p>
+        </article>
+        <article class="reason-card risk">
+          <div class="reason-label">拉低判断</div>
+          <h3>软件生态与开发者体验差距</h3>
+          <p>国产算力普遍面临"可用但不好用"问题，CUDA生态形成极强的开发者粘性。公司COO公开承认这是最大挑战。太初需从零建设SDAA软件栈。</p>
+        </article>
+      </div>
+      <div class="comparison-card" style="margin-top: 16px;">
+        <h3>为什么不是另外两个选项</h3>
+        <ul class="comparison-list">
+          <li><strong>观望等待（推迟决策6-12个月）</strong><span>它目前的综合收益比首选方案低 142.3，所以暂时排在后面。</span></li>
+          <li><strong>放弃投资</strong><span>它目前的综合收益比首选方案低 170.8，所以暂时排在后面。</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- DECISION FRAMING -->
+    <section class="section section-anchor-offset" id="decision">
+      <h2>决策问题定义</h2>
+      <p><strong>决策问题：</strong>是否应该在当前阶段（B+轮，独角兽估值约10亿美元）对太初电子进行重大股权投资？</p>
+      <p><strong>当前现状：</strong>太初电子已完成8轮融资，累计约4.5亿元，B+轮于2026年2月完成。公司定位为异构众核架构的国产AI芯片企业，核心团队来自国家超算无锡中心和清华大学。产品已从AI加速卡扩展到服务器、液冷集群和行业解决方案。年均营收增长超100%，参与多个城市级智算中心建设，服务200+客户，适配600+模型。但未上市，财务细节未公开，面临CUDA生态锁定、先进制程受限、竞争激烈等挑战。</p>
+      <p><strong>假设：</strong>太初电子将在3-5年内实现成功IPO或战略性退出，估值达到当前轮次的5倍以上，且在此过程中保持或扩大其技术差异化优势。</p>
+      <p><strong>时间范围：</strong>3-5年（2026-2031）</p>
+      <p><strong>成功标准：</strong>成功IPO或并购退出，且投资回报倍数（MOIC）≥5x</p>
+      <p><strong>领域：</strong>风险投资 / 私募股权投资</p>
+      <p class="muted-note">本报告基于公开资料和结构化分析方法，将问题、证据、行动和阈值对齐为统一决策格式。</p>
+    </section>
+
+    <!-- PRIOR -->
+    <section class="section section-anchor-offset" id="prior">
+      <h2>先验设置</h2>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+        <div class="metric-card">
+          <div class="metric-label">先验概率</div>
+          <div class="metric-value">15.0%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">先验分布</div>
+          <div class="metric-value metric-text">Beta(3.0, 17.0)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">等效样本量</div>
+          <div class="metric-value">20</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">先验区间 (90%)</div>
+          <div class="metric-value metric-text">4.4% – 29.6%</div>
+        </div>
+      </div>
+      <p style="margin-top: 16px;"><strong>参考类：</strong>中国深度科技硬件创业公司（AI芯片/半导体领域），在A-C轮阶段获得机构投资后，最终实现成功IPO或≥5亿美元并购退出的历史比例。</p>
+      <p>基于行业数据，中国AI芯片创业公司中约15-20%能实现成功的风险投资级别退出。考虑到太初处于B+轮、已有初步商业验证，先验成功率设为15%（Beta(3,17)，等效样本量20）。</p>
+      <p><strong>关键差异因素：</strong>异构众核架构的差异化路线、超算基因、全自主供应链定位，使其区别于通用GPU赛道的竞争者。但也面临更小的开发者生态和更窄的初始应用场景。</p>
+      <p class="muted-note">先验来源质量：C级（结构化专家估算，非系统统计数据）</p>
+    </section>
+
+    <!-- EVIDENCE -->
+    <section class="section section-anchor-offset" id="evidence">
+      <h2>证据评估（9项）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>证据</th>
+              <th>等级</th>
+              <th>方向</th>
+              <th>似然比</th>
+              <th>依赖折扣</th>
+              <th>有效似然比</th>
+              <th>摘要</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>团队与技术基因</td>
+              <td><span class="pill">B</span></td>
+              <td>支持 ↑</td>
+              <td>3.50</td>
+              <td>1.00</td>
+              <td>3.50</td>
+              <td>核心团队来自清华超算所 + 神威·太湖之光，3x戈登·贝尔奖，异构众核架构差异化</td>
+            </tr>
+            <tr>
+              <td>商业化验证与收入增长</td>
+              <td><span class="pill">C</span></td>
+              <td>支持 ↑</td>
+              <td>2.50</td>
+              <td>1.00</td>
+              <td>2.50</td>
+              <td>营收+100% YoY，多地智算中心落地，五大万卡集群协议</td>
+            </tr>
+            <tr>
+              <td>政策与市场顺风</td>
+              <td><span class="pill">B</span></td>
+              <td>支持 ↑</td>
+              <td>2.00</td>
+              <td>0.70</td>
+              <td>1.62</td>
+              <td>国产替代、东数西算、推理算力爆发。折扣0.7（政策普惠，非太初独享）</td>
+            </tr>
+            <tr>
+              <td>投资方阵容质量</td>
+              <td><span class="pill">B</span></td>
+              <td>支持 ↑</td>
+              <td>2.50</td>
+              <td>0.85</td>
+              <td>2.18</td>
+              <td>招商资本、龙芯中科、浦东科投等8轮融资。折扣0.85（与商业化轻微依赖）</td>
+            </tr>
+            <tr style="background: #fbf7f3;">
+              <td>软件生态与开发者体验差距</td>
+              <td><span class="pill">C</span></td>
+              <td>削弱 ↓</td>
+              <td>2.00</td>
+              <td>1.00</td>
+              <td>0.50</td>
+              <td>CUDA生态锁定，"可用不好用"，非CUDA兼容路线影响更大</td>
+            </tr>
+            <tr style="background: #fbf7f3;">
+              <td>竞争烈度</td>
+              <td><span class="pill">B</span></td>
+              <td>削弱 ↓</td>
+              <td>2.50</td>
+              <td>0.90</td>
+              <td>0.44</td>
+              <td>6+强劲对手+NVIDIA，市场可能收敛至2-3家</td>
+            </tr>
+            <tr style="background: #fbf7f3;">
+              <td>地缘政治与供应链风险</td>
+              <td><span class="pill">B</span></td>
+              <td>削弱 ↓</td>
+              <td>1.80</td>
+              <td>1.00</td>
+              <td>0.56</td>
+              <td>先进制程（&lt;7nm）受限，流片代工伙伴未公开</td>
+            </tr>
+            <tr>
+              <td>大模型适配与生态广度</td>
+              <td><span class="pill">B</span></td>
+              <td>支持 ↑</td>
+              <td>2.00</td>
+              <td>0.70</td>
+              <td>1.62</td>
+              <td>600+模型适配，AlphaFold3复现。折扣0.7（与商业化/生态重叠）</td>
+            </tr>
+            <tr>
+              <td>技术差异化与产品矩阵完整性</td>
+              <td><span class="pill">B</span></td>
+              <td>支持 ↑</td>
+              <td>2.50</td>
+              <td>0.80</td>
+              <td>2.08</td>
+              <td>SuperPod 128液冷集群（PUE 1.1），TC Link互联。折扣0.8（与团队证据部分重叠）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- BAYESIAN UPDATE -->
+    <section class="section section-anchor-offset" id="update">
+      <h2>概率更新路径</h2>
+      <p><strong>更新方法：</strong>赔率更新（Odds Update）</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>步骤</th><th>证据</th><th>方向</th><th>有效LR</th><th>更新后Odds</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>0</td><td>先验 (P=15.0%)</td><td>—</td><td>—</td><td>0.1765</td></tr>
+            <tr><td>1</td><td>团队与技术基因</td><td>支持</td><td>3.500</td><td>0.6176</td></tr>
+            <tr><td>2</td><td>商业化验证与收入增长</td><td>支持</td><td>2.500</td><td>1.5441</td></tr>
+            <tr><td>3</td><td>政策与市场顺风</td><td>支持</td><td>1.625</td><td>2.5084</td></tr>
+            <tr><td>4</td><td>投资方阵容质量</td><td>支持</td><td>2.179</td><td>5.4658</td></tr>
+            <tr style="background: #fbf7f3;"><td>5</td><td>软件生态差距</td><td>削弱</td><td>0.500</td><td>2.7329</td></tr>
+            <tr style="background: #fbf7f3;"><td>6</td><td>竞争烈度</td><td>削弱</td><td>0.438</td><td>1.1980</td></tr>
+            <tr style="background: #fbf7f3;"><td>7</td><td>地缘政治与供应链风险</td><td>削弱</td><td>0.556</td><td>0.6656</td></tr>
+            <tr><td>8</td><td>大模型适配与生态广度</td><td>支持</td><td>1.625</td><td>1.0812</td></tr>
+            <tr><td>9</td><td>技术差异化与产品矩阵完整性</td><td>支持</td><td>2.081</td><td>2.2505</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top: 16px;"><strong>后验概率：69.2%</strong>（后验区间：28.4% – 93.8%）</p>
+      <div class="callout">
+        <p><strong>自然频率表述：</strong>在 100 个相似案例里，先验大约意味着其中 15 个会成功。加入当前证据后，估计会成功的案例约为 69 个。</p>
+      </div>
+      <p class="muted-note"><strong>关键转折点：</strong>软件生态差距（E5）和竞争烈度（E6）将 Odds 从 5.47 拉回到 1.20，是最大的信念折扣。</p>
+    </section>
+
+    <!-- ACTIONS -->
+    <section class="section section-anchor-offset" id="actions">
+      <h2>行动比较与期望值</h2>
+      <p><strong>推荐行动：</strong>立即投资（参与B+轮）</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>行动</th><th>H为真时效用</th><th>H为假时效用</th><th>期望值</th><th>行动阈值</th></tr>
+          </thead>
+          <tbody>
+            <tr style="font-weight: 600; background: #eef2f7;">
+              <td>★ 立即投资（参与B+轮）</td><td>300</td><td>-100</td><td>176.9</td><td>25.0%</td>
+            </tr>
+            <tr><td>观望等待（推迟决策6-12个月）</td><td>50</td><td>0</td><td>34.6</td><td>0%</td></tr>
+            <tr><td>放弃投资</td><td>0</td><td>20</td><td>6.2</td><td>100%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>下一步最有价值的信息</h3>
+      <ol>
+        <li><strong>经审计财务报表</strong>（近2年营收、毛利率、净亏损/利润）—— 验证增长质量</li>
+        <li><strong>独立基准测试</strong>（T111 vs H100/B200 在主流推理任务上）—— 验证技术声明</li>
+        <li><strong>前5大客户深度访谈</strong>（实际体验、续约意愿、迁移成本）—— 验证产品市场匹配</li>
+      </ol>
+      <p class="muted-note">当前结果已经接近关键行动阈值，新增信息有较大概率改变建议。</p>
+    </section>
+
+    <!-- SENSITIVITY -->
+    <section class="section section-anchor-offset" id="sensitivity">
+      <h2>敏感性分析（20个场景）</h2>
+      <p><strong>后验范围：</strong>28.4% – 93.8% | <strong>结论稳定性：</strong>混合（Mixed）</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>先验概率</th><th>LR强度系数</th><th>后验概率</th><th>推荐行动</th></tr></thead>
+          <tbody>
+            <tr style="background: #fbf7f3;"><td>10.0%</td><td>0.50×</td><td>28.4%</td><td>⚠ 放弃投资</td></tr>
+            <tr><td>10.0%</td><td>0.75×</td><td>42.9%</td><td>立即投资</td></tr>
+            <tr><td>10.0%</td><td>1.00×</td><td>58.6%</td><td>立即投资</td></tr>
+            <tr style="background: #eef2f7;"><td><strong>15.0% ★</strong></td><td><strong>1.00× ★</strong></td><td><strong>69.2%</strong></td><td><strong>立即投资（基准）</strong></td></tr>
+            <tr><td>15.0%</td><td>1.50×</td><td>88.9%</td><td>立即投资</td></tr>
+            <tr><td>20.0%</td><td>1.00×</td><td>76.1%</td><td>立即投资</td></tr>
+            <tr><td>25.0%</td><td>1.00×</td><td>81.0%</td><td>立即投资</td></tr>
+            <tr><td>25.0%</td><td>1.50×</td><td>93.8%</td><td>立即投资</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted-note" style="margin-top: 12px;">共20个场景测试（4先验 × 5LR权重），仅1个场景（先验10% + LR 50%）推荐翻转为"放弃投资"。19/20场景推荐"立即投资"。</p>
+    </section>
+
+    <!-- WARNINGS -->
+    <section class="section section-anchor-offset" id="warnings">
+      <h2>风险与注意事项</h2>
+      <ul class="warning-list">
+        <li>至少有一条证据因依赖关系被折扣处理，不应把这次更新理解为完全独立证据的简单叠加。</li>
+        <li><strong>本报告仅用于辅助决策，不替代持证专业人士的正式判断。</strong>投资领域属于高风险决策范畴。</li>
+        <li>后验区间来自赔率更新下的敏感性包络，并非严格统计意义上的可信区间。</li>
+        <li>存在关键信息缺口（财务数据、独立基准测试、客户深度访谈），建议先补充剩余信息再进入最终决策。</li>
+        <li>所有先验概率和似然比均为基于公开信息的估算值，不构成投资建议。</li>
+        <li>证据等级说明：A=系统综述/官方统计，B=同行评审/行业标准，C=专家估算/内部数据，D=类比/常识，E=营销材料/不可靠来源</li>
+      </ul>
+      <p class="footer-note">本报告基于公开信息和结构化决策方法生成。如需 PDF，请使用右上角"下载 PDF"按钮。</p>
+    </section>
+  </main>
+
+  <script>
+    function prepareAndPrint() {
+      document.querySelectorAll('details').forEach(function(s) { s.open = true; });
+      window.setTimeout(function() { window.print(); }, 100);
+    }
+
+    document.querySelectorAll('a.menu-link').forEach(function(link) {
+      link.addEventListener('click', function(e) {
+        e.preventDefault();
+        var id = this.getAttribute('href').slice(1);
+        var target = document.getElementById(id);
+        if (target) target.scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,482 @@
+{
+  "title": {
+    "zh": "中共最高权力交接：以哪种情景作为分析与决策基准？",
+    "en": "CCP Top Power Succession: Which Scenario to Adopt as the Working Baseline?"
+  },
+  "question": {
+    "zh": "面对习近平接班人与交接方式的高不确定性，作为外部观察者/分析者应当以哪一种情景作为基准假设来组织判断、政策推演与资源配置？",
+    "en": "Given high uncertainty about Xi Jinping's successor and the handover mechanism, which scenario should an external observer or analyst adopt as the working baseline for judgment, policy reasoning, and resource allocation?"
+  },
+  "current_state": {
+    "zh": "截至 2026 年 5 月：习近平已连任三届，2018 已取消国家主席任期限制；2025-10 四中全会开除何卫东、苗华；2026-01 张又侠、刘振立被立案调查；现任常委中无人具备传统'接班人画像'。无任何官方信号显示已指定接班人。",
+    "en": "As of May 2026: Xi is in his 3rd term; the 2018 amendment removed presidential term limits; the 4th Plenum (Oct 2025) expelled He Weidong and Miao Hua; in Jan 2026 Zhang Youxia and Liu Zhenli were put under investigation; no current PSC member fits the traditional successor profile; no official signal designates a successor."
+  },
+  "hypothesis": {
+    "zh": "习近平将在 2027 年秋天的二十一大上继任中共中央总书记与中央军委主席进入第四个任期，且在二十一大闭幕时，政治局常委名单中不存在明确具备'接班人画像'（年龄≤60、省委书记经历、与习无血缘且未被高度专业化绑死在某一线条）的候选人。",
+    "en": "Xi Jinping will secure a 4th term as General Secretary and CMC Chairman at the 21st Party Congress in autumn 2027, and at the close of the Congress no member of the Politburo Standing Committee will clearly fit the traditional successor profile (age ≤60, prior provincial party secretary tenure, broad portfolio rather than narrow specialization)."
+  },
+  "time_horizon": {
+    "zh": "约 18 个月（至 2027 年 10-11 月二十一大）",
+    "en": "About 18 months (until the 21st Party Congress, October-November 2027)"
+  },
+  "decision_deadline": "2027-10-01",
+  "success_metric": {
+    "zh": "二十一大闭幕公报：习以总书记/军委主席身份发布讲话；新一届常委名单中无 ≤60 岁且具有省委书记经历的非习家军成员被排进第六或第七位。",
+    "en": "21st Congress closing communique: Xi delivers remarks as General Secretary and CMC Chairman; the new PSC list contains no non-Xi-faction member who is ≤60 years old with provincial party secretary experience ranked sixth or seventh."
+  },
+  "domain": {
+    "zh": "地缘政治 / 中国高层政治分析",
+    "en": "geopolitics / Chinese elite politics analysis"
+  },
+  "high_risk_domain": true,
+  "method": "odds-update",
+  "prior": {
+    "probability": 0.60,
+    "equivalent_sample_size": 8,
+    "source_summary": [
+      {
+        "zh": "参考类极弱：1949 年以来仅有 5 位 paramount leader（毛、华、邓、江、胡、习），其中只有 2 次（江→胡、胡→习）属于'明确指定 + 按期交接'。",
+        "en": "Weak reference class: since 1949 only 5 paramount leaders (Mao, Hua, Deng, Jiang, Hu, Xi); only 2 transitions (Jiang→Hu, Hu→Xi) were clearly designated and on-schedule."
+      },
+      {
+        "zh": "一旦最高领导人突破任期规范（毛、习），历史模态是继续在位至生命/健康事件，而非主动交班。",
+        "en": "Once a paramount leader breaks the term-limit norm (Mao, Xi), the modal outcome is to continue in office until a life or health event, not a voluntary handover."
+      },
+      {
+        "zh": "现行制度环境（修宪取消任期、长老政治终结、个人崇拜入党章）系统性偏向延续。",
+        "en": "The current institutional environment (term-limit removal, end of elder politics, personality cult enshrined in Party constitution) systematically biases toward continuation."
+      }
+    ],
+    "source_quality": "C",
+    "confidence": "medium"
+  },
+  "evidence": [
+    {
+      "name": {
+        "zh": "2025-10 四中全会大规模军方清洗（何卫东、苗华被开除党籍）",
+        "en": "4th Plenum (Oct 2025) mass military purge: He Weidong and Miao Hua expelled"
+      },
+      "summary": {
+        "zh": "He Weidong（军委副主席、曾被视为习亲信）2025-03 消失，2025-10 正式开除党籍；Miao Hua（军委政工部主任）2024-11 立案、2025-10 开除。这两人均为习二十大亲自提拔的核心军方人事，被清洗显示习对忠诚度的容忍度持续收紧，而非容许任何潜在接班结构存在。",
+        "en": "He Weidong (CMC Vice Chair, previously seen as Xi loyalist) disappeared in March 2025 and was formally expelled in October 2025; Miao Hua (CMC Political Work Department) was placed under investigation in Nov 2024 and expelled in Oct 2025. Both were Xi's own 20th-Congress picks, so their removal signals that Xi continues to tighten loyalty tests rather than tolerate any latent succession structure."
+      },
+      "likelihood_ratio": 2.4,
+      "quality": "B",
+      "dependency_discount": 0.7,
+      "direction": "support",
+      "notes": {
+        "zh": "Reuters 等多家国际媒体独立报道，党内文件部分公开。属可信度较高的官方+权威媒体证据。",
+        "en": "Independently reported by Reuters and others, partially backed by official Party documents. High-grade open-source evidence."
+      }
+    },
+    {
+      "name": {
+        "zh": "2026-01 张又侠、刘振立被立案调查",
+        "en": "Jan 2026 investigation of Zhang Youxia and Liu Zhenli"
+      },
+      "summary": {
+        "zh": "Reuters 2026-01-24 报道国防部确认调查张又侠（军委副主席、习多年盟友、太子党）与刘振立（军委委员）。这次调查触及最后一名资深'共事盟友'级人物，显示个人化集权进入新阶段。",
+        "en": "Reuters reported on 24 Jan 2026 that the Defense Ministry confirmed the investigation of Zhang Youxia (CMC Vice Chair, long-time Xi ally, princeling) and Liu Zhenli (CMC member). This investigation reaches the last remaining 'peer-level ally' and marks a new stage of personal consolidation."
+      },
+      "likelihood_ratio": 2.2,
+      "quality": "B",
+      "dependency_discount": 0.65,
+      "direction": "support",
+      "notes": {
+        "zh": "与 He Weidong 事件叙事相关，存在依赖；但目标层级不同（VP-CMC 而非政工系统），仍提供增量信号。",
+        "en": "Correlated with the He Weidong story (dependency), but the target is a different level (CMC VC vs political work), so it adds incremental signal."
+      }
+    },
+    {
+      "name": {
+        "zh": "现任政治局常委无人符合传统'接班人画像'",
+        "en": "No current PSC member fits the traditional successor profile"
+      },
+      "summary": {
+        "zh": "丁薛祥（1962、副总理）年龄合适但无省委书记经历且长期是机要型秘书；蔡奇（1955）、李希（1956）、赵乐际（1957）、王沪宁（1955）、李强（1959）均接近或超过 70 岁退休线或缺关键履历。系统性预防接班人浮现。",
+        "en": "Ding Xuexiang (b. 1962, Executive Vice Premier) has the right age but no provincial party secretary tenure and a long career as a confidential aide; Cai Qi (1955), Li Xi (1956), Zhao Leji (1957), Wang Huning (1955), Li Qiang (1959) are near or past the 70-year retirement line or lack the key portfolio. Systematic prevention of a successor emerging."
+      },
+      "likelihood_ratio": 2.0,
+      "quality": "A",
+      "dependency_discount": 0.75,
+      "direction": "support",
+      "notes": {
+        "zh": "结构性事实，履历可公开核对；属强证据。",
+        "en": "Structural fact, biographies publicly verifiable; strong evidence."
+      }
+    },
+    {
+      "name": {
+        "zh": "2018 修宪取消国家主席任期限制（且未撤销）",
+        "en": "2018 constitutional amendment removed presidential term limits (never reversed)"
+      },
+      "summary": {
+        "zh": "国家主席这一职务此前是三巨头中唯一有任期限制的角色；2018 取消之后，党、国、军三个'帽子'的任期约束被统一去掉。8 年来无任何官方话语逆转。",
+        "en": "The presidency was the only one of the three top posts with a term limit; the 2018 amendment unified the unlimited-tenure framework across Party, State, and Military. In 8 years there has been no official move to reverse it."
+      },
+      "likelihood_ratio": 1.7,
+      "quality": "A",
+      "dependency_discount": 0.85,
+      "direction": "support",
+      "notes": {
+        "zh": "宪法级证据，最高可信度。但只是必要条件，不能单独证明 H。",
+        "en": "Constitutional-level evidence, top-tier credibility. But only a necessary condition, not sufficient alone."
+      }
+    },
+    {
+      "name": {
+        "zh": "习近平思想入党章 + 个人崇拜机制化",
+        "en": "Xi Jinping Thought enshrined in Party constitution; personality cult institutionalized"
+      },
+      "summary": {
+        "zh": "习思想自 2017 入党章、2018 入宪法，深度嵌入国民教育与全部党政文件；任何在世期间的退场都将与意识形态机制构成内在矛盾。",
+        "en": "Xi Thought entered the Party constitution in 2017 and the State constitution in 2018, deeply embedded in national education and every Party/State document; any in-life retirement would create an internal contradiction with the ideological machine."
+      },
+      "likelihood_ratio": 1.5,
+      "quality": "A",
+      "dependency_discount": 0.7,
+      "direction": "support",
+      "notes": {
+        "zh": "与'取消任期限制'同源，需折扣。",
+        "en": "Shares root cause with the term-limit removal; discount for dependence."
+      }
+    },
+    {
+      "name": {
+        "zh": "2022 二十大胡锦涛'被退场'+ 团派被系统性清空",
+        "en": "Hu Jintao's removal from the 20th Congress; systematic dismantling of the Youth League faction"
+      },
+      "summary": {
+        "zh": "胡锦涛在二十大闭幕仪式上被当面带离主席台（电视直播）；李克强、汪洋、胡春华被排除常委/政治局；元老与团派对接班议程的杠杆归零。",
+        "en": "Hu Jintao was visibly removed from the closing ceremony of the 20th Congress (live broadcast); Li Keqiang, Wang Yang, and Hu Chunhua were excluded from the PSC/Politburo; the leverage of elders and the Youth League over succession reached zero."
+      },
+      "likelihood_ratio": 1.4,
+      "quality": "B",
+      "dependency_discount": 0.7,
+      "direction": "support",
+      "notes": {
+        "zh": "与'无符合接班人画像'部分重叠。",
+        "en": "Partial overlap with the 'no successor profile' evidence."
+      }
+    },
+    {
+      "name": {
+        "zh": "习公开活动维持正常节奏（含 2026-05 与特朗普会晤）",
+        "en": "Xi maintains normal public activity (including the May 2026 summit with Trump)"
+      },
+      "summary": {
+        "zh": "2026-05-13/15 Reuters 报道习与特朗普就台湾、贸易、伊朗议题面对面会谈，显示其依然行使最高对外决策权。",
+        "en": "Reuters reported on 13/15 May 2026 that Xi met Trump in person on Taiwan, trade, and Iran, showing he still exercises top-level foreign policy authority."
+      },
+      "likelihood_ratio": 1.3,
+      "quality": "B",
+      "dependency_discount": 0.85,
+      "direction": "support",
+      "notes": {
+        "zh": "排除'已失能/已被架空'的强假说，但不直接证明 2027 连任。",
+        "en": "Rules out a strong 'already incapacitated / sidelined' hypothesis but does not directly prove the 2027 continuation."
+      }
+    },
+    {
+      "name": {
+        "zh": "周期性健康与缺席传闻（2024 中风、2025 缺席金砖、2026 短暂消失）",
+        "en": "Recurring health and absence rumors (2024 stroke, 2025 BRICS absence, 2026 brief disappearance)"
+      },
+      "summary": {
+        "zh": "境外社交媒体多次出现习中风、被软禁、用替身的传闻；西方主流分析机构均反复证伪（北戴河、内部会议、低风险疾病等替代解释更合常理）。但传闻频率上升本身是模型不确定性的信号。",
+        "en": "Overseas social media periodically claims Xi had a stroke, is under house arrest, or uses a body double; Western analysts have repeatedly debunked these (Beidaihe retreat, internal meetings, minor ailments are more parsimonious). Still, the rising rumor frequency is itself a noise signal about model uncertainty."
+      },
+      "likelihood_ratio": 0.8,
+      "quality": "D",
+      "dependency_discount": 0.5,
+      "direction": "against",
+      "notes": {
+        "zh": "证据等级 D，主要作为模型不确定性而非真实信号纳入。",
+        "en": "Grade-D evidence, included as model uncertainty rather than as a real signal."
+      }
+    },
+    {
+      "name": {
+        "zh": "习近平年龄因素（1953 年生，2027 二十一大时 74 岁）",
+        "en": "Xi's age (born 1953; will be 74 at the 21st Congress)"
+      },
+      "summary": {
+        "zh": "74 岁仍在中国领导人健康范围内（江泽民 76 岁卸任、邓小平 92 岁去世），但 18 个月内发生重大健康事件的概率非零。中国男性 74 岁年死亡率约 2.5-3%。",
+        "en": "74 is within historical CCP leadership health range (Jiang stepped down at 76, Deng died at 92), but the probability of a major health event within 18 months is non-zero. Annual mortality for Chinese men at 74 is roughly 2.5-3%."
+      },
+      "likelihood_ratio": 0.88,
+      "quality": "C",
+      "dependency_discount": 0.85,
+      "direction": "against",
+      "notes": {
+        "zh": "独立于政治因素，基率较为可信。",
+        "en": "Independent of political factors; base rate reasonably credible."
+      }
+    },
+    {
+      "name": {
+        "zh": "军方大清洗的双义解读：既可能是巩固，也可能反映底层不稳",
+        "en": "Ambiguous reading of military purges: consolidation or underlying instability"
+      },
+      "summary": {
+        "zh": "Reuters 2026-02-24 引述外部研究：清洗已影响 PLA 指挥与战备。若解读为'被迫清洗反映派系反弹'，则不利于平稳连任假设；若解读为'主动整顿'则强化连任假设。两种叙事并存，纯粹模型层面的不确定性。",
+        "en": "Reuters reported on 24 Feb 2026 that external research found the purges have impaired PLA command and readiness. If read as 'forced cleanup reflecting factional pushback', this weakens the continuation hypothesis; if read as 'proactive cleanup', it reinforces it. Both narratives coexist, reflecting irreducible model uncertainty."
+      },
+      "likelihood_ratio": 0.92,
+      "quality": "C",
+      "dependency_discount": 0.6,
+      "direction": "against",
+      "notes": {
+        "zh": "与'CMC 清洗'证据高度重叠，已大幅折扣以避免双计。",
+        "en": "Heavily overlaps with the CMC purge evidence; discounted to avoid double-counting."
+      }
+    },
+    {
+      "name": {
+        "zh": "历史参考类：1976 年后 4 次最高交接中只有 2 次是'指定 + 按期'",
+        "en": "Historical reference class: 2 of 4 post-1976 transitions were 'designated and on-schedule'"
+      },
+      "summary": {
+        "zh": "毛→华→邓（危机）、邓→江（六四后应急）、江→胡（指定）、胡→习（指定）。'指定 + 按期'比例 50%，但样本极小。",
+        "en": "Mao→Hua→Deng (crisis), Deng→Jiang (post-Tiananmen emergency), Jiang→Hu (designated), Hu→Xi (designated). The 'designated and on-schedule' share is 50%, but the sample is extremely small."
+      },
+      "likelihood_ratio": 0.9,
+      "quality": "B",
+      "dependency_discount": 0.7,
+      "direction": "against",
+      "notes": {
+        "zh": "样本太小，且'强人领导期'与'制度化时期'参考类不可混淆。",
+        "en": "Sample too small; the 'strongman era' and the 'institutionalized era' reference classes should not be mixed."
+      }
+    }
+  ],
+  "actions": [
+    {
+      "name": {
+        "zh": "以'习连任至2027后、无明确接班人'为基准情景（强势延续模型）",
+        "en": "Adopt 'Xi continues post-2027 with no clear successor' as the baseline scenario (Strongman Continuation)"
+      },
+      "cost": 0,
+      "upside_if_h_true": 100,
+      "downside_if_h_false": -40,
+      "opportunity_cost": 0
+    },
+    {
+      "name": {
+        "zh": "以'2027前后浮现指定接班人'为基准情景（有序交接模型）",
+        "en": "Adopt 'designated successor emerges around 2027' as the baseline scenario (Orderly Handover)"
+      },
+      "cost": 0,
+      "upside_if_h_true": -30,
+      "downside_if_h_false": 70,
+      "opportunity_cost": 0
+    },
+    {
+      "name": {
+        "zh": "以'突发健康或政治事件触发非计划交接'为基准情景（危机交接模型）",
+        "en": "Adopt 'sudden health or political event triggers an unplanned transition' as the baseline scenario (Crisis Transition)"
+      },
+      "cost": 0,
+      "upside_if_h_true": -25,
+      "downside_if_h_false": 55,
+      "opportunity_cost": 0
+    }
+  ],
+  "sensitivity": {
+    "prior_probabilities": [
+      0.45,
+      0.60,
+      0.72
+    ],
+    "lr_power_factors": [
+      0.7,
+      1.0,
+      1.3
+    ]
+  },
+  "next_information": {
+    "candidates": [
+      {
+        "zh": "2026 北戴河会议后（8-9 月）任何关于二十一大议程或人事建议组成员的官方/半官方信号。",
+        "en": "Any official or semi-official signals about the 21st Congress agenda or personnel preparation group after the 2026 Beidaihe meeting (Aug-Sep)."
+      },
+      {
+        "zh": "习公开活动的连续 30 天行程密度（重大缺席窗口、是否启用替身、是否仍主持外事）。",
+        "en": "Xi's rolling 30-day public schedule density (any major absences, body-double rumors, whether he still chairs foreign affairs)."
+      },
+      {
+        "zh": "军委补缺人事：张又侠、何卫东留下的副主席空缺由谁接任，是否出现可被读作'接班人'画像的人物。",
+        "en": "Filling the CMC Vice Chair vacancies left by Zhang Youxia and He Weidong, and whether any new appointee fits a 'successor' profile."
+      },
+      {
+        "zh": "二十届五中全会（若仍单独召开）的时间与议程，以及是否预告人事调整。",
+        "en": "If a separate 20th CC 5th Plenum is convened, its timing, agenda, and any preview of personnel changes."
+      }
+    ]
+  },
+  "conversation": {
+    "initial_problem_statement": {
+      "zh": "用户要求收集中共中央相关信息，并用贝叶斯框架判断习近平接班人情况与交接方式。",
+      "en": "The user asked to collect information about the CCP Central Committee and use a Bayesian framework to judge Xi Jinping's succession situation and handover mechanism."
+    },
+    "initial_state": {
+      "zh": "无具体子问题、无量化指标、无利益相关方约束；属公开信号驱动的开放分析。",
+      "en": "No specific sub-question, no quantitative target, no stakeholder constraint; this is an open analysis driven by public signals."
+    },
+    "decision_ready_threshold": 0.70,
+    "final_readiness": 0.72,
+    "decision_status": "ready",
+    "open_questions": [
+      {
+        "zh": "2027 二十一大前如出现习重大健康事件，模型需立即重跑。",
+        "en": "If a major health event for Xi occurs before the 21st Congress, the model must be rerun immediately."
+      },
+      {
+        "zh": "如果军委副主席补缺人选出现 '60 岁以下 + 省委书记经历' 组合，需将相关概率大幅下调。",
+        "en": "If a new CMC Vice Chair fills a vacancy with the 'under-60 + provincial party secretary' profile, the probability should be sharply downgraded."
+      }
+    ],
+    "rounds": [
+      {
+        "round": 1,
+        "stage": {
+          "zh": "问题结构化与弱先验",
+          "en": "Problem framing and a weak prior"
+        },
+        "user_input_summary": {
+          "zh": "用户只给出方向性问题，没有指定时间窗口、备选情景或决策用途；故先压缩为'18 个月内 + 二十一大' 这一可观测节点。",
+          "en": "The user only gave a directional question without a time window, alternative scenarios, or a decision use case; so we compressed the problem to the observable node of '18 months + the 21st Congress'."
+        },
+        "assistant_focus": {
+          "zh": "基于历史 paramount leader 参考类构建弱先验，同时承认参考类极小。",
+          "en": "Build a weak prior from the paramount-leader reference class while acknowledging the sample is extremely small."
+        },
+        "new_information": [
+          {
+            "zh": "建立 H = '2027 习连任 + 无指定接班人' 的二值假设。",
+            "en": "Defined H = 'Xi continues in 2027 with no designated successor' as a binary hypothesis."
+          }
+        ],
+        "assistant_next_questions": [
+          {
+            "zh": "应在哪个时点采集证据？二十大、四中全会、北戴河会议、还是当下？",
+            "en": "At which checkpoint should evidence be collected? The 20th Congress, the 4th Plenum, Beidaihe, or now?"
+          }
+        ],
+        "missing_information": [
+          {
+            "zh": "可量化的健康基率",
+            "en": "Quantifiable health base rate"
+          },
+          {
+            "zh": "军方人事调整的细节文件",
+            "en": "Details of military personnel reshuffles"
+          }
+        ],
+        "prior_probability_before": 0.50,
+        "bayes_update": {
+          "update_method": "odds-update",
+          "likelihood_ratio": 1.5,
+          "direction": "support",
+          "dependency_discount": 0.8
+        },
+        "posterior_probability_after": 0.60,
+        "decision_readiness": 0.35,
+        "interim_judgment": {
+          "zh": "在没有任何近期证据情况下，仅凭'已突破任期 + 制度化个人崇拜'这两条结构性事实，先验已可拉到约 0.60。",
+          "en": "With no recent evidence, just the two structural facts ('term limits already broken' + 'institutionalized personality cult') push the prior to about 0.60."
+        }
+      },
+      {
+        "round": 2,
+        "stage": {
+          "zh": "加入 2024-2026 军方清洗与常委结构事实",
+          "en": "Add 2024-2026 military purges and PSC structural facts"
+        },
+        "user_input_summary": {
+          "zh": "通过 Gemini 与 Reuters 检索补充 He Weidong、Miao Hua、Zhang Youxia 三轮清洗的时间线与对应官方文件；同时核对了七位常委的年龄与履历。",
+          "en": "Through Gemini and Reuters we added the timeline of three rounds of purges (He Weidong, Miao Hua, Zhang Youxia) and the corresponding official documents; also cross-checked the seven PSC members' ages and biographies."
+        },
+        "assistant_focus": {
+          "zh": "用强证据上调赔率，但显式标注 CMC 清洗与常委结构两条证据共享'集权'母因，必须降低依赖折扣。",
+          "en": "Use strong evidence to raise the odds, but explicitly note that the CMC purge and PSC structure share a 'consolidation' parent cause, so the dependency discount must be lowered."
+        },
+        "new_information": [
+          {
+            "zh": "三次军方人事清洗证实习仍在向最高军权进一步集中。",
+            "en": "Three rounds of military purges confirm that Xi is still concentrating supreme military authority."
+          },
+          {
+            "zh": "PSC 中无人符合接班人画像。",
+            "en": "No PSC member fits the successor profile."
+          }
+        ],
+        "assistant_next_questions": [
+          {
+            "zh": "是否需要引入'习健康基率'作为对冲？",
+            "en": "Should we introduce the 'Xi health base rate' as a hedge?"
+          }
+        ],
+        "missing_information": [
+          {
+            "zh": "2026 北戴河会议任何走漏的人事预备组信号",
+            "en": "Any leaked personnel-preparation-group signal from Beidaihe 2026"
+          }
+        ],
+        "prior_probability_before": 0.60,
+        "bayes_update": {
+          "update_method": "odds-update",
+          "likelihood_ratio": 4.5,
+          "direction": "support",
+          "dependency_discount": 0.6
+        },
+        "posterior_probability_after": 0.79,
+        "decision_readiness": 0.60,
+        "interim_judgment": {
+          "zh": "结构性证据全部指向连续延续，但模型已开始过度自信，必须用对立证据回扣。",
+          "en": "Structural evidence all points to continuation, but the model is becoming over-confident and must be tempered by counter-evidence."
+        }
+      },
+      {
+        "round": 3,
+        "stage": {
+          "zh": "加入对立证据：健康基率、军方双义解读、健康/缺席传闻",
+          "en": "Add counter-evidence: health base rate, ambiguous military reading, health/absence rumors"
+        },
+        "user_input_summary": {
+          "zh": "显式纳入 Xi 年龄基率、Reuters 关于清洗影响战备的研究、以及周期性健康传闻。",
+          "en": "Explicitly included Xi's age base rate, Reuters research on purge impact on readiness, and recurring health rumors."
+        },
+        "assistant_focus": {
+          "zh": "对负向证据做严格分级：年龄基率列为 C，传闻列为 D，避免境外谣言污染模型。",
+          "en": "Apply strict grading to negative evidence: age base rate is C, rumors are D, to prevent overseas rumors from polluting the model."
+        },
+        "new_information": [
+          {
+            "zh": "18 个月窗口内重大健康事件概率非零（粗略 4-5%）。",
+            "en": "The probability of a major health event in 18 months is non-zero (roughly 4-5%)."
+          },
+          {
+            "zh": "军方清洗在战备意义上有反向解读。",
+            "en": "The military purge has a reverse interpretation in terms of combat readiness."
+          }
+        ],
+        "assistant_next_questions": [],
+        "missing_information": [],
+        "prior_probability_before": 0.79,
+        "bayes_update": {
+          "update_method": "odds-update",
+          "likelihood_ratio": 0.65,
+          "direction": "against",
+          "dependency_discount": 0.7
+        },
+        "posterior_probability_after": 0.72,
+        "decision_readiness": 0.72,
+        "interim_judgment": {
+          "zh": "后验回落到约 0.72，进入'可作分析基线但仍需对冲'区间，与 18 个月窗口和情景规划任务匹配。",
+          "en": "The posterior settles around 0.72, entering a 'usable as analytical baseline but still needs hedging' zone, consistent with the 18-month window and scenario-planning task."
+        }
+      }
+    ]
+  }
+}

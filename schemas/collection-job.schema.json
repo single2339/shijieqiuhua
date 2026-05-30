@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osint-network.local/schemas/collection-job.schema.json",
+  "title": "CollectionJob",
+  "type": "object",
+  "required": [
+    "job_id",
+    "tenant_id",
+    "channel",
+    "collector_key",
+    "target",
+    "created_at"
+  ],
+  "properties": {
+    "job_id": { "type": "string", "format": "uuid" },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "channel": {
+      "type": "string",
+      "enum": ["web", "social", "api", "app"]
+    },
+    "collector_key": { "type": "string", "minLength": 1 },
+    "target": {
+      "type": "object",
+      "description": "Channel-specific payload; validated by adapter registry",
+      "additionalProperties": true
+    },
+    "priority": { "type": "integer", "default": 0 },
+    "dedupe_key": { "type": "string" },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["once", "cron", "interval"] },
+        "cron": { "type": "string" },
+        "interval_seconds": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "max_attempts": { "type": "integer", "minimum": 1, "default": 3 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osint-network.local/schemas/entity.schema.json",
+  "title": "Entity",
+  "type": "object",
+  "required": ["entity_id", "entity_type", "canonical_name"],
+  "properties": {
+    "entity_id": { "type": "string", "format": "uuid" },
+    "entity_type": {
+      "type": "string",
+      "enum": ["Person", "Organization", "Location", "Instrument", "Other"]
+    },
+    "canonical_name": { "type": "string" },
+    "aliases": { "type": "array", "items": { "type": "string" } },
+    "external_ids": { "type": "object", "additionalProperties": { "type": "string" } },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "merged_from": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" }
+    }
+  },
+  "additionalProperties": true
+}

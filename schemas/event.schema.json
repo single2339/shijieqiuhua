@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osint-network.local/schemas/event.schema.json",
+  "title": "Event",
+  "type": "object",
+  "required": ["event_id", "event_type", "event_time", "source_silver_document_ids"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string" },
+    "event_time": { "type": "string", "format": "date-time" },
+    "location_entity_id": { "type": "string", "format": "uuid" },
+    "participant_entity_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" }
+    },
+    "source_silver_document_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": true
+}

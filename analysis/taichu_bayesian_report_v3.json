@@ -1,0 +1,446 @@
+{
+  "title": "太初（无锡）电子科技有限公司投资前景评估 V3（含招募书硬数据）",
+  "method": "odds-update",
+  "summary": {
+    "posterior_probability": 0.5729,
+    "credible_interval": [
+      0.3018,
+      0.7821
+    ],
+    "recommendation": "按75亿估值投入（参与本轮）",
+    "confidence": "低",
+    "confidence_code": "low",
+    "decision_ready": null,
+    "decision_readiness": null,
+    "decision_status": null,
+    "one_sentence": "当前后验概率约为 57.3%；在现有证据下，更优的行动是 按75亿估值投入（参与本轮）。"
+  },
+  "question": {
+    "decision_question": "在2026年5月以A++轮估值（投后约75-80亿人民币）参与太初电子的股权投资，能否在3-5年内实现≥5x MOIC？",
+    "hypothesis": "太初电子将在2028-2030年通过科创板或港股18C成功上市，届时市值≥375亿人民币（对应本轮投资5x回报），或通过战略并购实现同等退出。",
+    "time_horizon": "3-5年（2026-2031）",
+    "decision_deadline": null,
+    "success_metric": "在基金存续期（3+2年）内实现MOIC≥5x，对应届时估值375亿人民币以上",
+    "domain": "风险投资 / 私募股权投资",
+    "high_risk_domain": true
+  },
+  "prior": {
+    "probability": 0.35,
+    "distribution": "Beta(7.0, 13.0)",
+    "source_summary": [
+      "国产AI芯片公司IPO概率参考：成立5年以上、A轮后公司中约30-40%最终上市（考虑信创政策加成）",
+      "国内AI芯片赛道超过10家竞争者，头部效应显著，前三名（昇腾/海光/寒武纪）市占率>80%",
+      "太初2024年营收3.55亿（招募书），对标寒武纪上市前营收约2亿，商业化节奏略领先",
+      "政策强力背书（核高基专项、无锡超算孵化），成功率高于纯市场化芯片公司"
+    ],
+    "source_quality": "C级（同类参考，基数偏小）",
+    "confidence": "中",
+    "equivalent_sample_size": 20.0,
+    "credible_interval": [
+      0.1876,
+      0.5299
+    ]
+  },
+  "evidence": [
+    {
+      "name": "E1_异构众核技术壁垒",
+      "summary": "脱胎于神威·太湖之光，全球TOP500四次第一，3次戈登·贝尔奖，技术起点为国内最高。异构众核架构在海外（Tenstorrent/富岳）已验证，国内商业化唯一对标。",
+      "quality": "B",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 2.5,
+      "dependency_discount": 0.9,
+      "notes": "技术来源于申威生态，非从零开始；海外同架构公司估值均超$10亿"
+    },
+    {
+      "name": "E2_营收爆发实锤（招募书数据）",
+      "summary": "2023年营收1.7亿→2024年营收3.55亿（+109% YoY），连续3年100%+增长。公司预测2025年约8亿、2026年约12亿、2028年约35亿（CAGR约83%）。",
+      "quality": "B",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 2.2,
+      "dependency_discount": 0.8,
+      "notes": "硬数据来源招募书，可信度高；但24H1仅6000万、H2爆发2.95亿，季节性和客户集中度风险显著"
+    },
+    {
+      "name": "E3_政策与国资背书强度",
+      "summary": "核高基重大专项立项、无锡超算孵化，股东含招商局资本、龙芯产业基金（2.2亿战略投资）、上海半导体装备材料产业基金、杭州政府资金，政策+国资双重加持。",
+      "quality": "B",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 1.8,
+      "dependency_discount": 0.7,
+      "notes": "国资背书减少政策风险，但也可能导致市场化竞争力下降、上市时间拉长"
+    },
+    {
+      "name": "E4_钱效极高（对比同行）",
+      "summary": "累计融资约10亿RMB，而寒武纪累计融资30亿、海光30+亿、壁仞60-70亿、沐曦50亿、天数智芯35亿。太初以1/3-1/7的融资实现同等量级商业化，资本效率突出。",
+      "quality": "B",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 1.6,
+      "dependency_discount": 0.8,
+      "notes": "钱效高也可能反映资源不足；后续二代芯片研发预计需要再融资10-20亿"
+    },
+    {
+      "name": "E5_竞争格局：昇腾垄断风险",
+      "summary": "华为昇腾+国内生态伙伴占国产算力市场主流，政府关系强、软件生态完善、规模效应已形成。太初的客户群与昇腾高度重叠（智算中心、政府），正面竞争难度大。",
+      "quality": "B",
+      "direction": "削弱",
+      "direction_code": "against",
+      "likelihood_ratio": 2.0,
+      "dependency_discount": 0.8,
+      "notes": "太初主打HPC+AI差异化，与昇腾在纯AI推理上差距明显；HPC场景是太初真正优势区"
+    },
+    {
+      "name": "E6_CUDA生态壁垒与软件短板",
+      "summary": "NVIDIA CUDA生态积累20年，国产算力软件适配成本高昂。公司首席运营官明确承认'软件生态是最大挑战'。已适配600+模型，但与CUDA兼容性仍有差距。",
+      "quality": "B",
+      "direction": "削弱",
+      "direction_code": "against",
+      "likelihood_ratio": 1.8,
+      "dependency_discount": 0.85,
+      "notes": "软件短板是整个国产算力赛道共同面临的问题，非太初独有劣势"
+    },
+    {
+      "name": "E7_先进制程受限（美国出口管制）",
+      "summary": "太初芯片采用T7（7nm）制程，台积电产能受美国EAR管制。如遭进一步制裁，流片可能中断；二代T2芯片量产存在供应链不确定性。",
+      "quality": "B",
+      "direction": "削弱",
+      "direction_code": "against",
+      "likelihood_ratio": 1.7,
+      "dependency_discount": 0.9,
+      "notes": "风险真实存在但非太初独有；12nm国产制程（中芯国际）已可用，T7代工仍有路可走"
+    },
+    {
+      "name": "E8_同类公司IPO先例",
+      "summary": "寒武纪（2020科创板）、海光信息（2022科创板）、摩尔线程、壁仞均在推进上市。证明国产AI芯片公司科创板/港股18C上市路径通畅，不存在政策阻力。",
+      "quality": "B",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 1.7,
+      "dependency_discount": 0.75,
+      "notes": "先例存在，但上市节奏取决于科创板注册制审核；2024-2025年科创板审核明显收紧"
+    },
+    {
+      "name": "E9_二代T2产品规划对标H100/GH200",
+      "summary": "招募书披露T2产品线：T2超算旗舰对标GH200，T2双die对标H100，T2单die对标Ascend 910。产品路线清晰，但T2尚未流片，预计2025-2026年流片，2027-2028年量产。",
+      "quality": "C",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 1.4,
+      "dependency_discount": 0.65,
+      "notes": "路线图可信度一般，芯片研发周期长、延期风险高；一代流片到量产花了约1.5年"
+    },
+    {
+      "name": "E10_估值套利空间（招募书）",
+      "summary": "本轮投后估值75亿RMB（PS约6x on 2026E营收12亿）。对比海光信息PS约25x、寒武纪PS约80x，即便按海光1/2估值倍数计算，仍有约2x套利空间；按寒武纪10%倍数有约5x空间。",
+      "quality": "B",
+      "direction": "支持",
+      "direction_code": "support",
+      "likelihood_ratio": 1.6,
+      "dependency_discount": 0.75,
+      "notes": "PS比较有效性受限：海光/寒武纪营收规模比太初大10-25倍；规模溢价不可直接套用"
+    },
+    {
+      "name": "E11_客户集中度与季节性风险（招募书）",
+      "summary": "2024H1仅实现营收6000万元，H2爆发2.95亿（占全年83%）。5大客户贡献接近85%营收，年度大额智算中心订单高度集中，单一订单暂停即可导致年度营收大幅下滑。",
+      "quality": "B",
+      "direction": "削弱",
+      "direction_code": "against",
+      "likelihood_ratio": 1.6,
+      "dependency_discount": 0.9,
+      "notes": "客户集中度是上市审核的重要关注点；已有智算中心项目使用率未达承诺（横琴超算一期）的案例"
+    },
+    {
+      "name": "E12_二代前深度亏损期持续",
+      "summary": "2024年研发投入2.9亿，营收3.55亿，研发/营收比82%。累计亏损估计已超5亿。二代T2量产前（预计2027年），仍需大量资金支持，预计需要再融资10-20亿（即额外摊薄50-100%）。",
+      "quality": "B",
+      "direction": "削弱",
+      "direction_code": "against",
+      "likelihood_ratio": 1.5,
+      "dependency_discount": 0.85,
+      "notes": "高研发投入是芯片行业常态；问题在于现有客户规模能否撑过下一轮融资前的现金流压力"
+    }
+  ],
+  "posterior": {
+    "probability": 0.5729,
+    "credible_interval": [
+      0.3018,
+      0.7821
+    ],
+    "method": "odds-update",
+    "details": {
+      "prior_odds": 0.5385,
+      "posterior_odds": 1.3413,
+      "posterior_probability": 0.5729
+    }
+  },
+  "decision": {
+    "recommended_action": "按75亿估值投入（参与本轮）",
+    "expected_value_ranking": [
+      {
+        "name": "按75亿估值投入（参与本轮）",
+        "utility_if_h_true": 8000.0,
+        "utility_if_h_false": -4000.0,
+        "expected_value": 2874.7393,
+        "action_threshold": 0.3333
+      },
+      {
+        "name": "等待B轮更多验证再投",
+        "utility_if_h_true": 2000.0,
+        "utility_if_h_false": -2500.0,
+        "expected_value": 78.0272,
+        "action_threshold": 0.5556
+      },
+      {
+        "name": "放弃投资",
+        "utility_if_h_true": 0.0,
+        "utility_if_h_false": 0.0,
+        "expected_value": 0.0,
+        "action_threshold": null
+      }
+    ],
+    "decision_ready": null,
+    "decision_readiness": null,
+    "decision_status": null,
+    "remaining_open_questions": [],
+    "reason": "当前基于后验概率的期望值比较，支持把这个行动作为首选。"
+  },
+  "sensitivity": {
+    "scenarios": [
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.2,
+        "lr_power": 0.6,
+        "posterior_probability": 0.3018,
+        "recommended_action": "放弃投资"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.2,
+        "lr_power": 1.0,
+        "posterior_probability": 0.3838,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.2,
+        "lr_power": 1.4,
+        "posterior_probability": 0.4729,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.35,
+        "lr_power": 0.6,
+        "posterior_probability": 0.4822,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.35,
+        "lr_power": 1.0,
+        "posterior_probability": 0.5729,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.35,
+        "lr_power": 1.4,
+        "posterior_probability": 0.659,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.5,
+        "lr_power": 0.6,
+        "posterior_probability": 0.6336,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.5,
+        "lr_power": 1.0,
+        "posterior_probability": 0.7136,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      },
+      {
+        "scenario_type": "combined",
+        "prior_probability": 0.5,
+        "lr_power": 1.4,
+        "posterior_probability": 0.7821,
+        "recommended_action": "按75亿估值投入（参与本轮）"
+      }
+    ],
+    "posterior_range": [
+      0.3018,
+      0.7821
+    ],
+    "conclusion_stability": "混合",
+    "conclusion_stability_code": "mixed"
+  },
+  "natural_frequency": {
+    "base_population": 100,
+    "prior_expected_successes": 35,
+    "posterior_expected_successes": 57,
+    "explanation": "在 100 个相似案例里，先验大约意味着其中 35 个会成功。加入当前证据后，估计会成功的案例约为 57 个。"
+  },
+  "next_information": {
+    "high_value": true,
+    "recommended_next_information": "2025年前三季度实际营收数据（验证预测路径是否偏离）",
+    "reason": "当前结果已经接近关键行动阈值，新增信息有较大概率改变建议。"
+  },
+  "warnings": [
+    "至少有一条证据因依赖关系被折扣处理，不应把这次更新理解为完全独立证据的简单叠加。",
+    "本报告仅用于辅助决策，不替代持证专业人士的正式判断。",
+    "这里的后验区间来自赔率更新下的敏感性包络，并非严格统计意义上的可信区间。"
+  ],
+  "conversation_process": null,
+  "calculation_log": [
+    {
+      "name": "E1_异构众核技术壁垒",
+      "quality": "B",
+      "direction": "support",
+      "base_likelihood_ratio": 2.5,
+      "dependency_discount": 0.9,
+      "effective_likelihood_ratio": 2.2811,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 2.2811,
+      "odds_before": 0.5385,
+      "odds_after": 1.2283
+    },
+    {
+      "name": "E2_营收爆发实锤（招募书数据）",
+      "quality": "B",
+      "direction": "support",
+      "base_likelihood_ratio": 2.2,
+      "dependency_discount": 0.8,
+      "effective_likelihood_ratio": 1.879,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 1.879,
+      "odds_before": 1.2283,
+      "odds_after": 2.308
+    },
+    {
+      "name": "E3_政策与国资背书强度",
+      "quality": "B",
+      "direction": "support",
+      "base_likelihood_ratio": 1.8,
+      "dependency_discount": 0.7,
+      "effective_likelihood_ratio": 1.509,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 1.509,
+      "odds_before": 2.308,
+      "odds_after": 3.4828
+    },
+    {
+      "name": "E4_钱效极高（对比同行）",
+      "quality": "B",
+      "direction": "support",
+      "base_likelihood_ratio": 1.6,
+      "dependency_discount": 0.8,
+      "effective_likelihood_ratio": 1.4565,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 1.4565,
+      "odds_before": 3.4828,
+      "odds_after": 5.0725
+    },
+    {
+      "name": "E5_竞争格局：昇腾垄断风险",
+      "quality": "B",
+      "direction": "against",
+      "base_likelihood_ratio": 2.0,
+      "dependency_discount": 0.8,
+      "effective_likelihood_ratio": 0.5743,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 0.5743,
+      "odds_before": 5.0725,
+      "odds_after": 2.9134
+    },
+    {
+      "name": "E6_CUDA生态壁垒与软件短板",
+      "quality": "B",
+      "direction": "against",
+      "base_likelihood_ratio": 1.8,
+      "dependency_discount": 0.85,
+      "effective_likelihood_ratio": 0.6068,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 0.6068,
+      "odds_before": 2.9134,
+      "odds_after": 1.7677
+    },
+    {
+      "name": "E7_先进制程受限（美国出口管制）",
+      "quality": "B",
+      "direction": "against",
+      "base_likelihood_ratio": 1.7,
+      "dependency_discount": 0.9,
+      "effective_likelihood_ratio": 0.6203,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 0.6203,
+      "odds_before": 1.7677,
+      "odds_after": 1.0965
+    },
+    {
+      "name": "E8_同类公司IPO先例",
+      "quality": "B",
+      "direction": "support",
+      "base_likelihood_ratio": 1.7,
+      "dependency_discount": 0.75,
+      "effective_likelihood_ratio": 1.4888,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 1.4888,
+      "odds_before": 1.0965,
+      "odds_after": 1.6325
+    },
+    {
+      "name": "E9_二代T2产品规划对标H100/GH200",
+      "quality": "C",
+      "direction": "support",
+      "base_likelihood_ratio": 1.4,
+      "dependency_discount": 0.65,
+      "effective_likelihood_ratio": 1.2445,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 1.2445,
+      "odds_before": 1.6325,
+      "odds_after": 2.0316
+    },
+    {
+      "name": "E10_估值套利空间（招募书）",
+      "quality": "B",
+      "direction": "support",
+      "base_likelihood_ratio": 1.6,
+      "dependency_discount": 0.75,
+      "effective_likelihood_ratio": 1.4226,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 1.4226,
+      "odds_before": 2.0316,
+      "odds_after": 2.8902
+    },
+    {
+      "name": "E11_客户集中度与季节性风险（招募书）",
+      "quality": "B",
+      "direction": "against",
+      "base_likelihood_ratio": 1.6,
+      "dependency_discount": 0.9,
+      "effective_likelihood_ratio": 0.6551,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 0.6551,
+      "odds_before": 2.8902,
+      "odds_after": 1.8933
+    },
+    {
+      "name": "E12_二代前深度亏损期持续",
+      "quality": "B",
+      "direction": "against",
+      "base_likelihood_ratio": 1.5,
+      "dependency_discount": 0.85,
+      "effective_likelihood_ratio": 0.7085,
+      "lr_power": 1.0,
+      "applied_likelihood_ratio": 0.7085,
+      "odds_before": 1.8933,
+      "odds_after": 1.3413
+    }
+  ]
+}

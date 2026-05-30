@@ -107,7 +107,7 @@ function Dashboard() {
 
   const navigateDate = useCallback((direction: -1 | 1) => {
     if (currentDateIndex === -1) return
-    const newIndex = currentDateIndex + direction
+    const newIndex = currentDateIndex - direction
     if (newIndex >= 0 && newIndex < availableDates.length) {
       setSelectedDate(availableDates[newIndex])
     }

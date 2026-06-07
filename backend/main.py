@@ -75,6 +75,38 @@ RESEED_INTERVAL = 30  # seconds
 HORIZON_INTERVAL = 15 * 60  # 15 minutes between Horizon scraper runs
 MERGE_HOUR_UTC = 3  # daily merge at 03:00 UTC (Beijing 11:00)
 COLLECTOR_MODE = os.environ.get("OSINT_COLLECTOR", "horizon")  # "demo" or "horizon"
+STATS_DEFAULT_DAYS = int(os.environ.get("STATS_DEFAULT_DAYS", "14"))
+OSINT_ROLE_VALUES = {"api", "worker", "all"}
+
+
+def osint_role() -> str:
+    """Return this process role.
+
+    api: serve HTTP only
+    worker: run background jobs only
+    all: legacy single-process mode
+    """
+    role = os.environ.get("OSINT_ROLE", "api").strip().lower()
+    if role not in OSINT_ROLE_VALUES:
+        log.warning("Unknown OSINT_ROLE=%s; falling back to api", role)
+        return "api"
+    return role
+
+
+def should_start_background_workers() -> bool:
+    return osint_role() in {"worker", "all"}
+
+
+def should_prewarm_api_cache() -> bool:
+    return osint_role() in {"api", "all"}
+
+
+def resolve_stats_window(start_date: str, end_date: str) -> tuple[str, str]:
+    if start_date or end_date:
+        return start_date, end_date
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=max(STATS_DEFAULT_DAYS, 1) - 1)
+    return start.isoformat(), end.isoformat()
 
 # ── Agent system ──
 from backend.agents.config import is_agent_mode
@@ -142,6 +174,8 @@ def _ws_callbacks(channel: str = "collection") -> AgentCallbacks:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    role = osint_role()
+
     # Seed demo data once so the dashboard has something on first load
     if not any(STORAGE.rglob("*.json")):
         loop = asyncio.get_running_loop()
@@ -151,38 +185,56 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _init_indexer)
 
-    # Pre-warm dashboard cache for today's date
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    def _build_safe():
-        try:
-            _build_items(start_date=today, end_date=today)
-        except Exception:
-            log.exception("Failed to pre-warm dashboard cache")
-    loop.run_in_executor(None, _build_safe)
-
-    # Periodic reindex to pick up newly collected files
-    async def _reindex_loop():
-        while True:
-            await asyncio.sleep(300)  # every 5 minutes
+    if should_prewarm_api_cache():
+        # Pre-warm dashboard cache for today's date
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        def _build_safe():
             try:
-                n = await loop.run_in_executor(None, _get_indexer().incremental_update)
-                if n:
-                    log.info("Periodic reindex: %d new docs", n)
+                _build_items(start_date=today, end_date=today)
             except Exception:
-                log.exception("Periodic reindex failed")
+                log.exception("Failed to pre-warm dashboard cache")
+        loop.run_in_executor(None, _build_safe)
 
-    _reindex_task = asyncio.create_task(_reindex_loop())
+    _reindex_task: asyncio.Task | None = None
+    _agent_orch = None
 
-    # ── Agent orchestrator ──
-    from backend.agents.system.orchestrator import OrchestratorAgent
-    _agent_orch = OrchestratorAgent(storage_root=STORAGE, callbacks=_ws_callbacks())
-    await _agent_orch.start_collection_loop()
-    await _agent_orch.start_merge_loop()
-    yield
-    if _indexer is not None:
-        _indexer.close()
-    if _agent_orch is not None:
-        await _agent_orch.stop()
+    if should_start_background_workers():
+        log.info("Starting OSINT background workers in %s role", role)
+
+        # Periodic reindex to pick up newly collected files
+        async def _reindex_loop():
+            while True:
+                await asyncio.sleep(300)  # every 5 minutes
+                try:
+                    n = await loop.run_in_executor(None, _get_indexer().incremental_update)
+                    if n:
+                        log.info("Periodic reindex: %d new docs", n)
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    log.exception("Periodic reindex failed")
+
+        _reindex_task = asyncio.create_task(_reindex_loop())
+
+        # ── Agent orchestrator ──
+        from backend.agents.system.orchestrator import OrchestratorAgent
+        _agent_orch = OrchestratorAgent(storage_root=STORAGE, callbacks=_ws_callbacks())
+        await _agent_orch.start_collection_loop()
+        await _agent_orch.start_merge_loop()
+
+    try:
+        yield
+    finally:
+        if _reindex_task is not None:
+            _reindex_task.cancel()
+            try:
+                await _reindex_task
+            except asyncio.CancelledError:
+                pass
+        if _agent_orch is not None:
+            await _agent_orch.stop()
+        if _indexer is not None:
+            _indexer.close()
 
 
 app = FastAPI(title="OSINT Network API", version="1.0.0", lifespan=lifespan)
@@ -324,7 +376,12 @@ def _get_indexer() -> Indexer:
 def _init_indexer() -> None:
     """Build or verify the SQLite index. Runs synchronously in thread pool."""
     idx = _get_indexer()
-    if idx.count() == 0:
+    count = idx.count()
+    if not should_start_background_workers():
+        if count == 0:
+            logging.getLogger("uvicorn").warning("Indexer is empty; start osint-worker.service to build it")
+        return
+    if count == 0:
         t0 = __import__("time").time()
         n = idx.build_index()
         elapsed = __import__("time").time() - t0
@@ -649,11 +706,95 @@ async def ask_question(req: AskRequest):
 # ═══════════════════════════════════════════════════════════════
 
 
+def _build_dashboard_stats_fast(start_date: str, end_date: str) -> DashboardStats:
+    conn = _get_indexer()._get_conn()
+    where: list[str] = ["1=1"]
+    params: list[str] = []
+    if start_date:
+        where.append("captured_at >= ?")
+        params.append(start_date)
+    if end_date:
+        where.append("captured_at <= ?")
+        params.append(end_date + "Z")
+
+    rows = conn.execute(
+        f"""
+        SELECT captured_at, source_system, layer, country, title
+        FROM bronze_index
+        WHERE {' AND '.join(where)}
+        ORDER BY captured_at DESC
+        """,
+        params,
+    ).fetchall()
+
+    layer_counts: dict[IntelLayer, int] = {layer: 0 for layer in IntelLayer}
+    date_counts: dict[str, int] = {}
+    source_layers: dict[str, dict[str, int]] = {}
+    geo_dist: dict[str, int] = {}
+    word_counts: dict[str, int] = {}
+    stopwords = {
+        "的", "了", "在", "是", "和", "与", "及", "或", "但", "这", "那",
+        "the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "is",
+        "are", "with", "from", "by",
+    }
+
+    import re as _re
+
+    for row in rows:
+        layer_value = row["layer"] or ""
+        if layer_value in IntelLayer._value2member_map_:
+            layer = IntelLayer(layer_value)
+            layer_counts[layer] += 1
+
+        d = (row["captured_at"] or "")[:10]
+        if d:
+            date_counts[d] = date_counts.get(d, 0) + 1
+
+        source = row["source_system"] or "unknown"
+        if source not in source_layers:
+            source_layers[source] = {}
+        if layer_value:
+            source_layers[source][layer_value] = source_layers[source].get(layer_value, 0) + 1
+
+        country = row["country"] or ""
+        if country:
+            geo_dist[country] = geo_dist.get(country, 0) + 1
+
+        for word in _re.findall(r"[一-鿿\w]+", (row["title"] or "").lower()):
+            if word not in stopwords and len(word) > 1:
+                word_counts[word] = word_counts.get(word, 0) + 1
+
+    by_layer = [
+        LayerSummary(layer=layer, count=count, avg_confidence=0.55 if count else 0.0)
+        for layer, count in layer_counts.items()
+    ]
+    source_matrix = [
+        SourceMatrix(
+            name=name,
+            credibility=0.5 + (int.from_bytes(hashlib.md5(name.encode()).digest()[:4], "big") / 0xFFFFFFFF) * 0.4,
+            document_count=sum(dist.values()),
+            layer_distribution=dist,
+        )
+        for name, dist in sorted(source_layers.items(), key=lambda x: sum(x[1].values()), reverse=True)[:30]
+    ]
+
+    return DashboardStats(
+        total_items=len(rows),
+        total_sources=len(source_matrix),
+        by_layer=by_layer,
+        daily_trend=[TrendPoint(date=d, count=c) for d, c in sorted(date_counts.items())],
+        source_matrix=source_matrix,
+        geo_distribution=[{"country": c, "count": n} for c, n in sorted(geo_dist.items(), key=lambda x: -x[1])[:20]],
+        top_keywords=sorted([{"word": w, "count": c} for w, c in word_counts.items()], key=lambda x: -x["count"])[:30],
+    )
+
+
 @app.get("/api/stats", response_model=DashboardStats)
 async def dashboard_stats(start_date: str = "", end_date: str = ""):
     """Aggregated statistics for charts and visualizations."""
     import time as _time
 
+    start_date, end_date = resolve_stats_window(start_date, end_date)
     cache_key = f"stats|{start_date}|{end_date}"
     cached = _dashboard_cache.get(cache_key)
     if cached:
@@ -661,73 +802,8 @@ async def dashboard_stats(start_date: str = "", end_date: str = ""):
         if _time.time() - ts < DASHBOARD_CACHE_TTL:
             return data
 
-    def _process() -> DashboardStats:
-        items = _build_items(start_date=start_date, end_date=end_date)
-
-        layer_counts: dict[IntelLayer, list[float]] = {l: [] for l in IntelLayer}
-        for item in items:
-            layer_counts[item.layer].append(item.confidence)
-        by_layer = [
-            LayerSummary(layer=layer, count=len(confs), avg_confidence=round(sum(confs) / len(confs), 3) if confs else 0.0)
-            for layer, confs in layer_counts.items()
-        ]
-
-        date_counts: dict[str, int] = {}
-        for item in items:
-            d = item.captured_at[:10] if item.captured_at else ""
-            if d:
-                date_counts[d] = date_counts.get(d, 0) + 1
-        daily_trend = [TrendPoint(date=d, count=c) for d, c in sorted(date_counts.items())]
-
-        source_layers: dict[str, dict] = {}
-        for item in items:
-            for src in item.sources:
-                if src not in source_layers:
-                    source_layers[src] = {}
-                source_layers[src][item.layer.value] = source_layers[src].get(item.layer.value, 0) + 1
-
-        source_matrix = [
-            SourceMatrix(
-                name=name,
-                credibility=0.5 + (int.from_bytes(hashlib.md5(name.encode()).digest()[:4], "big") / 0xFFFFFFFF) * 0.4,
-                document_count=sum(dist.values()),
-                layer_distribution=dist,
-            )
-            for name, dist in sorted(source_layers.items(), key=lambda x: sum(x[1].values()), reverse=True)[:30]
-        ]
-
-        geo_dist: dict[str, int] = {}
-        for item in items:
-            c = item.country
-            geo_dist[c] = geo_dist.get(c, 0) + 1
-        geo_distribution = [{"country": c, "count": n} for c, n in sorted(geo_dist.items(), key=lambda x: -x[1])[:20]]
-
-        import re as _re
-        stopwords = {"的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也",
-                     "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "他", "她",
-                     "它", "们", "那", "些", "与", "及", "或", "但", "而", "被", "把", "对", "从", "以", "为",
-                     "the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "is", "are", "was", "were",
-                     "be", "been", "has", "have", "had", "it", "its", "this", "that", "with", "from", "by"}
-        word_counts: dict[str, int] = {}
-        for item in items:
-            words = _re.findall(r'[一-鿿\w]+', item.title.lower())
-            for w in words:
-                if w not in stopwords and len(w) > 1:
-                    word_counts[w] = word_counts.get(w, 0) + 1
-        top_keywords = sorted([{"word": w, "count": c} for w, c in word_counts.items()], key=lambda x: -x["count"])[:30]
-
-        return DashboardStats(
-            total_items=len(items),
-            total_sources=len(source_matrix),
-            by_layer=by_layer,
-            daily_trend=daily_trend,
-            source_matrix=source_matrix,
-            geo_distribution=geo_distribution,
-            top_keywords=top_keywords,
-        )
-
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, _process)
+    result = await loop.run_in_executor(None, lambda: _build_dashboard_stats_fast(start_date, end_date))
     _cache_set(cache_key, result)
     return result
 

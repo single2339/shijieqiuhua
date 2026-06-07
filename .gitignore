@@ -1,7 +1,13 @@
 # Secrets
 .env
+.mcp.json
 .env.*
 !.env.example
+
+# Local agent/tool state
+.codex/
+.opencode/
+.claude/settings.local.json
 
 # Python
 __pycache__/
@@ -26,6 +32,9 @@ bronze_storage/
 
 # Reports
 reports/
+
+# Generated indexes
+embedding_index/
 
 # Slide decks
 slide-deck/

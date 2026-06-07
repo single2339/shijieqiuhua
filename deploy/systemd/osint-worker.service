@@ -1,0 +1,18 @@
+[Unit]
+Description=OSINT Network Background Worker
+After=network.target osint-network.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/osint-network
+Environment=PYTHONPATH=/opt/osint-network
+Environment=PYTHONUNBUFFERED=1
+Environment=OSINT_ROLE=worker
+EnvironmentFile=/opt/osint-network/.env
+ExecStart=/opt/osint-network/.venv/bin/python -m backend.worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

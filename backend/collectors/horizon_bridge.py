@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import sys as _sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
@@ -55,15 +56,66 @@ from src.processor.cleaner import clean_text
 from src.processor.summarizer import _summarize_with_llm
 from src.processor.translation import translate_text
 from backend.processors.llm_classifier import classify_with_llm
+from backend.processors.classifier import classify as keyword_classify
+from backend.processors.location import extract_location_with_fallback
+from backend.processors.processing_cache import ProcessingCache
+from backend.processors.processing_policy import deterministic_summary, get_processing_policy
 from backend.bronze_reader import QUEUE_DB_FILENAME
 
 log = logging.getLogger(__name__)
+
+_BESTBLOGS_OPML_PATH = Path(__file__).resolve().parent.parent / "config" / "BestBlogs_RSS_ALL.opml"
+
+
+def _load_rss_feeds_from_opml(path: Path, category: str) -> list[RSSSourceConfig]:
+    """Load RSSSourceConfig entries from a local OPML subscription file."""
+    if not path.exists():
+        return []
+
+    feeds: list[RSSSourceConfig] = []
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        log.warning("Unable to parse RSS OPML file %s: %s", path, exc)
+        return feeds
+
+    name_counts: dict[str, int] = {}
+    for outline in root.findall(".//outline"):
+        url = outline.attrib.get("xmlUrl") or outline.attrib.get("xmlurl")
+        if not url:
+            continue
+        name = outline.attrib.get("title") or outline.attrib.get("text") or url
+        name = name.strip().replace("/", "_")
+        url = url.strip()
+        if not name or not url:
+            continue
+        name_counts[name] = name_counts.get(name, 0) + 1
+        if name_counts[name] > 1:
+            name = f"{name} ({name_counts[name]})"
+        try:
+            feeds.append(RSSSourceConfig(name=name, url=url, category=category))
+        except Exception as exc:
+            log.warning("Skipping invalid RSS feed from %s: %s (%s)", path.name, name, exc)
+    return feeds
+
+
+def _dedupe_rss_feeds(feeds: list[RSSSourceConfig]) -> list[RSSSourceConfig]:
+    """Keep feed order stable while removing duplicate URLs."""
+    seen: set[str] = set()
+    deduped: list[RSSSourceConfig] = []
+    for feed in feeds:
+        url = str(feed.url).rstrip("/")
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(feed)
+    return deduped
 
 # ---------------------------------------------------------------------------
 # Default scraper configurations
 # ---------------------------------------------------------------------------
 
-_DEFAULT_RSS_FEEDS = [
+_CORE_RSS_FEEDS = [
     # ── Domestic / fast sources (prioritized) ──
     RSSSourceConfig(name="aihot-daily",     url="https://aihot.virxact.com/rss",                  category="ai_hot", enabled=False),
     RSSSourceConfig(name="google-news-ai4s",url="https://news.google.com/rss/search?q=ai%20for%20science&hl=en-US&gl=US&ceid=US:en", category="ai4s"),
@@ -104,6 +156,9 @@ _DEFAULT_RSS_FEEDS = [
     RSSSourceConfig(name="cls-telegraph",   url="http://127.0.0.1:1200/cls/telegraph",           category="financial_china"),
     RSSSourceConfig(name="zaobao-china",    url="http://127.0.0.1:1200/zaobao/realtime/china",   category="regional_china"),
 ]
+
+_BESTBLOGS_RSS_FEEDS = _load_rss_feeds_from_opml(_BESTBLOGS_OPML_PATH, category="bestblogs")
+_DEFAULT_RSS_FEEDS = _dedupe_rss_feeds([*_CORE_RSS_FEEDS, *_BESTBLOGS_RSS_FEEDS])
 
 _DEFAULT_HN_CONFIG = HackerNewsConfig(
     enabled=True,
@@ -170,6 +225,78 @@ async def _classify_item(item: ContentItem) -> None:
         item.metadata["location_country"] = country
     if city:
         item.metadata["location_city"] = city
+
+
+def _classify_item_deterministic(item: ContentItem) -> None:
+    """Classify and locate without calling an LLM."""
+    title = item.title or ""
+    content = item.content or ""
+    combined = f"{title}\n{content}"
+    layer = keyword_classify(combined)
+    country, city, _lat, _lng = extract_location_with_fallback(combined, item.author or item.source_type.value)
+    item.metadata["layer"] = layer.value
+    if country:
+        item.metadata["location_country"] = country
+    if city:
+        item.metadata["location_city"] = city
+
+
+def _content_hash_for_processing(item: ContentItem) -> str:
+    return hashlib.sha256((item.content or "").encode()).hexdigest()
+
+
+def _apply_cached_processing(item: ContentItem, cached: dict) -> None:
+    translated_title = cached.get("translated_title", "")
+    translated_content = cached.get("translated_content", "")
+    if translated_title:
+        item.title = translated_title
+    if translated_content:
+        item.content = translated_content
+    item.ai_summary = cached.get("summary", "") or item.ai_summary
+    layer = cached.get("layer", "")
+    country = cached.get("country", "")
+    city = cached.get("city", "")
+    if layer:
+        item.metadata["layer"] = layer
+    if country:
+        item.metadata["location_country"] = country
+    if city:
+        item.metadata["location_city"] = city
+
+
+async def _process_item_for_storage(item: ContentItem, cache: ProcessingCache | None = None) -> ContentItem:
+    """Apply the configured processing policy before bronze storage."""
+    policy = get_processing_policy()
+    content_hash = _content_hash_for_processing(item)
+    if cache is not None:
+        cached = cache.get(content_hash)
+        if cached is not None:
+            _apply_cached_processing(item, cached)
+            return item
+
+    if policy.use_llm_translation:
+        await _translate_item(item)
+    if policy.use_llm_summary:
+        await _summarize_item(item)
+    else:
+        item.ai_summary = deterministic_summary(item.content or "", item.title)
+    if policy.use_llm_classification:
+        await _classify_item(item)
+    else:
+        _classify_item_deterministic(item)
+    if cache is not None:
+        cache.put(
+            content_hash,
+            translated_title=item.title or "",
+            translated_content=item.content or "",
+            summary=item.ai_summary or "",
+            layer=str(item.metadata.get("layer", "")),
+            country=str(item.metadata.get("location_country", "")),
+            city=str(item.metadata.get("location_city", "")),
+            mode=policy.mode.value,
+            llm_used=policy.use_llm_translation or policy.use_llm_summary or policy.use_llm_classification,
+        )
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +373,7 @@ class HorizonBridge:
 
         existing_hashes = self._load_existing_hashes()
         bronze = BronzeWriter(self.storage_root)
+        processing_cache = ProcessingCache(self.storage_root / "_processing_cache.db")
 
         scrapers: list[tuple[str, object]] = []
 
@@ -264,11 +392,9 @@ class HorizonBridge:
         sem = asyncio.Semaphore(3)
 
         async def _process_one(item: ContentItem) -> bool:
-            """Process a single item through the LLM pipeline. Returns True if stored."""
+            """Process a single item through the configured pipeline. Returns True if stored."""
             async with sem:
-                await _translate_item(item)
-                await _summarize_item(item)
-                await _classify_item(item)
+                await _process_item_for_storage(item, cache=processing_cache)
             doc = self._to_raw_document(item)
             if doc.content_sha256 in existing_hashes:
                 return False

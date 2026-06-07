@@ -50,7 +50,11 @@ class RSSScraper(BaseScraper):
             List[ContentItem]: Fetched content items
         """
         sources = [s for s in self.config["sources"] if s.enabled]
-        sem = asyncio.Semaphore(5)
+        try:
+            concurrency = max(1, int(os.environ.get("OSINT_RSS_CONCURRENCY", "10")))
+        except ValueError:
+            concurrency = 10
+        sem = asyncio.Semaphore(concurrency)
 
         async def _fetch_one(source: RSSSourceConfig) -> List[ContentItem]:
             async with sem:

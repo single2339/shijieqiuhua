@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 
 from backend.bronze_reader import scan_bronze, scan_bronze_async
+from backend.football import FootballAnalysisRequest, FootballAnalysisResponse, analyze_football_match
 from backend.indexer import Indexer
 from backend.models import (
     AnalysisInterpretRequest,
@@ -295,7 +296,7 @@ _RATE_LIMIT_MAX = 120    # max requests per window per IP
 _RATE_LIMIT_WRITE_MAX = 20  # stricter for POST endpoints
 
 # ── Public API paths (no auth required) ──
-_PUBLIC_PREFIXES = ("/api/health", "/api/auth/", "/api/admin/", "/api/dashboard", "/api/stats")
+_PUBLIC_PREFIXES = ("/api/health", "/api/auth/", "/api/admin/", "/api/dashboard", "/api/stats", "/api/football/")
 
 
 @app.middleware("http")
@@ -806,6 +807,11 @@ async def dashboard_stats(start_date: str = "", end_date: str = ""):
     result = await loop.run_in_executor(None, lambda: _build_dashboard_stats_fast(start_date, end_date))
     _cache_set(cache_key, result)
     return result
+
+
+@app.post("/api/football/analyze", response_model=FootballAnalysisResponse)
+async def football_analyze(request: FootballAnalysisRequest):
+    return analyze_football_match(request)
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -3,23 +3,20 @@ import type {
   AdminUserDetail,
   AnalysisInterpretRequest,
   AnalysisInterpretResponse,
-  AnomalyResult,
   AskRequest,
   AskResponse,
   CorroborationResult,
   DashboardData,
   DashboardStats,
-  EntityGraphResult,
+  EventClusterResult,
   GapAnalysisResult,
   InviteCodeInfo,
-  LoginResponse,
   ReportRequest,
-  RiskHeatmapResult,
   SituationReport,
+  SituationBriefResult,
   SuperAnalysisRequest,
   SuperAnalysisResponse,
-  TimelineResult,
-  UserInfo,
+  WarningIndicatorResult,
 } from './types'
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
@@ -94,36 +91,84 @@ async function apiGet<T>(path: string, params?: Record<string, string>): Promise
   return safeGet<T>(url)
 }
 
-export function fetchTimeline(startDate?: string, endDate?: string, layer?: string, country?: string): Promise<TimelineResult> {
-  const params: Record<string, string> = {}
-  if (startDate) params.start_date = startDate
-  if (endDate) params.end_date = endDate
-  if (layer) params.layer = layer
-  if (country) params.country = country
-  return apiGet<TimelineResult>('/api/analysis/timeline', params)
+export function fetchCorroboration(params?: {
+  date?: string
+  startDate?: string
+  endDate?: string
+  layers?: string[]
+  country?: string
+}): Promise<CorroborationResult> {
+  const query: Record<string, string> = {}
+  if (params?.date) query.date = params.date
+  if (params?.startDate) query.start_date = params.startDate
+  if (params?.endDate) query.end_date = params.endDate
+  if (params?.layers?.length) query.layers = params.layers.join(',')
+  if (params?.country) query.country = params.country
+  return apiGet<CorroborationResult>('/api/analysis/corroboration', query)
 }
 
-export function fetchEntityGraph(): Promise<EntityGraphResult> {
-  return apiGet<EntityGraphResult>('/api/analysis/entities')
+export function fetchGapAnalysis(params?: {
+  date?: string
+  startDate?: string
+  endDate?: string
+  layers?: string[]
+  country?: string
+}): Promise<GapAnalysisResult> {
+  const query: Record<string, string> = {}
+  if (params?.date) query.date = params.date
+  if (params?.startDate) query.start_date = params.startDate
+  if (params?.endDate) query.end_date = params.endDate
+  if (params?.layers?.length) query.layers = params.layers.join(',')
+  if (params?.country) query.country = params.country
+  return apiGet<GapAnalysisResult>('/api/analysis/gaps', query)
 }
 
-export function fetchCorroboration(): Promise<CorroborationResult> {
-  return apiGet<CorroborationResult>('/api/analysis/corroboration')
+export function fetchSituationBrief(params: {
+  date?: string
+  startDate?: string
+  endDate?: string
+  layers?: string[]
+  country?: string
+}): Promise<SituationBriefResult> {
+  const query: Record<string, string> = {}
+  if (params.date) query.date = params.date
+  if (params.startDate) query.start_date = params.startDate
+  if (params.endDate) query.end_date = params.endDate
+  if (params.layers?.length) query.layers = params.layers.join(',')
+  if (params.country) query.country = params.country
+  return apiGet<SituationBriefResult>('/api/analysis/brief', query)
 }
 
-export function fetchAnomalies(startDate?: string, endDate?: string): Promise<AnomalyResult> {
-  const params: Record<string, string> = {}
-  if (startDate) params.start_date = startDate
-  if (endDate) params.end_date = endDate
-  return apiGet<AnomalyResult>('/api/analysis/anomalies', params)
+export function fetchEventClusters(params: {
+  date?: string
+  startDate?: string
+  endDate?: string
+  layers?: string[]
+  country?: string
+}): Promise<EventClusterResult> {
+  const query: Record<string, string> = {}
+  if (params.date) query.date = params.date
+  if (params.startDate) query.start_date = params.startDate
+  if (params.endDate) query.end_date = params.endDate
+  if (params.layers?.length) query.layers = params.layers.join(',')
+  if (params.country) query.country = params.country
+  return apiGet<EventClusterResult>('/api/analysis/events', query)
 }
 
-export function fetchRiskHeatmap(): Promise<RiskHeatmapResult> {
-  return apiGet<RiskHeatmapResult>('/api/analysis/risk-heatmap')
-}
-
-export function fetchGapAnalysis(): Promise<GapAnalysisResult> {
-  return apiGet<GapAnalysisResult>('/api/analysis/gaps')
+export function fetchWarningIndicators(params: {
+  date?: string
+  startDate?: string
+  endDate?: string
+  layers?: string[]
+  country?: string
+}): Promise<WarningIndicatorResult> {
+  const query: Record<string, string> = {}
+  if (params.date) query.date = params.date
+  if (params.startDate) query.start_date = params.startDate
+  if (params.endDate) query.end_date = params.endDate
+  if (params.layers?.length) query.layers = params.layers.join(',')
+  if (params.country) query.country = params.country
+  return apiGet<WarningIndicatorResult>('/api/analysis/warnings', query)
 }
 
 export function interpretAnalysis(req: AnalysisInterpretRequest): Promise<AnalysisInterpretResponse> {
@@ -142,34 +187,11 @@ export interface SuperAnalysisProgress {
   detail: Record<string, unknown>
 }
 
-export async function fetchSuperAnalysisProgress(): Promise<SuperAnalysisProgress> {
-  const res = await fetch('/api/super-analysis/progress')
+export async function fetchSuperAnalysisProgress(requestId?: string): Promise<SuperAnalysisProgress> {
+  const url = requestId ? `/api/super-analysis/progress?request_id=${encodeURIComponent(requestId)}` : '/api/super-analysis/progress'
+  const res = await fetch(url)
   if (!res.ok) throw new Error(`Progress API error: ${res.status}`)
   return res.json()
-}
-
-// ── Auth API ──
-
-export function loginUser(username: string, password: string): Promise<LoginResponse> {
-  return safePostWithDetail<LoginResponse>('/api/auth/login', { username, password }, '登录失败')
-}
-
-export function registerUser(username: string, email: string, password: string, inviteCode: string): Promise<LoginResponse> {
-  return safePostWithDetail<LoginResponse>(
-    '/api/auth/register',
-    { username, email, password, invite_code: inviteCode },
-    '注册失败',
-  )
-}
-
-export async function fetchCurrentUser(): Promise<UserInfo> {
-  const res = await fetch('/api/auth/me')
-  if (!res.ok) throw new Error('会话已过期')
-  return res.json()
-}
-
-export async function logoutUser(): Promise<void> {
-  await fetch('/api/auth/logout', { method: 'POST', headers: JSON_HEADER }).catch(() => {})
 }
 
 // ── Admin API ──

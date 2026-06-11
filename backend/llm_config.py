@@ -40,7 +40,3 @@ def get_llm_client(timeout: int = DEFAULT_TIMEOUT) -> httpx.AsyncClient:
     Callers should use ``async with`` to ensure proper cleanup.
     """
     return httpx.AsyncClient(**_build_client_kwargs(timeout))
-
-
-# Deprecated alias — kept for backward compatibility.
-create_llm_client = get_llm_client

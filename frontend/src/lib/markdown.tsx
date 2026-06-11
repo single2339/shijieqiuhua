@@ -11,20 +11,6 @@ export const PRIOR_LABELS: Record<string, string> = {
   unknown: '未知',
 }
 
-export const PRIOR_COLORS: Record<string, string> = {
-  'high-credibility': '#10b981',
-  'medium-credibility': '#3b82f6',
-  'low-credibility': '#f59e0b',
-  kol: '#8b5cf6',
-  unknown: '#6b7280',
-}
-
-export const VERDICT_COLORS: Record<string, string> = {
-  verified: '#10b981',
-  false: '#f87171',
-  uncertain: '#fbbf24',
-}
-
 export const VERDICT_LABELS: Record<string, string> = {
   verified: '已核实',
   false: '不实',

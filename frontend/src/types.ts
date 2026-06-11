@@ -100,6 +100,37 @@ export interface DashboardStats {
 }
 
 // ── Situation Report ──
+export type BriefMaterialType = 'item' | 'event' | 'judgment' | 'warning'
+export type ReportDraftStatus = 'draft' | 'review' | 'published'
+
+export interface BriefWorkspaceMaterial {
+  id: string
+  type: BriefMaterialType
+  title: string
+  summary?: string
+  source?: string
+  sources?: string[]
+  date?: string
+  layer?: string
+  country?: string
+  confidence_level?: string
+  url?: string
+  origin?: string
+}
+
+export interface BriefWorkspace {
+  materials: BriefWorkspaceMaterial[]
+  updated_at: string
+}
+
+export interface BriefReportHistoryEntry {
+  id: string
+  status: ReportDraftStatus
+  saved_at: string
+  report: SituationReport
+  materials: BriefWorkspaceMaterial[]
+}
+
 export interface ReportRequest {
   topic?: string
   country?: string
@@ -107,6 +138,10 @@ export interface ReportRequest {
   layer?: string
   detail_level?: string
   skills?: string[]
+  item_ids?: string[]
+  event_ids?: string[]
+  warning_ids?: string[]
+  source_materials?: BriefWorkspaceMaterial[]
 }
 
 export interface ReportSection {
@@ -169,12 +204,21 @@ export interface SourcePairOverlap {
   total_a: number
   total_b: number
   agreement_score: number
+  shared_events: number
+  confirmed_events: number
+  high_confidence_events: number
+  shared_event_ids: string[]
+  shared_event_titles: string[]
+  verification_summary: string
 }
 
 export interface CorroborationResult {
   sources: string[]
   matrix: number[][]
   top_pairs: SourcePairOverlap[]
+  event_count: number
+  claim_count: number
+  methodology: string
 }
 
 export interface AnomalyEvent {
@@ -218,6 +262,177 @@ export interface GapAnalysisResult {
   coverage_stats: Record<string, number>
 }
 
+export interface BriefEvidence {
+  id: string
+  item_id: string
+  title: string
+  summary: string
+  source: string
+  sources: string[]
+  date: string
+  layer: string
+  country: string
+  confidence: number
+  confidence_level: string
+  confidence_label: string
+  url: string
+  verification: string
+  independent_source_count: number
+}
+
+export interface ConfidenceAssessment {
+  level: string
+  label: string
+  rationale: string
+  independent_source_count: number
+  evidence_count: number
+  evidence_ids: string[]
+}
+
+export interface KeyJudgment {
+  id: string
+  judgment: string
+  confidence_level: string
+  confidence_score: number
+  impact: string
+  time_sensitivity: string
+  support_count: number
+  evidence_ids: string[]
+  uncertainties: string[]
+  confidence_assessment?: ConfidenceAssessment
+}
+
+export interface IntelligenceStatement {
+  id: string
+  statement: string
+  confidence: ConfidenceAssessment
+  evidence_ids: string[]
+  note: string
+}
+
+export interface CoreFinding {
+  id: string
+  finding: string
+  fact_basis: string
+  assessment: string
+  confidence: ConfidenceAssessment
+  evidence_ids: string[]
+  implications: string[]
+}
+
+export interface AlternativeExplanation {
+  id: string
+  explanation: string
+  indicators: string[]
+  related_evidence_ids: string[]
+  confidence_level: string
+}
+
+export interface PendingVerification {
+  id: string
+  question: string
+  priority: string
+  rationale: string
+  related_evidence_ids: string[]
+}
+
+export interface EventClaim {
+  id: string
+  claim: string
+  confidence: ConfidenceAssessment
+  support_count: number
+  source_count: number
+  evidence_ids: string[]
+  verification_status: string
+}
+
+export interface EventCluster {
+  id: string
+  title: string
+  summary: string
+  start_date: string
+  end_date: string
+  countries: string[]
+  layers: string[]
+  item_count: number
+  source_count: number
+  confidence: ConfidenceAssessment
+  verification_status: string
+  key_terms: string[]
+  claims: EventClaim[]
+  evidence: BriefEvidence[]
+}
+
+export interface EventClusterResult {
+  scope: Record<string, unknown>
+  generated_at: string
+  total_items: number
+  total_clusters: number
+  unclustered_count: number
+  clusters: EventCluster[]
+}
+
+export interface BriefIssue {
+  description: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  related_evidence_ids: string[]
+}
+
+export interface CollectionTask {
+  priority: string
+  task: string
+  rationale: string
+  query: string
+}
+
+export interface WarningIndicator {
+  id: string
+  title: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  status: string
+  confidence: ConfidenceAssessment
+  trigger: string
+  rationale: string
+  countries: string[]
+  layers: string[]
+  related_event_ids: string[]
+  evidence_ids: string[]
+  next_steps: string[]
+  review_window: string
+}
+
+export interface WarningIndicatorResult {
+  scope: Record<string, unknown>
+  generated_at: string
+  total_items: number
+  overall_level: 'normal' | 'watch' | 'high' | 'critical'
+  active_indicator_count: number
+  methodology: string
+  indicators: WarningIndicator[]
+  collection_requirements: CollectionTask[]
+}
+
+export interface SituationBriefResult {
+  scope: Record<string, unknown>
+  generated_at: string
+  summary: string
+  total_items: number
+  methodology: string
+  intelligence_level: ConfidenceAssessment | null
+  source_count: number
+  core_findings: CoreFinding[]
+  confirmed_facts: IntelligenceStatement[]
+  assessments: IntelligenceStatement[]
+  alternative_explanations: AlternativeExplanation[]
+  pending_verification: PendingVerification[]
+  key_judgments: KeyJudgment[]
+  evidence: BriefEvidence[]
+  contradictions: BriefIssue[]
+  collection_gaps: BriefIssue[]
+  recommended_tasks: CollectionTask[]
+  recommended_next_steps: CollectionTask[]
+}
+
 export interface AnalysisInterpretRequest {
   analysis_type: string
   context: Record<string, unknown>
@@ -236,6 +451,7 @@ export interface SuperAnalysisRequest {
   start_date?: string
   end_date?: string
   skills?: string[]
+  request_id?: string
 }
 
 export interface BayesianIntelItem {
@@ -252,12 +468,19 @@ export interface BayesianIntelItem {
   content_snippet: string
 }
 
+export interface WebResult {
+  title: string
+  snippet: string
+  url: string
+}
+
 export interface SuperAnalysisResponse {
   question: string
   analysis: string
   relevant_items: BayesianIntelItem[]
-  web_results: Array<{ title: string; snippet: string; url: string }>
+  web_results: WebResult[]
   model?: string
+  request_id?: string
 }
 
 // ── Auth & User ──
@@ -313,16 +536,16 @@ export interface AdminStats {
 }
 
 export const LAYER_META: Record<IntelLayer, { label: string; color: string }> = {
-  nature:      { label: '自然生态', color: '#2ecc71' },
-  economy:     { label: '经济产业', color: '#3498db' },
-  finance:     { label: '金融',     color: '#f39c12' },
-  politics:    { label: '政治外交', color: '#9b59b6' },
-  military:    { label: '军事',     color: '#e74c3c' },
-  aviation:    { label: '民航交通', color: '#607d8b' },
-  technology:  { label: '科技',     color: '#ff4081' },
-  society:     { label: '社会民生', color: '#e91e63' },
-  energy:      { label: '能源资源', color: '#ff5722' },
-  agriculture: { label: '农业食品', color: '#4caf50' },
-  health:      { label: '公共卫生', color: '#00bcd4' },
-  cyber:       { label: '网络空间', color: '#1a237e' },
+  nature:      { label: '自然生态', color: '#6f9f7a' },
+  economy:     { label: '经济产业', color: '#7894a3' },
+  finance:     { label: '金融',     color: '#c8a45d' },
+  politics:    { label: '政治外交', color: '#b88a5a' },
+  military:    { label: '军事',     color: '#bf6f63' },
+  aviation:    { label: '民航交通', color: '#7c8c95' },
+  technology:  { label: '科技',     color: '#8fa3a7' },
+  society:     { label: '社会民生', color: '#b47670' },
+  energy:      { label: '能源资源', color: '#bd835f' },
+  agriculture: { label: '农业食品', color: '#7e986b' },
+  health:      { label: '公共卫生', color: '#6ea6a0' },
+  cyber:       { label: '网络空间', color: '#7284a3' },
 }

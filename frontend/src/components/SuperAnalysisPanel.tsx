@@ -1,9 +1,10 @@
 import { useRef, useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { Brain, PaperPlaneRight, X, Atom, Download, Globe, LinkSimple } from '@phosphor-icons/react'
 import type { SuperAnalysisProgress } from '../api'
 import type { SuperAnalysisResponse } from '../types'
 import { useSuperAnalysis } from '../hooks/useSuperAnalysis'
+import { useFloatingPanel } from '../hooks/useFloatingPanel'
 import { parseAnalysis, highlightText, generateHTML } from '../lib/markdown'
 import type { Block } from '../lib/markdown'
 
@@ -30,13 +31,6 @@ const contentVariants = {
   visible: {
     opacity: 1, y: 0,
     transition: { type: 'spring' as const, stiffness: 100, damping: 20, delay: 0.12 },
-  },
-}
-
-const shimmerGradient = {
-  animate: {
-    x: ['-100%', '200%'],
-    transition: { duration: 1.6, repeat: Infinity, ease: 'linear' as const },
   },
 }
 
@@ -85,9 +79,9 @@ function ProgressDisplay({ progress, displayPercent }: { progress: SuperAnalysis
             width: 44, height: 44, borderRadius: 'var(--radius-md)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-mono)',
-            background: 'rgba(13,148,136,0.08)',
+            background: 'var(--accent-dim)',
             color: 'var(--accent)',
-            border: '2px solid rgba(13,148,136,0.15)',
+            border: '2px solid rgba(200,164,93,0.20)',
           }}
         >
           {meta.icon}
@@ -201,6 +195,12 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
   } = useSuperAnalysis()
   const panelRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const floating = useFloatingPanel({
+    enabled: !isMobile,
+    width: 860,
+    height: 620,
+    anchor: 'right',
+  })
 
   useEffect(() => {
     if (result && contentRef.current) contentRef.current.scrollTop = 0
@@ -229,9 +229,10 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 'var(--z-overlay)',
-        background: 'rgba(30,27,24,0.06)',
-        backdropFilter: 'blur(2px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 'max(20px, 4vw)',
+        background: isMobile ? 'rgba(30,27,24,0.06)' : 'transparent',
+        backdropFilter: isMobile ? 'blur(2px)' : 'none',
+        display: 'flex', alignItems: 'center', justifyContent: isMobile ? 'center' : 'flex-start',
+        pointerEvents: isMobile ? 'auto' : 'none',
       }}
     >
       <motion.div
@@ -242,11 +243,12 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
         exit="exit"
         onClick={e => e.stopPropagation()}
         style={{
-          width: isMobile ? '100%' : '92vw',
-          maxWidth: isMobile ? '100%' : 1100,
-          height: isMobile ? '100%' : '88vh',
-          maxHeight: isMobile ? '100%' : 800,
-          borderRadius: isMobile ? 0 : 'var(--radius-xl)',
+          position: isMobile ? 'relative' : 'fixed',
+          width: isMobile ? '100%' : 860,
+          maxWidth: isMobile ? '100%' : '94vw',
+          height: isMobile ? '100%' : 'min(620px, 78vh)',
+          maxHeight: isMobile ? '100%' : '78vh',
+          borderRadius: isMobile ? 0 : 'var(--radius-lg)',
           display: 'flex', flexDirection: 'column',
           background: 'var(--glass-bg)',
           border: isMobile ? 'none' : '1px solid var(--glass-border)',
@@ -255,15 +257,18 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
           WebkitBackdropFilter: 'blur(40px) saturate(180%)',
           overflow: 'hidden',
           fontFamily: 'var(--font-ui)',
+          pointerEvents: 'auto',
+          ...floating.panelStyle,
         }}
       >
         {/* ── Header ── */}
-        <div style={{
+        <div {...floating.dragHandleProps} style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '14px 20px',
+          padding: '12px 16px',
           borderBottom: '1px solid var(--glass-border)',
           flexShrink: 0,
-          background: 'rgba(255,255,255,0.25)',
+          background: 'rgba(18,20,22,0.72)',
+          ...floating.dragHandleStyle,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Brain size={18} weight="duotone" color="var(--accent)" />
@@ -278,16 +283,16 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
             <motion.span
               animate={{
                 boxShadow: [
-                  '0 0 0 0 rgba(13,148,136,0)',
-                  '0 0 0 4px rgba(13,148,136,0.06)',
-                  '0 0 0 0 rgba(13,148,136,0)',
+                  '0 0 0 0 rgba(200,164,93,0)',
+                  '0 0 0 4px rgba(200,164,93,0.08)',
+                  '0 0 0 0 rgba(200,164,93,0)',
                 ],
               }}
               transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
               style={{
                 fontSize: 9, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)',
                 padding: '2px 8px', borderRadius: 99,
-                background: 'rgba(13,148,136,0.05)', border: '1px solid rgba(13,148,136,0.1)',
+                background: 'var(--accent-dim)', border: '1px solid rgba(200,164,93,0.18)',
               }}
             >
               {'深度推理'}
@@ -304,9 +309,9 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                 onClick={handleDownload}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
-                  background: 'rgba(16,185,129,0.05)',
-                  border: '1px solid rgba(16,185,129,0.15)',
-                  color: '#059669', cursor: 'pointer',
+                  background: 'rgba(79,188,141,0.08)',
+                  border: '1px solid rgba(79,188,141,0.18)',
+                  color: 'var(--success)', cursor: 'pointer',
                   padding: '6px 14px', borderRadius: 'var(--radius-sm)',
                   fontSize: 12, fontWeight: 600,
                   fontFamily: 'var(--font-mono)',
@@ -339,8 +344,9 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
           {/* ── LEFT: Main analysis area ── */}
           <div ref={contentRef} style={{
             flex: 1, overflowY: 'auto',
-            padding: '20px 24px',
+            padding: '14px 16px',
             display: 'flex', flexDirection: 'column', gap: 14,
+            minWidth: 0,
           }}>
             {/* Welcome — asymmetric left-aligned */}
             {!result && !loading && !error && (
@@ -353,8 +359,8 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                   <div style={{
                     flexShrink: 0, width: 56, height: 56,
                     borderRadius: 'var(--radius-lg)',
-                    background: 'rgba(13,148,136,0.04)',
-                    border: '1px solid rgba(13,148,136,0.08)',
+                    background: 'rgba(32,36,40,0.72)',
+                    border: '1px solid var(--glass-border)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
                     <Atom size={28} weight="duotone" color="var(--accent)" style={{ opacity: 0.5 }} />
@@ -403,9 +409,9 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                 style={{
                   padding: '14px 18px',
                   color: 'var(--danger)', fontSize: 13,
-                  background: 'rgba(220,38,38,0.03)',
+                  background: 'rgba(217,107,98,0.08)',
                   borderRadius: 'var(--radius-md)',
-                  border: '1px solid rgba(220,38,38,0.08)',
+                  border: '1px solid rgba(217,107,98,0.16)',
                   display: 'flex', alignItems: 'center', gap: 10,
                 }}
               >
@@ -544,7 +550,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
           {/* ── RIGHT: Sidebar — web results + relevant items (asymmetric split) ── */}
           {result && (result.web_results.length > 0 || result.relevant_items.length > 0) && (
             <div style={{
-              width: 280, flexShrink: 0,
+              width: 240, flexShrink: 0,
               borderLeft: '1px solid var(--glass-border)',
               overflowY: 'auto',
               background: 'rgba(0,0,0,0.01)',
@@ -676,10 +682,10 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
 
         {/* ── Input bar ── */}
         <div style={{
-          display: 'flex', gap: 10, padding: '12px 20px',
+          display: 'flex', gap: 8, padding: '10px 14px',
           borderTop: '1px solid var(--glass-border)',
           flexShrink: 0,
-          background: 'rgba(255,255,255,0.25)',
+          background: 'rgba(18,20,22,0.72)',
         }}>
           <input
             ref={inputRef}
@@ -698,7 +704,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
             }}
             onFocus={e => {
               e.target.style.borderColor = 'var(--accent)'
-              e.target.style.boxShadow = '0 0 0 3px rgba(13,148,136,0.06)'
+              e.target.style.boxShadow = '0 0 0 3px rgba(200,164,93,0.10)'
             }}
             onBlur={e => {
               e.target.style.borderColor = 'var(--border-subtle)'
@@ -714,8 +720,8 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
               display: 'flex', alignItems: 'center', gap: 6,
               background: loading || !question.trim() ? 'var(--bg-elevated)' : 'var(--accent)',
               border: 'none',
-              color: loading || !question.trim() ? 'var(--text-tertiary)' : '#ffffff',
-              padding: '10px 22px', borderRadius: 'var(--radius-sm)',
+              color: loading || !question.trim() ? 'var(--text-tertiary)' : 'var(--bg-deep)',
+              padding: '10px 16px', borderRadius: 'var(--radius-sm)',
               cursor: loading || !question.trim() ? 'default' : 'pointer',
               fontSize: 13, fontWeight: 600,
               fontFamily: 'var(--font-mono)',

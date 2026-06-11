@@ -128,6 +128,21 @@ class DashboardStats(BaseModel):
 
 
 # ── Situation Report ──
+class BriefWorkspaceMaterial(BaseModel):
+    id: str
+    type: str = "item"
+    title: str
+    summary: str = ""
+    source: str = ""
+    sources: list[str] = Field(default_factory=list)
+    date: str = ""
+    layer: str = ""
+    country: str = ""
+    confidence_level: str = ""
+    url: str = ""
+    origin: str = ""
+
+
 class ReportRequest(BaseModel):
     topic: str = ""
     country: str = ""
@@ -135,6 +150,10 @@ class ReportRequest(BaseModel):
     layer: str = ""
     detail_level: str = "standard"  # "brief", "standard", "deep"
     skills: list[str] = Field(default_factory=list)
+    item_ids: list[str] = Field(default_factory=list)
+    event_ids: list[str] = Field(default_factory=list)
+    warning_ids: list[str] = Field(default_factory=list)
+    source_materials: list[BriefWorkspaceMaterial] = Field(default_factory=list)
 
 
 class ReportSection(BaseModel):
@@ -190,12 +209,21 @@ class SourcePairOverlap(BaseModel):
     total_a: int
     total_b: int
     agreement_score: float
+    shared_events: int = 0
+    confirmed_events: int = 0
+    high_confidence_events: int = 0
+    shared_event_ids: list[str] = Field(default_factory=list)
+    shared_event_titles: list[str] = Field(default_factory=list)
+    verification_summary: str = ""
 
 
 class CorroborationResult(BaseModel):
     sources: list[str] = Field(default_factory=list)
     matrix: list[list[float]] = Field(default_factory=list)
     top_pairs: list[SourcePairOverlap] = Field(default_factory=list)
+    event_count: int = 0
+    claim_count: int = 0
+    methodology: str = "按事件簇/Claim 计算共同支撑关系，而非按单条情报 ID 直接重合。"
 
 
 class AnomalyEvent(BaseModel):
@@ -239,6 +267,177 @@ class GapAnalysisResult(BaseModel):
     coverage_stats: dict = Field(default_factory=dict)
 
 
+class BriefEvidence(BaseModel):
+    id: str
+    item_id: str
+    title: str
+    summary: str = ""
+    source: str = ""
+    sources: list[str] = Field(default_factory=list)
+    date: str = ""
+    layer: str = ""
+    country: str = ""
+    confidence: float = 0.0
+    confidence_level: str = "L4"
+    confidence_label: str = "推测"
+    url: str = ""
+    verification: str = ""
+    independent_source_count: int = 0
+
+
+class ConfidenceAssessment(BaseModel):
+    level: str
+    label: str
+    rationale: str
+    independent_source_count: int = 0
+    evidence_count: int = 0
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class KeyJudgment(BaseModel):
+    id: str
+    judgment: str
+    confidence_level: str
+    confidence_score: float
+    impact: str
+    time_sensitivity: str
+    support_count: int
+    evidence_ids: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    confidence_assessment: Optional[ConfidenceAssessment] = None
+
+
+class IntelligenceStatement(BaseModel):
+    id: str
+    statement: str
+    confidence: ConfidenceAssessment
+    evidence_ids: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class CoreFinding(BaseModel):
+    id: str
+    finding: str
+    fact_basis: str = ""
+    assessment: str = ""
+    confidence: ConfidenceAssessment
+    evidence_ids: list[str] = Field(default_factory=list)
+    implications: list[str] = Field(default_factory=list)
+
+
+class AlternativeExplanation(BaseModel):
+    id: str
+    explanation: str
+    indicators: list[str] = Field(default_factory=list)
+    related_evidence_ids: list[str] = Field(default_factory=list)
+    confidence_level: str = "L4"
+
+
+class PendingVerification(BaseModel):
+    id: str
+    question: str
+    priority: str = "中"
+    rationale: str = ""
+    related_evidence_ids: list[str] = Field(default_factory=list)
+
+
+class EventClaim(BaseModel):
+    id: str
+    claim: str
+    confidence: ConfidenceAssessment
+    support_count: int = 0
+    source_count: int = 0
+    evidence_ids: list[str] = Field(default_factory=list)
+    verification_status: str = "待核查"
+
+
+class EventCluster(BaseModel):
+    id: str
+    title: str
+    summary: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    countries: list[str] = Field(default_factory=list)
+    layers: list[str] = Field(default_factory=list)
+    item_count: int = 0
+    source_count: int = 0
+    confidence: ConfidenceAssessment
+    verification_status: str = "待核查"
+    key_terms: list[str] = Field(default_factory=list)
+    claims: list[EventClaim] = Field(default_factory=list)
+    evidence: list[BriefEvidence] = Field(default_factory=list)
+
+
+class EventClusterResult(BaseModel):
+    scope: dict = Field(default_factory=dict)
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    total_items: int = 0
+    total_clusters: int = 0
+    unclustered_count: int = 0
+    clusters: list[EventCluster] = Field(default_factory=list)
+
+
+class BriefIssue(BaseModel):
+    description: str
+    severity: str = "medium"
+    related_evidence_ids: list[str] = Field(default_factory=list)
+
+
+class CollectionTask(BaseModel):
+    priority: str
+    task: str
+    rationale: str
+    query: str = ""
+
+
+class WarningIndicator(BaseModel):
+    id: str
+    title: str
+    severity: str = "medium"
+    status: str = "watch"
+    confidence: ConfidenceAssessment
+    trigger: str
+    rationale: str = ""
+    countries: list[str] = Field(default_factory=list)
+    layers: list[str] = Field(default_factory=list)
+    related_event_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    review_window: str = "24h"
+
+
+class WarningIndicatorResult(BaseModel):
+    scope: dict = Field(default_factory=dict)
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    total_items: int = 0
+    overall_level: str = "normal"
+    active_indicator_count: int = 0
+    methodology: str = "I&W: 基于事件簇、L1-L4 可信度、高敏感图层和采集缺口生成可复核预警指标。"
+    indicators: list[WarningIndicator] = Field(default_factory=list)
+    collection_requirements: list[CollectionTask] = Field(default_factory=list)
+
+
+class SituationBriefResult(BaseModel):
+    scope: dict = Field(default_factory=dict)
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    summary: str
+    total_items: int = 0
+    methodology: str = "OSINT-core: 三方验证、事实/推断分离、结论可追溯至证据。"
+    intelligence_level: ConfidenceAssessment | None = None
+    source_count: int = 0
+    core_findings: list[CoreFinding] = Field(default_factory=list)
+    confirmed_facts: list[IntelligenceStatement] = Field(default_factory=list)
+    assessments: list[IntelligenceStatement] = Field(default_factory=list)
+    alternative_explanations: list[AlternativeExplanation] = Field(default_factory=list)
+    pending_verification: list[PendingVerification] = Field(default_factory=list)
+    key_judgments: list[KeyJudgment] = Field(default_factory=list)
+    evidence: list[BriefEvidence] = Field(default_factory=list)
+    contradictions: list[BriefIssue] = Field(default_factory=list)
+    collection_gaps: list[BriefIssue] = Field(default_factory=list)
+    recommended_tasks: list[CollectionTask] = Field(default_factory=list)
+    recommended_next_steps: list[CollectionTask] = Field(default_factory=list)
+
+
 class AnalysisInterpretRequest(BaseModel):
     analysis_type: str
     context: dict = Field(default_factory=dict)
@@ -257,6 +456,7 @@ class SuperAnalysisRequest(BaseModel):
     start_date: str = ""
     end_date: str = ""
     skills: list[str] = Field(default_factory=list)
+    request_id: str = ""
 
 
 class BayesianIntelItem(BaseModel):
@@ -273,9 +473,16 @@ class BayesianIntelItem(BaseModel):
     content_snippet: str = ""
 
 
+class WebResult(BaseModel):
+    title: str = ""
+    snippet: str = ""
+    url: str = ""
+
+
 class SuperAnalysisResponse(BaseModel):
     question: str
     analysis: str
     relevant_items: list[BayesianIntelItem] = Field(default_factory=list)
-    web_results: list[dict] = Field(default_factory=list)
+    web_results: list[WebResult] = Field(default_factory=list)
     model: str = "deepseek-v4-flash"
+    request_id: str = ""

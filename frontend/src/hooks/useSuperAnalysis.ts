@@ -1,7 +1,14 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { superAnalyze, fetchSuperAnalysisProgress } from '../api'
 import type { SuperAnalysisProgress } from '../api'
 import type { SuperAnalysisResponse } from '../types'
+
+let _seq = 0
+
+function generateRequestId(): string {
+  _seq = (_seq + 1) % 9999
+  return `${Date.now().toString(36)}-${_seq.toString(36)}`
+}
 
 export function useSuperAnalysis() {
   const [question, setQuestion] = useState('')
@@ -12,6 +19,8 @@ export function useSuperAnalysis() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const activeRequestIdRef = useRef<string | null>(null)
+  const pollingRef = useRef(false)
 
   useEffect(() => { if (!loading) inputRef.current?.focus() }, [loading])
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -30,16 +39,23 @@ export function useSuperAnalysis() {
     setProgress({ phase: 'collecting', message: '启动分析引擎...', percent: 0, elapsed_seconds: 0, detail: {} })
 
     if (pollRef.current) clearInterval(pollRef.current)
+    const requestId = generateRequestId()
+    activeRequestIdRef.current = requestId
+    pollingRef.current = false
+
     pollRef.current = setInterval(async () => {
+      if (pollingRef.current) return
+      pollingRef.current = true
       try {
-        const p = await fetchSuperAnalysisProgress()
+        const p = await fetchSuperAnalysisProgress(activeRequestIdRef.current ?? undefined)
         setProgress(p)
       } catch { /* ignore polling errors */ }
+      finally { pollingRef.current = false }
     }, 1500)
 
     try {
       const timeoutId = setTimeout(() => controller.abort(), 300_000)
-      const res = await superAnalyze({ question: q }, controller.signal)
+      const res = await superAnalyze({ question: q, request_id: requestId }, controller.signal)
       clearTimeout(timeoutId)
       setResult(res)
       abortRef.current = null
@@ -64,25 +80,9 @@ export function useSuperAnalysis() {
     }
   }, [question, loading])
 
-  const tick = useRef(0)
-  useEffect(() => {
-    if (progress?.phase !== 'analyzing') { tick.current = 0; return }
-    const interval = setInterval(() => { tick.current++ }, 2000)
-    return () => clearInterval(interval)
-  }, [progress?.phase])
-
-  const displayPercent = useMemo(() => {
-    if (!progress) return 0
-    if (progress.phase === 'done' || progress.phase === 'error') return progress.percent
-    if (progress.phase === 'analyzing') {
-      const crept = Math.min(tick.current * 0.5, 57)
-      return Math.round(progress.percent + crept)
-    }
-    return progress.percent
-  }, [progress, tick.current])
-
   return {
-    question, setQuestion, loading, result, error, progress, displayPercent,
+    question, setQuestion, loading, result, error, progress,
+    displayPercent: progress?.percent ?? 0,
     handleSubmit, inputRef,
   }
 }

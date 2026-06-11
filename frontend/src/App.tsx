@@ -1,822 +1,399 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Routes, Route, useNavigate } from 'react-router-dom'
-import { MagnifyingGlass, FileText, ChartBar, ArrowsClockwise, Database, Rows, MapPin, Brain, List, CaretLeft, CaretRight, User, SignOut, Gear } from '@phosphor-icons/react'
-import type { IntelItem, IntelLayer, DashboardData } from './types'
-import { LAYER_META } from './types'
-import { useAuth } from './contexts/AuthContext'
-import { useIsMobile } from './hooks/useMediaQuery'
-import { useDashboardData } from './hooks/useDashboardData'
-import MapView from './components/MapView'
-import LayerPanel from './components/LayerPanel'
-import IntelCard from './components/IntelCard'
-import MessageFeed from './components/MessageFeed'
-import AskPanel from './components/AskPanel'
-import StatsPanel from './components/StatsPanel'
-import ReportPanel from './components/ReportPanel'
-import SourcePanel from './components/SourcePanel'
-import IntelAnalysisPanel from './components/IntelAnalysisPanel'
-import SuperAnalysisPanel from './components/SuperAnalysisPanel'
-import MobileMenu from './components/MobileMenu'
-import StatusDot from './components/StatusDot'
-import LoginPage from './components/LoginPage'
-import RegisterPage from './components/RegisterPage'
-import AdminPanel from './components/AdminPanel'
+import { useMemo, useState } from 'react'
+import {
+  ArrowRight,
+  CheckCircle,
+  Clock,
+  Copy,
+  CreditCard,
+  FileText,
+  LockKey,
+  Question,
+  ShieldCheck,
+  Sparkle,
+  Ticket,
+  UserCircle,
+  WarningCircle,
+} from '@phosphor-icons/react'
+import { motion } from 'framer-motion'
+import {
+  canUseFullAnalysis,
+  createInvitation,
+  createRegisteredUser,
+  redeemActivationCode,
+  validateInviteCode,
+} from './shijieqiuhua/access'
+import { ACTIVATION_CODES, MATCHES } from './shijieqiuhua/mockData'
+import type { AccessMode, ActivationCode, EvidenceItem, FootballMatch, UserProfile } from './shijieqiuhua/types'
+import './shijieqiuhua.css'
 
-const ALL_LAYERS: IntelLayer[] = ['nature', 'economy', 'finance', 'politics', 'military', 'aviation', 'technology', 'society', 'energy', 'agriculture', 'health', 'cyber']
-
-const SHIMMER_STYLE: React.CSSProperties = {
-  backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.04) 50%, var(--bg-elevated) 75%)',
-  backgroundSize: '200% 100%',
-  animation: 'shimmer 1.5s ease-in-out infinite',
+const ACCESS_LABEL: Record<AccessMode, string> = {
+  public: '公开预览',
+  registered_unpaid: '待开通',
+  paid: '完整权限',
 }
 
-const SKELETON_ITEM_STYLE: React.CSSProperties = {
-  height: 40, borderRadius: 'var(--radius-md)',
-  background: 'var(--bg-elevated)',
-  backgroundImage: 'linear-gradient(90deg, var(--bg-elevated) 25%, rgba(0,0,0,0.03) 50%, var(--bg-elevated) 75%)',
-  backgroundSize: '200% 100%',
+const EVIDENCE_LABEL: Record<EvidenceItem['strength'], string> = {
+  strong: '强证据',
+  weak: '弱信号',
+  insufficient: '样本不足',
 }
 
-function LiveClock() {
-  const [time, setTime] = useState(new Date())
-  useEffect(() => {
-    const id = setInterval(() => setTime(new Date()), 1000)
-    return () => clearInterval(id)
-  }, [])
-  return (
-    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)', letterSpacing: 1 }}>
-      {time.toLocaleTimeString('zh-CN', { hour12: false })}
-    </span>
-  )
-}
-
-interface ActionBtnProps {
-  icon: React.ReactNode
-  label: string
-  onClick: () => void
-  accent?: boolean
-}
-
-function ActionBtn({ icon, label, onClick, accent }: ActionBtnProps) {
-  return (
-    <motion.button
-      whileHover={{ scale: 1.05 }}
-      whileTap={{ scale: 0.95 }}
-      onClick={onClick}
-      className="interactive-btn"
-      style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        background: 'transparent', border: 'none',
-        color: accent ? 'var(--accent)' : 'var(--text-tertiary)',
-        cursor: 'pointer', padding: '2px 6px',
-        fontSize: 9, fontFamily: 'var(--font-mono)',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {icon}
-      {label}
-    </motion.button>
-  )
-}
-
-function Dashboard() {
-  const isMobile = useIsMobile()
-  const { user, isAuthenticated, isAdmin, logout } = useAuth()
-  const navigate = useNavigate()
-  const [activeLayers, setActiveLayers] = useState<Set<IntelLayer>>(new Set(ALL_LAYERS))
-  const [selectedItem, setSelectedItem] = useState<IntelItem | null>(null)
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10))
-  const [activePanel, setActivePanel] = useState<string | null>(null)
-  const [showFeeds, setShowFeeds] = useState(false)
-  const [showSources, setShowSources] = useState(false)
-  const [showMenu, setShowMenu] = useState(false)
-
-  const {
-    data, loading, error, lastUpdated, collecting,
-    feedPage, feedItems, loadingMore,
-    loadData, loadMoreItems, triggerCollect,
-  } = useDashboardData(startDate, endDate, selectedDate)
-
-  const availableDates = data?.available_dates ?? []
-  const currentDateIndex = availableDates.indexOf(selectedDate)
-  const hasPrevDate = currentDateIndex < availableDates.length - 1
-  const hasNextDate = currentDateIndex > 0
-
-  const navigateDate = useCallback((direction: -1 | 1) => {
-    if (currentDateIndex === -1) return
-    const newIndex = currentDateIndex - direction
-    if (newIndex >= 0 && newIndex < availableDates.length) {
-      setSelectedDate(availableDates[newIndex])
-    }
-  }, [currentDateIndex, availableDates])
-
-  const goToToday = useCallback(() => {
-    setSelectedDate(new Date().toISOString().slice(0, 10))
-  }, [])
-
-  const toggleLayer = useCallback((layer: IntelLayer) => {
-    setActiveLayers(prev => { const n = new Set(prev); n.has(layer) ? n.delete(layer) : n.add(layer); return n })
-  }, [])
-
-  const mapItems = useMemo(() => (data?.intel_items ?? []).filter(i => activeLayers.has(i.layer)), [data?.intel_items, activeLayers])
-  const feedFilteredItems = useMemo(() => feedItems.filter(i => activeLayers.has(i.layer)), [feedItems, activeLayers])
-
-  const openPanel = (panel: string) => { setShowMenu(false); setActivePanel(panel) }
-
-  return (
-    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: 'var(--bg-deep)', position: 'relative' }}>
-      {/* Full-screen Map */}
-      <div style={{ position: 'absolute', inset: 0 }}>
-        {!loading && <MapView items={mapItems} onSelect={setSelectedItem} />}
-        <div className="map-grid-overlay" />
-      </div>
-
-      {/* Top Bar — desktop: full actions; mobile: compact + hamburger */}
-      <motion.header
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-        className="glass-panel"
-        style={{
-          position: 'absolute', top: isMobile ? 8 : 12,
-          left: isMobile ? 8 : 60, right: isMobile ? 8 : 12,
-          height: isMobile ? 40 : 36,
-          borderRadius: 'var(--radius-md)',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: isMobile ? '0 8px 0 10px' : '0 10px 0 14px',
-          zIndex: 'var(--z-top-bar)',
-          fontFamily: 'var(--font-mono)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 14 }}>
-          <motion.span
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            style={{ fontSize: isMobile ? 11 : 10, color: 'var(--accent)', letterSpacing: isMobile ? 2 : 4, fontWeight: 700 }}
-          >
-            OSINT
-          </motion.span>
-          {!isMobile && (
-            <>
-              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
-              <span style={{ fontSize: 9, color: 'var(--text-tertiary)', letterSpacing: 1, fontFamily: 'var(--font-ui)' }}>
-                全球情报指挥系统
-              </span>
-              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
-              <span style={{ fontSize: 9, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Database size={10} weight="duotone" color="var(--text-tertiary)" />
-                情报 <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{data?.total_items ?? '---'}</span>
-              </span>
-              <span style={{ fontSize: 9, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <MapPin size={10} weight="duotone" color="var(--text-tertiary)" />
-                来源 <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{data?.sources.length ?? '---'}</span>
-              </span>
-              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={() => navigateDate(-1)}
-                disabled={!hasPrevDate}
-                className="interactive-btn"
-                style={{
-                  background: 'transparent', border: 'none',
-                  color: 'var(--text-tertiary)',
-                  cursor: hasPrevDate ? 'pointer' : 'default',
-                  padding: '2px 0', display: 'flex',
-                  opacity: hasPrevDate ? 0.7 : 0.25,
-                }}
-              >
-                <CaretLeft size={10} weight="bold" />
-              </motion.button>
-              <span style={{
-                fontSize: 9, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
-                fontWeight: 600, minWidth: 72, textAlign: 'center' as const,
-              }}>
-                {selectedDate === new Date().toISOString().slice(0, 10)
-                  ? '今天'
-                  : selectedDate.slice(5).replace('-', '月') + '日'}
-              </span>
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={() => navigateDate(1)}
-                disabled={!hasNextDate}
-                className="interactive-btn"
-                style={{
-                  background: 'transparent', border: 'none',
-                  color: 'var(--text-tertiary)',
-                  cursor: hasNextDate ? 'pointer' : 'default',
-                  padding: '2px 0', display: 'flex',
-                  opacity: hasNextDate ? 0.7 : 0.25,
-                }}
-              >
-                <CaretRight size={10} weight="bold" />
-              </motion.button>
-              {selectedDate !== new Date().toISOString().slice(0, 10) && (
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={goToToday}
-                  className="interactive-btn"
-                  style={{
-                    background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)',
-                    color: 'var(--accent)', cursor: 'pointer',
-                    padding: '1px 6px', borderRadius: 3,
-                    fontSize: 8, fontFamily: 'var(--font-mono)',
-                  }}
-                >
-                  今天
-                </motion.button>
-              )}
-            </>
-          )}
-          {isMobile && (
-            <span style={{ fontSize: 9, color: 'var(--text-tertiary)', fontFamily: 'var(--font-ui)' }}>
-              {data?.total_items ?? '---'} 条情报
-            </span>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6, fontSize: 10 }}>
-          {isMobile ? (
-            <>
-              {isAuthenticated ? (
-                <motion.button
-                  whileTap={{ scale: 0.9 }}
-                  onClick={() => navigate('/admin')}
-                  className="interactive-btn mobile-touch-target"
-                  style={{
-                    background: 'transparent', border: 'none',
-                    color: isAdmin ? 'var(--accent)' : 'var(--text-tertiary)',
-                    cursor: 'pointer', padding: 4,
-                    display: isAdmin ? 'flex' : 'none',
-                  }}
-                >
-                  <Gear size={14} weight="bold" />
-                </motion.button>
-              ) : (
-                <motion.button
-                  whileTap={{ scale: 0.9 }}
-                  onClick={() => navigate('/login')}
-                  className="interactive-btn mobile-touch-target"
-                  style={{
-                    background: 'transparent', border: 'none',
-                    color: 'var(--accent)', cursor: 'pointer', padding: 4,
-                  }}
-                >
-                  <User size={14} weight="bold" />
-                </motion.button>
-              )}
-              <StatusDot loading={loading} error={!!error} />
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => loadData()}
-                className="interactive-btn mobile-touch-target"
-                style={{
-                  background: 'transparent', border: 'none',
-                  color: 'var(--text-tertiary)', cursor: 'pointer',
-                  padding: 4,
-                }}
-              >
-                <ArrowsClockwise size={14} weight="bold" />
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setShowMenu(true)}
-                className="interactive-btn mobile-touch-target"
-                style={{
-                  background: 'transparent', border: 'none',
-                  color: 'var(--text-tertiary)', cursor: 'pointer',
-                  padding: 4,
-                }}
-              >
-                <List size={18} weight="bold" />
-              </motion.button>
-            </>
-          ) : (
-            <>
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.97 }}
-                onClick={() => setActivePanel('ask')}
-                className="interactive-btn"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(16,185,129,0.15)',
-                  borderRadius: 'var(--radius-sm)', padding: '2px 10px',
-                  color: 'var(--text-tertiary)', fontSize: 9,
-                  fontFamily: 'var(--font-mono)', cursor: 'pointer',
-                }}
-              >
-                <MagnifyingGlass size={10} color="var(--accent)" weight="duotone" />
-                情报查询
-              </motion.button>
-              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
-              <StatusDot loading={loading} error={!!error} />
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => loadData()}
-                title="刷新"
-                className="interactive-btn"
-                style={{
-                  background: 'transparent', border: 'none',
-                  color: 'var(--text-tertiary)', cursor: 'pointer',
-                  padding: '2px 4px', display: 'flex',
-                }}
-              >
-                <ArrowsClockwise size={12} weight="bold" />
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={triggerCollect}
-                disabled={collecting}
-                className="interactive-btn"
-                style={{
-                  background: 'rgba(16,185,129,0.06)',
-                  border: collecting ? '1px solid transparent' : '1px solid rgba(16,185,129,0.2)',
-                  borderRadius: 'var(--radius-sm)',
-                  color: collecting ? 'var(--text-tertiary)' : 'var(--accent)',
-                  cursor: collecting ? 'default' : 'pointer',
-                  padding: '2px 8px', fontSize: 9,
-                  fontFamily: 'var(--font-mono)', opacity: collecting ? 0.6 : 1,
-                }}
-              >
-                {collecting ? '采集中...' : '+采集'}
-              </motion.button>
-              <ActionBtn icon={<ChartBar size={10} weight="duotone" />} label="看板" onClick={() => setActivePanel('stats')} />
-              <ActionBtn icon={<FileText size={10} weight="duotone" />} label="简报" onClick={() => setActivePanel('report')} />
-              <ActionBtn icon={<Brain size={10} weight="duotone" />} label="超级" onClick={() => setActivePanel('super')} accent />
-              <ActionBtn icon={<ChartBar size={10} weight="duotone" />} label="分析" onClick={() => setActivePanel('analysis')} />
-              <ActionBtn icon={<Rows size={10} weight="duotone" />} label="来源" onClick={() => setShowSources(!showSources)} />
-              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
-              {isAuthenticated && isAdmin && (
-                <motion.button
-                  whileHover={{ scale: 1.03 }}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={() => navigate('/admin')}
-                  className="interactive-btn"
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 3,
-                    background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)',
-                    borderRadius: 'var(--radius-sm)', padding: '1px 6px',
-                    color: 'var(--accent)', fontSize: 9,
-                    fontFamily: 'var(--font-mono)', cursor: 'pointer',
-                  }}
-                >
-                  <Gear size={9} weight="bold" />
-                  管理
-                </motion.button>
-              )}
-              {isAuthenticated ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <User size={10} weight="duotone" color="var(--text-tertiary)" />
-                  <span style={{ fontSize: 9, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{user?.username}</span>
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={logout}
-                    className="interactive-btn"
-                    style={{
-                      background: 'transparent', border: 'none',
-                      color: 'var(--text-tertiary)', cursor: 'pointer',
-                      padding: '1px 3px', display: 'flex',
-                    }}
-                    title="退出登录"
-                  >
-                    <SignOut size={10} weight="bold" />
-                  </motion.button>
-                </div>
-              ) : (
-                <motion.button
-                  whileHover={{ scale: 1.03 }}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={() => navigate('/login')}
-                  className="interactive-btn"
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 4,
-                    background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)',
-                    borderRadius: 'var(--radius-sm)', padding: '1px 8px',
-                    color: 'var(--accent)', fontSize: 9,
-                    fontFamily: 'var(--font-mono)', cursor: 'pointer',
-                  }}
-                >
-                  <User size={9} weight="bold" />
-                  登录
-                </motion.button>
-              )}
-              <span style={{ width: 1, height: 12, background: 'var(--border-subtle)' }} />
-              <LiveClock />
-            </>
-          )}
-        </div>
-      </motion.header>
-
-      {/* Mobile Hamburger Menu */}
-      {isMobile && (
-        <MobileMenu
-          show={showMenu}
-          onClose={() => setShowMenu(false)}
-          onOpenPanel={openPanel}
-          onOpenSources={() => { setShowMenu(false); setShowSources(true) }}
-          triggerCollect={triggerCollect}
-          collecting={collecting}
-          totalItems={data?.total_items ?? 0}
-          sourcesCount={data?.sources.length ?? 0}
-          liveClock={<LiveClock />}
-        />
-      )}
-
-      {/* Mobile Date Navigation */}
-      {isMobile && (
-        <motion.div
-          initial={{ y: -10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.15 }}
-          className="glass-panel"
-          style={{
-            position: 'absolute', top: 52, left: 8, right: 8,
-            height: 32, borderRadius: 'var(--radius-md)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-            zIndex: 'var(--z-layer-panel)',
-            border: '1px solid var(--glass-border)',
-          }}
-        >
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={() => navigateDate(-1)}
-            disabled={!hasPrevDate}
-            style={{
-              background: 'transparent', border: 'none',
-              color: 'var(--text-tertiary)', cursor: hasPrevDate ? 'pointer' : 'default',
-              padding: 4, display: 'flex', opacity: hasPrevDate ? 0.7 : 0.25,
-            }}
-          >
-            <CaretLeft size={12} weight="bold" />
-          </motion.button>
-          <span style={{
-            fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
-            fontWeight: 600, minWidth: 72, textAlign: 'center' as const,
-          }}>
-            {selectedDate === new Date().toISOString().slice(0, 10)
-              ? '今天'
-              : selectedDate.slice(5).replace('-', '月') + '日'}
-          </span>
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={() => navigateDate(1)}
-            disabled={!hasNextDate}
-            style={{
-              background: 'transparent', border: 'none',
-              color: 'var(--text-tertiary)', cursor: hasNextDate ? 'pointer' : 'default',
-              padding: 4, display: 'flex', opacity: hasNextDate ? 0.7 : 0.25,
-            }}
-          >
-            <CaretRight size={12} weight="bold" />
-          </motion.button>
-          {selectedDate !== new Date().toISOString().slice(0, 10) && (
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={goToToday}
-              style={{
-                background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)',
-                color: 'var(--accent)', cursor: 'pointer',
-                padding: '2px 8px', borderRadius: 3,
-                fontSize: 9, fontFamily: 'var(--font-mono)',
-              }}
-            >
-              今天
-            </motion.button>
-          )}
-        </motion.div>
-      )}
-
-      {/* Layer Panel — desktop: left sidebar; mobile: horizontal strip below top bar */}
-      {isMobile ? (
-        <motion.div
-          initial={{ y: -10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          style={{ position: 'absolute', top: 88, left: 4, right: 4, zIndex: 'var(--z-layer-panel)' }}
-        >
-          <div
-            className="glass-panel mobile-layer-strip"
-            style={{
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--glass-border)',
-              boxShadow: 'var(--shadow-diffuse)',
-            }}
-          >
-            {(data?.layers ?? []).map(l => {
-              const meta = LAYER_META[l.layer]
-              const isActive = activeLayers.has(l.layer)
-              return (
-                <motion.button
-                  key={l.layer}
-                  whileTap={{ scale: 0.92 }}
-                  onClick={() => toggleLayer(l.layer)}
-                  style={{
-                    position: 'relative',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 32, height: 32, flexShrink: 0,
-                    border: isActive ? `1px solid ${meta.color}44` : '1px solid transparent',
-                    borderRadius: 'var(--radius-sm)',
-                    background: isActive ? `${meta.color}18` : 'transparent',
-                    cursor: 'pointer',
-                    transition: 'background 0.15s ease',
-                  }}
-                >
-                  <span style={{
-                    width: 6, height: 6, borderRadius: '50%',
-                    background: meta.color,
-                    opacity: isActive ? 1 : 0.35,
-                    boxShadow: isActive ? `0 0 4px ${meta.color}55` : 'none',
-                    transition: 'opacity 0.15s ease',
-                  }} />
-                  {l.count > 0 && (
-                    <span style={{
-                      position: 'absolute', top: 1, right: 1,
-                      fontSize: 7, fontWeight: 700, color: meta.color,
-                      fontFamily: 'var(--font-mono)',
-                    }}>
-                      {l.count > 99 ? '99+' : l.count}
-                    </span>
-                  )}
-                </motion.button>
-              )
-            })}
-          </div>
-        </motion.div>
-      ) : (
-        <motion.div
-          initial={{ x: -40, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.3 }}
-          style={{ position: 'absolute', left: 8, top: 56, zIndex: 'var(--z-layer-panel)' }}
-        >
-          <LayerPanel layers={data?.layers ?? []} activeLayers={activeLayers} onToggle={toggleLayer} />
-        </motion.div>
-      )}
-
-      {/* Source Panel — desktop: right drawer; mobile: full-screen panel */}
-      {data?.sources && (
-        <SourcePanel
-          sources={data.sources}
-          expanded={showSources}
-          onToggle={() => setShowSources(!showSources)}
-          isMobile={isMobile}
-        />
-      )}
-
-      {/* Bottom Ticker Bar */}
-      <motion.div
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.4 }}
-        className="glass-panel"
-        style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0,
-          height: isMobile ? 40 : 32, zIndex: 150,
-          borderRadius: 0,
-          borderTop: '1px solid var(--glass-border)',
-          display: 'flex',
-        }}
-      >
-        <motion.div
-          whileHover={{ scale: 1.02 }}
-          onClick={() => setShowFeeds(!showFeeds)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: isMobile ? '0 10px' : '0 14px',
-            cursor: 'pointer',
-            borderRight: '1px solid var(--glass-border)',
-            fontSize: isMobile ? 10 : 9, color: 'var(--text-secondary)',
-            fontFamily: 'var(--font-mono)', letterSpacing: 1,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <motion.span
-            animate={{ opacity: [0.6, 1, 0.6] }}
-            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-            style={{
-              display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
-              background: 'var(--accent)',
-              boxShadow: '0 0 6px var(--accent-glow)',
-            }}
-          />
-          情报流 ({mapItems.length})
-        </motion.div>
-
-        <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}
-          onMouseEnter={e => { (e.currentTarget.firstElementChild as HTMLElement | null)?.style.setProperty('animation-play-state', 'paused') }}
-          onMouseLeave={e => { (e.currentTarget.firstElementChild as HTMLElement | null)?.style.setProperty('animation-play-state', 'running') }}
-        >
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 32,
-            height: '100%',
-            animation: 'ticker-scroll 60s linear infinite',
-            whiteSpace: 'nowrap',
-          }}>
-            {[0, 1].map(copy => (
-              <div key={copy} style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
-                {mapItems.slice(0, 60).map(item => {
-                  const meta = LAYER_META[item.layer]
-                  const pct = Math.round(item.confidence * 100)
-                  return (
-                    <motion.span
-                      key={`${item.id}-${copy}`}
-                      whileHover={{ color: 'var(--text-primary)' }}
-                      onClick={() => setSelectedItem(item)}
-                      className="ticker-item"
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 4,
-                        fontSize: isMobile ? 11 : 10, color: 'var(--text-tertiary)',
-                        cursor: 'pointer', fontFamily: 'var(--font-mono)',
-                      }}
-                    >
-                      <span style={{ color: meta.color, fontSize: isMobile ? 8 : 7 }}>•</span>
-                      <span style={{ maxWidth: isMobile ? 100 : 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.title}
-                      </span>
-                      <span style={{
-                        fontSize: isMobile ? 8 : 7, fontWeight: 600,
-                        color: pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--danger)',
-                      }}>
-                        {pct}%
-                      </span>
-                      {!isMobile && (
-                        <span style={{ fontSize: 8, color: 'var(--text-tertiary)' }}>
-                          {item.country}
-                        </span>
-                      )}
-                    </motion.span>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Expanded Feed Panel */}
-      <AnimatePresence>
-        {showFeeds && (
-          <motion.div
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 20, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-            className="glass-panel"
-            style={{
-              position: 'absolute',
-              bottom: isMobile ? 40 : 32,
-              left: 0, right: 0,
-              height: isMobile ? '50vh' : 200,
-              zIndex: 'var(--z-feed-expanded)',
-              borderTop: '1px solid var(--glass-border)',
-              borderRadius: 0,
-              overflow: 'hidden',
-            }}
-          >
-            <MessageFeed
-              items={feedFilteredItems}
-              onSelect={(item) => { setSelectedItem(item); setShowFeeds(false) }}
-              selectedId={selectedItem?.id ?? null}
-              hasMore={data?.has_more ?? false}
-              loadingMore={loadingMore}
-              onLoadMore={loadMoreItems}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Overlay Panels — desktop: centered card; mobile: full-screen */}
-      <AnimatePresence>
-        {selectedItem && (
-          <IntelCard
-            key="intel-card"
-            item={selectedItem}
-            onClose={() => setSelectedItem(null)}
-            isMobile={isMobile}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activePanel === 'ask' && <AskPanel key="ask-panel" onClose={() => setActivePanel(null)} isMobile={isMobile} />}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activePanel === 'stats' && <StatsPanel key="stats-panel" onClose={() => setActivePanel(null)} isMobile={isMobile} />}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activePanel === 'report' && <ReportPanel key="report-panel" onClose={() => setActivePanel(null)} isMobile={isMobile} />}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activePanel === 'analysis' && <IntelAnalysisPanel key="analysis-panel" onClose={() => setActivePanel(null)} isMobile={isMobile} />}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activePanel === 'super' && <SuperAnalysisPanel key="super-analysis-panel" onClose={() => setActivePanel(null)} isMobile={isMobile} />}
-      </AnimatePresence>
-
-      {/* Error Toast */}
-      <AnimatePresence>
-        {error && (
-          <motion.div
-            initial={{ y: -10, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -10, opacity: 0 }}
-            style={{
-              position: 'fixed', top: isMobile ? 56 : 60, left: '50%', transform: 'translateX(-50%)',
-              background: 'rgba(220,38,38,0.08)',
-              border: '1px solid rgba(220,38,38,0.25)',
-              color: 'var(--danger)', padding: isMobile ? '10px 14px' : '8px 16px',
-              borderRadius: 'var(--radius-md)',
-              zIndex: 'var(--z-overlay)', fontSize: isMobile ? 12 : 11,
-              fontFamily: 'var(--font-mono)',
-              boxShadow: '0 0 20px rgba(220,38,38,0.1)',
-              display: 'flex', alignItems: 'center', gap: 12,
-              maxWidth: isMobile ? '90vw' : undefined,
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--danger)', boxShadow: '0 0 6px rgba(220,38,38,0.4)' }} />
-            {error}
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => loadData()}
-              style={{
-                background: 'rgba(220,38,38,0.1)', border: '1px solid rgba(220,38,38,0.25)',
-                color: 'var(--danger)', padding: '3px 10px', borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
-              }}
-            >
-              重试
-            </motion.button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Loading Skeleton */}
-      <AnimatePresence>
-        {loading && (
-          <motion.div
-            initial={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
-            style={{
-              position: 'fixed', inset: 0, zIndex: 'var(--z-loading)',
-              background: 'var(--bg-deep)',
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <div className="glass-panel" style={{
-                margin: isMobile ? 8 : 12, height: 36, borderRadius: 'var(--radius-md)',
-                display: 'flex', alignItems: 'center', padding: '0 14px',
-              }}>
-                <div style={{ ...SHIMMER_STYLE, width: 60, height: 10, borderRadius: 99, animationDuration: '2s' }} />
-                <div style={{ flex: 1 }} />
-                <div style={{ ...SHIMMER_STYLE, width: 80, height: 10, borderRadius: 99, animationDuration: '2s', animationDelay: '0.2s' }} />
-              </div>
-              <div style={{ flex: 1, display: 'flex', gap: 12, padding: '0 16px 12px' }}>
-                {!isMobile && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 44 }}>
-                    {[...Array(8)].map((_, i) => (
-                      <div key={i} style={{
-                        ...SKELETON_ITEM_STYLE,
-                        opacity: 1 - i * 0.08,
-                        animationDelay: `${i * 0.1}s`,
-                      }} />
-                    ))}
-                  </div>
-                )}
-                <div style={{ ...SKELETON_ITEM_STYLE, flex: 1 }} />
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  )
+function pct(value: number) {
+  return `${Math.round(value)}%`
 }
 
 export default function App() {
+  const [selectedId, setSelectedId] = useState(MATCHES[0].id)
+  const [user, setUser] = useState<UserProfile | null>(null)
+  const [activationCodes, setActivationCodes] = useState<ActivationCode[]>(ACTIVATION_CODES)
+  const [inviteCode, setInviteCode] = useState('QH-2026-SEED')
+  const [registerName, setRegisterName] = useState('林观球')
+  const [activationCode, setActivationCode] = useState('PAY-2026-FULL')
+  const [accountMessage, setAccountMessage] = useState('')
+  const [generatedInvite, setGeneratedInvite] = useState('')
+  const [question, setQuestion] = useState('上半场角球会不会偏多？')
+  const [answer, setAnswer] = useState('')
+
+  const selectedMatch = useMemo(
+    () => MATCHES.find(match => match.id === selectedId) ?? MATCHES[0],
+    [selectedId],
+  )
+  const accessMode: AccessMode = user?.status ?? 'public'
+  const hasFullAccess = canUseFullAnalysis(user)
+
+  function registerWithInvite() {
+    const validation = validateInviteCode(inviteCode)
+    if (!validation.ok) {
+      setAccountMessage(validation.reason)
+      return
+    }
+    const nextUser = createRegisteredUser(registerName, validation.code)
+    setUser(nextUser)
+    setAccountMessage('注册成功。兑换付费码后即可查看完整分析。')
+  }
+
+  function redeemCode() {
+    const result = redeemActivationCode(user, activationCode, activationCodes)
+    setActivationCodes(result.codes)
+    if (!result.ok) {
+      setAccountMessage(result.reason)
+      return
+    }
+    setUser(result.user)
+    setAccountMessage('完整功能已开通。')
+  }
+
+  function generateInvite() {
+    const result = createInvitation(user)
+    if (!result.ok) {
+      setAccountMessage(result.reason)
+      return
+    }
+    setGeneratedInvite(result.code)
+    setAccountMessage('邀请码已生成，可复制链接或生成小程序码。')
+  }
+
+  function askMatchQuestion(nextQuestion = question) {
+    setQuestion(nextQuestion)
+    if (!hasFullAccess) {
+      setAnswer('')
+      setAccountMessage('使用邀请码注册并开通后，可以继续追问半场、红黄牌、角球和进球数。')
+      return
+    }
+    const risk = selectedMatch.riskFlags[0]
+    setAnswer(`${nextQuestion} 当前判断：${selectedMatch.prediction.summary} 主要风险是${risk}。证据强度需要按强证据、弱信号和样本不足分开阅读。`)
+  }
+
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/admin" element={<AdminPanel />} />
-      <Route path="/*" element={<Dashboard />} />
-    </Routes>
+    <main className="sqh-app">
+      <header className="sqh-topbar">
+        <div className="sqh-brand">
+          <div className="sqh-mark">世</div>
+          <div>
+            <h1>世界球花</h1>
+            <p>足球情报问答 · 邀请制访问</p>
+          </div>
+        </div>
+        <div className="sqh-status-pill" data-mode={accessMode}>
+          <ShieldCheck size={16} weight="duotone" />
+          <span>{ACCESS_LABEL[accessMode]}</span>
+        </div>
+      </header>
+
+      <section className="sqh-shell">
+        <aside className="sqh-match-rail" aria-label="赛事列表">
+          <div className="sqh-section-title">
+            <Clock size={16} weight="duotone" />
+            <span>今日赛事</span>
+          </div>
+          <div className="sqh-match-list">
+            {MATCHES.map(match => (
+              <button
+                key={match.id}
+                className="sqh-match-row"
+                data-active={match.id === selectedId}
+                onClick={() => {
+                  setSelectedId(match.id)
+                  setAnswer('')
+                }}
+              >
+                <span className="sqh-match-league">{match.league}</span>
+                <strong>{match.homeTeam} vs {match.awayTeam}</strong>
+                <span>{match.kickoffAt} · {match.publicLean}</span>
+              </button>
+            ))}
+          </div>
+          <div className="sqh-rail-note">
+            <LockKey size={16} weight="duotone" />
+            <span>未开通时仅展示简单胜负倾向。</span>
+          </div>
+        </aside>
+
+        <MatchQuestionCard
+          match={selectedMatch}
+          question={question}
+          answer={answer}
+          hasFullAccess={hasFullAccess}
+          onQuestionChange={setQuestion}
+          onAsk={() => askMatchQuestion()}
+          onPreset={askMatchQuestion}
+        />
+
+        <aside className="sqh-account-panel" aria-label="账号与权限">
+          <AccountPanel
+            user={user}
+            accessMode={accessMode}
+            inviteCode={inviteCode}
+            registerName={registerName}
+            activationCode={activationCode}
+            accountMessage={accountMessage}
+            generatedInvite={generatedInvite}
+            onInviteCodeChange={setInviteCode}
+            onRegisterNameChange={setRegisterName}
+            onActivationCodeChange={setActivationCode}
+            onRegister={registerWithInvite}
+            onRedeem={redeemCode}
+            onGenerateInvite={generateInvite}
+            onReset={() => {
+              setUser(null)
+              setGeneratedInvite('')
+              setAnswer('')
+              setAccountMessage('已切换回公开预览。')
+            }}
+          />
+        </aside>
+      </section>
+    </main>
+  )
+}
+
+function MatchQuestionCard({
+  match,
+  question,
+  answer,
+  hasFullAccess,
+  onQuestionChange,
+  onAsk,
+  onPreset,
+}: {
+  match: FootballMatch
+  question: string
+  answer: string
+  hasFullAccess: boolean
+  onQuestionChange: (value: string) => void
+  onAsk: () => void
+  onPreset: (value: string) => void
+}) {
+  const ringStyle = { '--confidence': `${match.prediction.confidence * 3.6}deg` } as React.CSSProperties
+
+  return (
+    <section className="sqh-question-card">
+      <div className="sqh-match-hero">
+        <div className="sqh-hero-meta">
+          <span>{match.league}</span>
+          <span>{match.kickoffAt}</span>
+        </div>
+        <div className="sqh-teams">
+          <strong>{match.homeTeam}</strong>
+          <span>VS</span>
+          <strong>{match.awayTeam}</strong>
+        </div>
+        <div className="sqh-prediction-grid">
+          <div className="sqh-confidence-ring" style={ringStyle}>
+            <span>{match.prediction.confidence}</span>
+            <small>{match.prediction.rating}</small>
+          </div>
+          <div className="sqh-bars">
+            <ProbabilityBar label="主胜" value={match.prediction.home} />
+            <ProbabilityBar label="平局" value={match.prediction.draw} />
+            <ProbabilityBar label="客胜" value={match.prediction.away} />
+          </div>
+        </div>
+        <p>{hasFullAccess ? match.prediction.summary : match.publicLean}</p>
+      </div>
+
+      <div className="sqh-ask-box">
+        <div className="sqh-section-title">
+          <Question size={16} weight="duotone" />
+          <span>继续问这场比赛</span>
+        </div>
+        <div className="sqh-input-row">
+          <input
+            value={question}
+            onChange={event => onQuestionChange(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') onAsk()
+            }}
+            placeholder="例如：本场红黄牌风险是否偏高？"
+          />
+          <motion.button whileTap={{ scale: 0.96 }} onClick={onAsk}>
+            追问
+            <ArrowRight size={15} weight="bold" />
+          </motion.button>
+        </div>
+        <div className="sqh-question-chips">
+          {match.questions.map(item => (
+            <button key={item.id} onClick={() => onPreset(item.prompt)}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {!hasFullAccess && (
+          <div className="sqh-locked-callout">
+            <LockKey size={18} weight="duotone" />
+            <span>使用邀请码注册并开通后，才能查看角球、红黄牌、半场和完整证据。</span>
+          </div>
+        )}
+        {answer && (
+          <motion.div className="sqh-answer" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            {answer}
+          </motion.div>
+        )}
+      </div>
+
+      <div className="sqh-evidence-grid">
+        {match.evidence.map(item => (
+          <article key={item.id} className="sqh-evidence" data-strength={item.strength} data-locked={!hasFullAccess}>
+            <span>{EVIDENCE_LABEL[item.strength]}</span>
+            <strong>{hasFullAccess ? item.title : '开通后查看完整证据'}</strong>
+            <small>{hasFullAccess ? item.source : '公开预览仅展示方向倾向'}</small>
+          </article>
+        ))}
+      </div>
+
+      <div className="sqh-report-strip">
+        <FileText size={18} weight="duotone" />
+        <div>
+          <strong>赛前报告</strong>
+          <span>{hasFullAccess ? '可保存问答、生成报告并同步到 Web 与小程序。' : '开通后解锁报告保存、收藏和订阅提醒。'}</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ProbabilityBar({ label, value }: { label: string; value: number }) {
+  return (
+    <label className="sqh-probability">
+      <span>{label}</span>
+      <i><b style={{ width: pct(value) }} /></i>
+      <em>{pct(value)}</em>
+    </label>
+  )
+}
+
+function AccountPanel({
+  user,
+  accessMode,
+  inviteCode,
+  registerName,
+  activationCode,
+  accountMessage,
+  generatedInvite,
+  onInviteCodeChange,
+  onRegisterNameChange,
+  onActivationCodeChange,
+  onRegister,
+  onRedeem,
+  onGenerateInvite,
+  onReset,
+}: {
+  user: UserProfile | null
+  accessMode: AccessMode
+  inviteCode: string
+  registerName: string
+  activationCode: string
+  accountMessage: string
+  generatedInvite: string
+  onInviteCodeChange: (value: string) => void
+  onRegisterNameChange: (value: string) => void
+  onActivationCodeChange: (value: string) => void
+  onRegister: () => void
+  onRedeem: () => void
+  onGenerateInvite: () => void
+  onReset: () => void
+}) {
+  return (
+    <>
+      <div className="sqh-account-card">
+        <div className="sqh-section-title">
+          <UserCircle size={16} weight="duotone" />
+          <span>账号状态</span>
+        </div>
+        <div className="sqh-user-state" data-mode={accessMode}>
+          <strong>{user?.name ?? '未注册访客'}</strong>
+          <span>{ACCESS_LABEL[accessMode]}</span>
+        </div>
+        {user && <p className="sqh-muted">邀请码：{user.inviteCodeUsed}</p>}
+        <button className="sqh-text-button" onClick={onReset}>切换公开预览</button>
+      </div>
+
+      <div className="sqh-account-card">
+        <div className="sqh-section-title">
+          <Ticket size={16} weight="duotone" />
+          <span>邀请码注册</span>
+        </div>
+        <input value={registerName} onChange={event => onRegisterNameChange(event.target.value)} aria-label="用户名" />
+        <input value={inviteCode} onChange={event => onInviteCodeChange(event.target.value)} aria-label="邀请码" />
+        <button className="sqh-primary-action" onClick={onRegister}>
+          使用邀请码注册
+        </button>
+      </div>
+
+      <div className="sqh-account-card">
+        <div className="sqh-section-title">
+          <CreditCard size={16} weight="duotone" />
+          <span>开通完整功能</span>
+        </div>
+        <input value={activationCode} onChange={event => onActivationCodeChange(event.target.value)} aria-label="付费码" />
+        <button className="sqh-primary-action" onClick={onRedeem}>
+          兑换付费码
+        </button>
+        <p className="sqh-muted">真实支付接入后，以服务端支付回调或兑换成功为准。</p>
+      </div>
+
+      <div className="sqh-account-card">
+        <div className="sqh-section-title">
+          <Sparkle size={16} weight="duotone" />
+          <span>邀请新用户</span>
+        </div>
+        <button className="sqh-primary-action" onClick={onGenerateInvite}>
+          生成邀请链接
+        </button>
+        {generatedInvite && (
+          <div className="sqh-invite-code">
+            <Copy size={15} weight="duotone" />
+            <span>https://shijieqiuhua.example/invite/{generatedInvite}</span>
+          </div>
+        )}
+      </div>
+
+      {accountMessage && (
+        <div className="sqh-message">
+          {accessMode === 'paid' ? <CheckCircle size={17} weight="duotone" /> : <WarningCircle size={17} weight="duotone" />}
+          <span>{accountMessage}</span>
+        </div>
+      )}
+    </>
   )
 }

@@ -73,6 +73,17 @@ export function askQuestionIntel(req: AskRequest, signal?: AbortSignal): Promise
   return safePost<AskResponse>('/api/intel/ask', req, signal)
 }
 
+export async function askQuestion(req: AskRequest, signal?: AbortSignal): Promise<AskResponse> {
+  const res = await fetch('/api/ask', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify(req),
+    signal,
+  })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
+
 export function fetchStats(startDate?: string, endDate?: string): Promise<DashboardStats> {
   const params = new URLSearchParams()
   if (startDate) params.set('start_date', startDate)
@@ -131,7 +142,7 @@ export function interpretAnalysis(req: AnalysisInterpretRequest): Promise<Analys
 }
 
 export function superAnalyze(req: SuperAnalysisRequest, signal?: AbortSignal): Promise<SuperAnalysisResponse> {
-  return safePost<SuperAnalysisResponse>('/api/intel/super-analysis', req, signal)
+  return safePost<SuperAnalysisResponse>('/api/super-analysis', req, signal)
 }
 
 export interface SuperAnalysisProgress {

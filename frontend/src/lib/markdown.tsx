@@ -40,11 +40,16 @@ export function parseAnalysis(md: string): Block[] {
     if (line.startsWith('```')) {
       const codeLines: string[] = []
       i++
-      while (i < lines.length && !lines[i].startsWith('```')) {
+      while (i < lines.length && !lines[i].startsWith('```') && codeLines.length < 50) {
+        if (/^(#{2,3})\s/.test(lines[i]) || /^\*\*第\d+步/.test(lines[i])) {
+          break
+        }
         codeLines.push(lines[i])
         i++
       }
-      i++
+      if (i < lines.length && lines[i].startsWith('```')) {
+        i++
+      }
       if (codeLines.length > 0) {
         blocks.push({ type: 'code', text: codeLines.join('\n') })
       }

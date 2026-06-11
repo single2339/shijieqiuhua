@@ -185,17 +185,24 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _init_indexer)
 
-    if should_prewarm_api_cache():
-        # Pre-warm dashboard cache for today's date
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        def _build_safe():
-            try:
-                _build_items(start_date=today, end_date=today)
-            except Exception:
-                log.exception("Failed to pre-warm dashboard cache")
-        loop.run_in_executor(None, _build_safe)
-
+    _cache_refresh_task: asyncio.Task | None = None
     _reindex_task: asyncio.Task | None = None
+
+    if should_prewarm_api_cache():
+        loop.run_in_executor(None, _prewarm_dashboard_cache)
+
+        async def _cache_refresh_loop():
+            interval = max(DASHBOARD_CACHE_TTL // 2, 60)
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await loop.run_in_executor(None, _prewarm_dashboard_cache)
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    log.exception("Dashboard cache refresh failed")
+
+        _cache_refresh_task = asyncio.create_task(_cache_refresh_loop())
     _agent_orch = None
 
     if should_start_background_workers():
@@ -225,6 +232,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if _cache_refresh_task is not None:
+            _cache_refresh_task.cancel()
+            try:
+                await _cache_refresh_task
+            except asyncio.CancelledError:
+                pass
         if _reindex_task is not None:
             _reindex_task.cancel()
             try:
@@ -401,7 +414,7 @@ def _init_indexer() -> None:
 # ── Dashboard cache to avoid recomputing on every poll ──
 _dashboard_cache: dict[str, tuple[float, object]] = {}
 _analysis_snapshot_locks: dict[str, asyncio.Lock] = {}
-DASHBOARD_CACHE_TTL = 60  # seconds
+DASHBOARD_CACHE_TTL = 300  # seconds — long enough to absorb a full scan (102s) + buffer
 DASHBOARD_CACHE_MAX_SIZE = 256  # prevent unbounded growth
 
 
@@ -435,6 +448,81 @@ def _cache_get(key: str) -> object | None:
         return data
     _dashboard_cache.pop(key, None)
     return None
+
+
+def _build_dashboard_data(all_items: list, page: int, page_size: int) -> DashboardData:
+    """Build DashboardData from item list — shared by endpoint and cache prewarmer."""
+    available_dates = _get_indexer().get_available_dates()
+
+    source_map: dict[str, dict] = {}
+    now_ts = datetime.now(timezone.utc).isoformat()
+    for item in all_items:
+        for src_name in item.sources:
+            if not src_name:
+                continue
+            if src_name not in source_map:
+                seed = int.from_bytes(hashlib.md5(src_name.encode()).digest()[:4], "big")
+                cred = 0.5 + (seed / 0xFFFFFFFF) * 0.4
+                source_map[src_name] = {"credibility": round(cred, 2), "count": 0, "last": ""}
+            source_map[src_name]["count"] += 1
+            last = item.captured_at or now_ts
+            if last > source_map[src_name]["last"]:
+                source_map[src_name]["last"] = last
+
+    layer_counts: dict[IntelLayer, list[float]] = {l: [] for l in IntelLayer}
+    for item in all_items:
+        layer_counts[item.layer].append(item.confidence)
+
+    layers = [
+        LayerSummary(layer=layer, count=len(confs), avg_confidence=round(sum(confs) / len(confs), 3) if confs else 0.0)
+        for layer, confs in layer_counts.items()
+    ]
+
+    sources = [
+        SourceInfo(name=name, credibility=info["credibility"], document_count=info["count"], last_seen=info["last"])
+        for name, info in sorted(source_map.items(), key=lambda x: x[1]["credibility"], reverse=True)
+    ]
+
+    total = len(all_items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged_items = all_items[start:end]
+    has_more = end < total
+
+    return DashboardData(
+        intel_items=paged_items,
+        sources=sources,
+        layers=layers,
+        total_items=total,
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+        available_dates=available_dates,
+    )
+
+
+def _prewarm_dashboard_cache() -> None:
+    """Build the most-requested dashboard cache entries on startup / periodically."""
+    hot_keys: list[tuple[str, str, str, int, int]] = [
+        ("", "", "", 1, 200),
+        ("", "", "", 1, 100),
+    ]
+    try:
+        for s, e, d, p, ps in hot_keys:
+            cache_key = f"{s}|{e}|{d}|{p}|{ps}"
+            if _cache_get(cache_key) is not None:
+                continue
+            all_items = _build_items(start_date=s or None, end_date=e or None)
+            data = _build_dashboard_data(all_items, p, ps)
+            _cache_set(cache_key, data)
+            log.info("Dashboard cache prewarmed: key=%s items=%d", cache_key, len(all_items))
+    except Exception:
+        log.exception("Failed to pre-warm dashboard cache")
+
+# Hot cache keys that the background refresher will keep warm
+_HOT_CACHE_KEYS: list[tuple[str, str, str, int, int]] = [
+    ("", "", "", 1, 200),
+]
 
 
 def _resolve_source_name(doc) -> str:
@@ -473,64 +561,13 @@ async def get_dashboard(start_date: str = "", end_date: str = "", date: str = ""
             return data
 
     def _process() -> DashboardData:
-        # When date is set, use it as both start and end for single-day view
         s_date = start_date
         e_date = end_date
         if date:
             s_date = date
             e_date = date
         all_items = _build_items(start_date=s_date, end_date=e_date)
-
-        # Get available dates from SQLite index directly (fast)
-        available_dates = _get_indexer().get_available_dates()
-
-        # Build source_map and layer_counts from ALL items (aggregates are full)
-        source_map: dict[str, dict] = {}
-        now_ts = datetime.now(timezone.utc).isoformat()
-        for item in all_items:
-            for src_name in item.sources:
-                if not src_name:
-                    continue
-                if src_name not in source_map:
-                    seed = int.from_bytes(hashlib.md5(src_name.encode()).digest()[:4], "big")
-                    cred = 0.5 + (seed / 0xFFFFFFFF) * 0.4
-                    source_map[src_name] = {"credibility": round(cred, 2), "count": 0, "last": ""}
-                source_map[src_name]["count"] += 1
-                last = item.captured_at or now_ts
-                if last > source_map[src_name]["last"]:
-                    source_map[src_name]["last"] = last
-
-        layer_counts: dict[IntelLayer, list[float]] = {l: [] for l in IntelLayer}
-        for item in all_items:
-            layer_counts[item.layer].append(item.confidence)
-
-        layers = [
-            LayerSummary(layer=layer, count=len(confs), avg_confidence=round(sum(confs) / len(confs), 3) if confs else 0.0)
-            for layer, confs in layer_counts.items()
-        ]
-
-        sources = [
-            SourceInfo(name=name, credibility=info["credibility"], document_count=info["count"], last_seen=info["last"])
-            for name, info in sorted(source_map.items(), key=lambda x: x[1]["credibility"], reverse=True)
-        ]
-
-        # Paginate intel_items
-        total = len(all_items)
-        start = (page - 1) * page_size
-        end = start + page_size
-        paged_items = all_items[start:end]
-        has_more = end < total
-
-        return DashboardData(
-            intel_items=paged_items,
-            sources=sources,
-            layers=layers,
-            total_items=total,
-            page=page,
-            page_size=page_size,
-            has_more=has_more,
-            available_dates=available_dates,
-        )
+        return _build_dashboard_data(all_items, page, page_size)
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, _process)

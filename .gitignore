@@ -6,6 +6,7 @@
 
 # Local agent/tool state
 .codex/
+.superpowers/
 .opencode/
 .claude/settings.local.json
 

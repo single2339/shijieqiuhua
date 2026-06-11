@@ -412,6 +412,9 @@ def _init_indexer() -> None:
             logging.getLogger("uvicorn").info("Indexer incremental: %d new docs", n)
 
 # ── Dashboard cache to avoid recomputing on every poll ──
+# Two-tier: master_list_cache stores raw item lists keyed by date range;
+# dashboard_data_cache stores built DashboardData keyed by full params.
+_master_list_cache: dict[str, tuple[float, list]] = {}
 _dashboard_cache: dict[str, tuple[float, object]] = {}
 _analysis_snapshot_locks: dict[str, asyncio.Lock] = {}
 DASHBOARD_CACHE_TTL = 300  # seconds — long enough to absorb a full scan (102s) + buffer
@@ -419,12 +422,13 @@ DASHBOARD_CACHE_MAX_SIZE = 256  # prevent unbounded growth
 
 
 def _evict_expired_cache() -> None:
-    """Remove expired entries from the dashboard cache."""
+    """Remove expired entries from both caches."""
     import time as _time
     now = _time.time()
-    expired = [k for k, (ts, _) in _dashboard_cache.items() if now - ts >= DASHBOARD_CACHE_TTL]
-    for k in expired:
-        del _dashboard_cache[k]
+    for cache in (_master_list_cache, _dashboard_cache):
+        expired = [k for k, (ts, _) in cache.items() if now - ts >= DASHBOARD_CACHE_TTL]
+        for k in expired:
+            del cache[k]
 
 
 def _cache_set(key: str, value: object) -> None:
@@ -448,6 +452,33 @@ def _cache_get(key: str) -> object | None:
         return data
     _dashboard_cache.pop(key, None)
     return None
+
+
+def _master_cache_key(start_date: str, end_date: str, date: str) -> str:
+    return f"_items:{start_date}|{end_date}|{date}"
+
+
+def _get_or_build_items(start_date: str, end_date: str, date: str) -> list:
+    """Get item list from master cache, or build and cache it (the expensive part)."""
+    import time as _time
+    key = _master_cache_key(start_date, end_date, date)
+    cached = _master_list_cache.get(key)
+    if cached:
+        ts, items = cached
+        if _time.time() - ts < DASHBOARD_CACHE_TTL:
+            return items
+    s_date = start_date or None
+    e_date = end_date or None
+    if date:
+        s_date = date
+        e_date = date
+    items = _build_items(start_date=s_date, end_date=e_date)
+    _evict_expired_cache()
+    if len(_master_list_cache) >= DASHBOARD_CACHE_MAX_SIZE:
+        oldest = min(_master_list_cache.items(), key=lambda x: x[1][0])
+        del _master_list_cache[oldest[0]]
+    _master_list_cache[key] = (_time.time(), items)
+    return items
 
 
 def _build_dashboard_data(all_items: list, page: int, page_size: int) -> DashboardData:
@@ -503,26 +534,26 @@ def _build_dashboard_data(all_items: list, page: int, page_size: int) -> Dashboa
 
 def _prewarm_dashboard_cache() -> None:
     """Build the most-requested dashboard cache entries on startup / periodically."""
-    hot_keys: list[tuple[str, str, str, int, int]] = [
-        ("", "", "", 1, 200),
-        ("", "", "", 1, 100),
-    ]
+    # First, populate the master list cache (the expensive scan)
     try:
-        for s, e, d, p, ps in hot_keys:
-            cache_key = f"{s}|{e}|{d}|{p}|{ps}"
+        all_items = _get_or_build_items("", "", "")
+        log.info("Dashboard master cache prewarmed: %d items", len(all_items))
+    except Exception:
+        log.exception("Failed to pre-warm dashboard master cache")
+        return
+
+    # Then build hot page variants from the now-cached master list
+    hot_keys: list[tuple[int, int]] = [(1, 200), (1, 100)]
+    try:
+        for p, ps in hot_keys:
+            cache_key = f"||||{p}|{ps}"
             if _cache_get(cache_key) is not None:
                 continue
-            all_items = _build_items(start_date=s or None, end_date=e or None)
             data = _build_dashboard_data(all_items, p, ps)
             _cache_set(cache_key, data)
-            log.info("Dashboard cache prewarmed: key=%s items=%d", cache_key, len(all_items))
+            log.info("Dashboard page cache prewarmed: key=%s", cache_key)
     except Exception:
-        log.exception("Failed to pre-warm dashboard cache")
-
-# Hot cache keys that the background refresher will keep warm
-_HOT_CACHE_KEYS: list[tuple[str, str, str, int, int]] = [
-    ("", "", "", 1, 200),
-]
+        log.exception("Failed to pre-warm dashboard page cache")
 
 
 def _resolve_source_name(doc) -> str:
@@ -561,12 +592,7 @@ async def get_dashboard(start_date: str = "", end_date: str = "", date: str = ""
             return data
 
     def _process() -> DashboardData:
-        s_date = start_date
-        e_date = end_date
-        if date:
-            s_date = date
-            e_date = date
-        all_items = _build_items(start_date=s_date, end_date=e_date)
+        all_items = _get_or_build_items(start_date, end_date, date)
         return _build_dashboard_data(all_items, page, page_size)
 
     loop = asyncio.get_running_loop()
@@ -626,6 +652,7 @@ async def collect_status():
 async def trigger_merge():
     """Manually trigger the daily content merge task."""
     _dashboard_cache.clear()
+    _master_list_cache.clear()
     result = await asyncio.get_running_loop().run_in_executor(
         None, lambda: build_merge_index(STORAGE)
     )
@@ -720,6 +747,7 @@ async def trigger_reclassify(force: bool = Query(False), use_llm: bool = Query(F
             await asyncio.sleep(0.1)
 
     _dashboard_cache.clear()
+    _master_list_cache.clear()
     return {
         "status": "ok",
         "total": total,
@@ -738,6 +766,7 @@ async def trigger_reindex():
     new = idx.incremental_update()
     after = idx.count()
     _dashboard_cache.clear()
+    _master_list_cache.clear()
     return {
         "status": "ok",
         "before": before,

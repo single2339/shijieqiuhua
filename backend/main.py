@@ -304,8 +304,8 @@ async def cache_control_middleware(request: Request, call_next):
 # ── Simple in-memory rate limiter ──
 _rate_limit_store: dict[str, list[float]] = {}
 _RATE_LIMIT_WINDOW = 60  # seconds
-_RATE_LIMIT_MAX = 120    # max requests per window per IP
-_RATE_LIMIT_WRITE_MAX = 20  # stricter for POST endpoints
+_RATE_LIMIT_MAX = 300    # max requests per window per IP
+_RATE_LIMIT_WRITE_MAX = 60  # stricter for POST endpoints
 
 # ── Public API paths (no auth required) ──
 _PUBLIC_PREFIXES = (

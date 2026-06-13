@@ -148,7 +148,16 @@ def logout(request: Request):
     return resp
 
 
-@router.get("/me", response_model=UserInfo)
+@router.get("/me")
 def me(request: Request):
     user = get_current_user(request)
-    return UserInfo(**user)
+    from backend.auth.db import get_db
+    conn = get_db()
+    entitlements = []
+    row = conn.execute(
+        "SELECT type, granted_at, expires_at FROM entitlement WHERE user_id=?",
+        (user["id"],),
+    ).fetchone()
+    if row:
+        entitlements.append({"type": row["type"], "granted_at": row["granted_at"], "expires_at": row["expires_at"]})
+    return {**UserInfo(**user).model_dump(), "entitlements": entitlements}

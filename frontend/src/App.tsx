@@ -1,21 +1,56 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Clock, Question } from '@phosphor-icons/react'
 import { motion } from 'framer-motion'
-import { askFootballQuestion } from './shijieqiuhua/api'
+import {
+  askFootballQuestion, createFootballOsintJob, getMe, loginUser, logoutUser, registerUser,
+} from './shijieqiuhua/api'
+import type { AuthUser } from './shijieqiuhua/api'
 import { MATCHES } from './shijieqiuhua/mockData'
-import type { FootballMatch, FootballQuestionAnswer } from './shijieqiuhua/types'
+import type { FootballMatch, FootballOsintJob, FootballQuestionAnswer } from './shijieqiuhua/types'
 import AuthGate from './shijieqiuhua/components/AuthGate'
 import type { UserTier } from './shijieqiuhua/components/AuthGate'
 import AccountStatus from './shijieqiuhua/components/AccountStatus'
+import EvidenceStrength from './shijieqiuhua/components/EvidenceStrength'
 import './shijieqiuhua.css'
 
 export default function App() {
   const [selectedId, setSelectedId] = useState(MATCHES[0].id)
   const [question, setQuestion] = useState('上半场角球会不会偏多？')
   const [answer, setAnswer] = useState<FootballQuestionAnswer | null>(null)
+  const [osintJob, setOsintJob] = useState<FootballOsintJob | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [userTier] = useState<UserTier>('paid') // W3.5 wire real auth
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [loginUser_, setLoginUser_] = useState('')
+  const [loginPass, setLoginPass] = useState('')
+  const [loginInvite, setLoginInvite] = useState('')
+  const [loginMode, setLoginMode] = useState<'login' | 'register'>('login')
+  const [authError, setAuthError] = useState('')
+
+  useEffect(() => { getMe().then(setUser).finally(() => setAuthLoading(false)) }, [])
+
+  const userTier: UserTier = useMemo(() => {
+    if (!user) return 'guest'
+    const hasPaid = user.entitlements?.some(e => e.type === 'full_analysis'
+      && (!e.expires_at || e.expires_at > new Date().toISOString()))
+    return hasPaid ? 'paid' : 'free'
+  }, [user])
+
+  async function handleAuth() {
+    setAuthError('')
+    try {
+      const u = loginMode === 'login'
+        ? await loginUser(loginUser_, loginPass)
+        : await registerUser(loginUser_, loginPass, loginInvite)
+      setUser(u)
+      setLoginUser_(''); setLoginPass(''); setLoginInvite('')
+    } catch (e) {
+      setAuthError(e instanceof Error ? e.message : '认证失败')
+    }
+  }
+
+  async function handleLogout() { await logoutUser(); setUser(null) }
 
   const selectedMatch = useMemo(
     () => MATCHES.find(m => m.id === selectedId) ?? MATCHES[0],
@@ -27,14 +62,21 @@ export default function App() {
     setLoading(true)
     setError('')
     setAnswer(null)
+    setOsintJob(null)
+    const request = {
+      home_team: selectedMatch.homeTeam,
+      away_team: selectedMatch.awayTeam,
+      kickoff_at: selectedMatch.kickoffAt,
+      competition: selectedMatch.league,
+      question: next,
+    }
     try {
-      setAnswer(await askFootballQuestion({
-        home_team: selectedMatch.homeTeam,
-        away_team: selectedMatch.awayTeam,
-        kickoff_at: selectedMatch.kickoffAt,
-        competition: selectedMatch.league,
-        question: next,
-      }))
+      const [job, qa] = await Promise.all([
+        createFootballOsintJob(request).catch(() => null),
+        askFootballQuestion(request),
+      ])
+      setAnswer(qa)
+      setOsintJob(job)
     } catch (e) {
       setError(e instanceof Error ? e.message : '问题处理失败')
     } finally {
@@ -69,23 +111,55 @@ export default function App() {
 
         {/* center */}
         <MatchCard match={selectedMatch} question={question} answer={answer}
-          loading={loading} error={error} userTier={userTier}
+          osintJob={osintJob} loading={loading} error={error} userTier={userTier}
           onChange={setQuestion} onAsk={() => ask()} onPreset={ask} />
 
         {/* right */}
         <aside className="sqh-panel sqh-ask-panel">
-          <AccountStatus tier={userTier} nickname="球友" />
-          <AuthGate tier={userTier} requiredTier="paid">
-            <div className="sqh-section-title"><Question size={16} weight="duotone" /><span>问答历史</span></div>
-            {answer ? (
-              <div style={{ fontSize: 12, color: '#6d725f', marginTop: 8 }}>
-                最近：{question.slice(0, 30)}…<br />判断：{answer.judgment || '—'}
+          {authLoading ? (
+            <span style={{ fontSize: 12, color: '#6d725f' }}>加载中…</span>
+          ) : user ? (
+            <>
+              <AccountStatus tier={userTier} nickname={user.username} />
+              <AuthGate tier={userTier} requiredTier="paid">
+                <div className="sqh-section-title"><Question size={16} weight="duotone" /><span>问答历史</span></div>
+                {answer ? (
+                  <div style={{ fontSize: 12, color: '#6d725f', marginTop: 8 }}>
+                    最近：{question.slice(0, 30)}…<br />判断：{answer.judgment || '—'}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: 12, color: '#6d725f', marginTop: 8 }}>暂无记录，选择比赛开始提问</p>
+                )}
+              </AuthGate>
+              <button style={{ marginTop: 8, border: '1px solid #e3d8c7', borderRadius: 8, background: 'transparent', padding: '6px 12px', cursor: 'pointer', fontSize: 12 }} onClick={handleLogout}>退出</button>
+            </>
+          ) : (
+            <div>
+              <AccountStatus tier="guest" />
+              <div style={{ marginTop: 12 }}>
+                <div className="sqh-section-title"><span>{loginMode === 'login' ? '登录' : '注册'}</span></div>
+                <input style={{ width: '100%', marginTop: 8, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
+                  placeholder="用户名" value={loginUser_} onChange={e => setLoginUser_(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
+                <input style={{ width: '100%', marginTop: 6, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
+                  type="password" placeholder="密码" value={loginPass} onChange={e => setLoginPass(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
+                {loginMode === 'register' && (
+                  <input style={{ width: '100%', marginTop: 6, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
+                    placeholder="邀请码" value={loginInvite} onChange={e => setLoginInvite(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
+                )}
+                {authError && <div style={{ marginTop: 6, fontSize: 11, color: '#8a523f' }}>{authError}</div>}
+                <button style={{ marginTop: 8, width: '100%', border: 0, borderRadius: 8, background: '#143c2d', color: '#f8f1df', padding: '8px', fontWeight: 900, cursor: 'pointer' }}
+                  onClick={handleAuth}>{loginMode === 'login' ? '登录' : '注册'}</button>
+                <button style={{ marginTop: 4, width: '100%', border: 0, borderRadius: 8, background: 'transparent', color: '#6d725f', padding: '6px', fontSize: 11, cursor: 'pointer' }}
+                  onClick={() => { setLoginMode(loginMode === 'login' ? 'register' : 'login'); setAuthError('') }}>
+                  {loginMode === 'login' ? '没有账号？注册' : '已有账号？登录'}
+                </button>
               </div>
-            ) : (
-              <p style={{ fontSize: 12, color: '#6d725f', marginTop: 8 }}>暂无记录，选择比赛开始提问</p>
-            )}
-            <div style={{ marginTop: 12, fontSize: 11, color: '#c9a86a' }}>研判结论不构成投注建议</div>
-          </AuthGate>
+            </div>
+          )}
+          <div style={{ marginTop: 12, fontSize: 11, color: '#c9a86a' }}>研判结论不构成投注建议</div>
         </aside>
       </section>
     </main>
@@ -94,9 +168,9 @@ export default function App() {
 
 // ── MatchQuestionCard ──
 
-function MatchCard({ match, question, answer, loading, error, userTier, onChange, onAsk, onPreset }: {
+function MatchCard({ match, question, answer, osintJob, loading, error, userTier, onChange, onAsk, onPreset }: {
   match: FootballMatch; question: string; answer: FootballQuestionAnswer | null
-  loading: boolean; error: string; userTier: UserTier
+  osintJob: FootballOsintJob | null; loading: boolean; error: string; userTier: UserTier
   onChange: (v: string) => void; onAsk: () => void; onPreset: (v: string) => void
 }) {
   return (
@@ -136,6 +210,26 @@ function MatchCard({ match, question, answer, loading, error, userTier, onChange
           )}
         </div>
       </AuthGate>
+
+      {/* evidence — shown when full OSINT job data is available */}
+      {osintJob && osintJob.evidence.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <EvidenceStrength evidence={osintJob.evidence} factors={osintJob.factors} />
+        </div>
+      )}
+
+      {/* prediction summary — shown from OSINT job */}
+      {osintJob?.prediction && (
+        <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: '#edf3e8', fontSize: 13, lineHeight: 1.6 }}>
+          <strong>OSINT 研判 · {osintJob.confidence?.level ?? '—'}</strong>
+          <p style={{ margin: '4px 0 0' }}>{osintJob.prediction.summary}</p>
+          {osintJob.prediction.drivers.length > 0 && (
+            <span style={{ color: '#6d725f', fontSize: 11 }}>
+              关键因子：{osintJob.prediction.drivers.join('、')}
+            </span>
+          )}
+        </div>
+      )}
     </section>
   )
 }

@@ -32,3 +32,39 @@ export async function fetchFootballOsintJob(jobId: string): Promise<FootballOsin
   const res = await fetch(`/api/football/osint/jobs/${encodeURIComponent(jobId)}`)
   return readJson<FootballOsintJob>(res)
 }
+
+// ── auth ──
+
+export interface AuthUser {
+  id: number; username: string; email: string; role: string
+  is_active: boolean; created_at: string; last_login_at: string
+  entitlements: { type: string; granted_at: string; expires_at: string | null }[]
+}
+
+export async function getMe(): Promise<AuthUser | null> {
+  const res = await fetch('/api/auth/me')
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function loginUser(username: string, password: string): Promise<AuthUser> {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify({ username, password }),
+  })
+  return readJson<{ user: AuthUser }>(res).then(r => r.user)
+}
+
+export async function registerUser(username: string, password: string, inviteCode: string): Promise<AuthUser> {
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify({ username, password, invite_code: inviteCode, email: '' }),
+  })
+  return readJson<{ user: AuthUser }>(res).then(r => r.user)
+}
+
+export async function logoutUser(): Promise<void> {
+  await fetch('/api/auth/logout', { method: 'POST' })
+}

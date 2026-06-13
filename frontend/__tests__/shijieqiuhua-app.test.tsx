@@ -3,14 +3,18 @@ import { describe, expect, test } from 'vitest'
 import App from '../src/App'
 
 describe('shijieqiuhua app shell', () => {
-  test('renders three-column layout with brand, paid user, and disclaimer', () => {
+  test('renders brand, match rail, and disclaimer in initial auth-loading state', () => {
     const html = renderToString(<App />)
+    // brand always visible
     expect(html).toContain('世界球花')
-    expect(html).toContain('继续问这场比赛')
+    // left rail always visible
     expect(html).toContain('今日赛事')
-    expect(html).toContain('问答历史')
-    expect(html).toContain('已付费')
-    expect(html).not.toContain('邀请码注册后继续')
+    expect(html).toContain('阿根廷')
+    // right panel: auth loading (SSR doesn't run useEffect)
+    expect(html).toContain('加载中')
+    // disclaimer always visible
     expect(html).toContain('不构成投注建议')
+    // AuthGate blocks the question input for unauthenticated users
+    expect(html).toContain('使用邀请码注册后继续')
   })
 })

@@ -119,6 +119,7 @@ from backend.websocket.manager import ws_manager
 from backend.auth.routes import router as auth_router, get_current_user
 from backend.auth.admin_routes import router as admin_router
 from backend.auth.tracking import record_activity
+from backend.football_osint.routes import router as football_osint_router
 
 # Import agent modules so they self-register via AgentRegistry
 import backend.agents.collectors.api_collectors  # noqa: F401
@@ -267,6 +268,7 @@ async def body_size_limit_middleware(request: Request, call_next):
 # ── Auth routes ──
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(admin_router, prefix="/api/admin")
+app.include_router(football_osint_router)
 
 # Cache-Control middleware — short TTL for live data, longer for analysis snapshots
 _CACHE_RULES: dict[str, str] = {

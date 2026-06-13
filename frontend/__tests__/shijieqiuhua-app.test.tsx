@@ -3,14 +3,14 @@ import { describe, expect, test } from 'vitest'
 import App from '../src/App'
 
 describe('shijieqiuhua app shell', () => {
-  test('renders the football question flow without access-control panels', () => {
+  test('renders three-column layout with brand, paid user, and disclaimer', () => {
     const html = renderToString(<App />)
-
     expect(html).toContain('世界球花')
     expect(html).toContain('继续问这场比赛')
-    expect(html).not.toContain('邀请码')
-    expect(html).not.toContain('付费码')
-    expect(html).not.toContain('完整证据')
-    expect(html).not.toContain('账号状态')
+    expect(html).toContain('今日赛事')
+    expect(html).toContain('问答历史')
+    expect(html).toContain('已付费')
+    expect(html).not.toContain('邀请码注册后继续')
+    expect(html).toContain('不构成投注建议')
   })
 })

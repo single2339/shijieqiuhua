@@ -10,6 +10,8 @@ STORAGE_ROOT = Path("bronze_storage")
 DB_PATH = STORAGE_ROOT / "_auth.db"
 
 _local = threading.local()
+_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "sql"
+_EXTRA_MIGRATIONS = ("003_billing_and_entitlements.sql",)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -78,6 +80,10 @@ def get_db() -> sqlite3.Connection:
         _local.conn.execute("PRAGMA journal_mode=WAL")
         _local.conn.execute("PRAGMA foreign_keys=ON")
         _local.conn.executescript(SCHEMA)
+        for migration in _EXTRA_MIGRATIONS:
+            sql_path = _MIGRATIONS_DIR / migration
+            if sql_path.exists():
+                _local.conn.executescript(sql_path.read_text(encoding="utf-8"))
     return _local.conn
 
 

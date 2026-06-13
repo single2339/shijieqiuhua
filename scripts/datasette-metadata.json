@@ -1,0 +1,81 @@
+{
+  "title": "世界球花 v1 — Telemetry Dashboard",
+  "description_html": "<p>Internal dashboard. Auth handled by nginx in production. Pre-baked queries below cover the Daily Pulse and Weekly Funnel from <code>02-dashboards.md</code>.</p>",
+  "license": "Proprietary",
+  "databases": {
+    "_telemetry": {
+      "queries": {
+        "01_dau": {
+          "title": "DAU (last 30 days)",
+          "description": "Distinct active user_id per day. Target ≥ 10/day at 7d, ≥ 30/day at 30d.",
+          "sql": "SELECT date(ts) AS day, COUNT(DISTINCT user_id) AS dau FROM telemetry_event WHERE user_id IS NOT NULL AND event_name IN ('research.dashboard_view','research.answer_attempt','research.dimension_attempt') AND ts >= datetime('now','-30 days') GROUP BY date(ts) ORDER BY day DESC"
+        },
+        "02_register_daily": {
+          "title": "New registrations per day",
+          "description": "auth.register_success count. Target ≥ 1/day.",
+          "sql": "SELECT date(ts) AS day, COUNT(*) AS new_users FROM telemetry_event WHERE event_name='auth.register_success' AND ts >= datetime('now','-30 days') GROUP BY date(ts) ORDER BY day DESC"
+        },
+        "03_paid_daily": {
+          "title": "New paid users per day",
+          "description": "billing.redeem_success count. Target ≥ 5/week.",
+          "sql": "SELECT date(ts) AS day, COUNT(*) AS new_paid FROM telemetry_event WHERE event_name='billing.redeem_success' AND ts >= datetime('now','-30 days') GROUP BY date(ts) ORDER BY day DESC"
+        },
+        "04_questions_daily": {
+          "title": "Questions per day (free vs chip)",
+          "description": "Free-form vs 6-dim chip questions. Target ≥ 30/day at 30d.",
+          "sql": "SELECT date(ts) AS day, SUM(CASE WHEN event_name='research.answer_attempt' THEN 1 ELSE 0 END) AS free_q, SUM(CASE WHEN event_name='research.dimension_attempt' THEN 1 ELSE 0 END) AS chip_q FROM telemetry_event WHERE event_name IN ('research.answer_attempt','research.dimension_attempt') AND ts >= datetime('now','-30 days') GROUP BY date(ts) ORDER BY day DESC"
+        },
+        "05_error_rate_hourly": {
+          "title": "5xx error rate (last 7 days, hourly)",
+          "description": "Target < 1% (7d), < 0.5% (30d).",
+          "sql": "SELECT strftime('%Y-%m-%d %H:00', ts) AS hour, SUM(CASE WHEN event_name='system.error_5xx' THEN 1 ELSE 0 END) AS errors, COUNT(*) AS total, ROUND(100.0 * SUM(CASE WHEN event_name='system.error_5xx' THEN 1 ELSE 0 END) / COUNT(*), 2) AS error_pct FROM telemetry_event WHERE ts >= datetime('now','-7 days') GROUP BY strftime('%Y-%m-%d %H:00', ts) ORDER BY hour DESC"
+        },
+        "06_dashboard_p95": {
+          "title": "Dashboard P95 latency (NFR-1, target < 5000ms)",
+          "description": "Approx P95 per day. NFR-1 P95 < 5s for paid users.",
+          "sql": "WITH d AS (SELECT date(ts) AS day, duration_ms FROM telemetry_event WHERE event_name='research.dashboard_completed' AND status='ok' AND ts >= datetime('now','-7 days')) SELECT day, COUNT(*) AS n, MIN(duration_ms) AS min_ms, MAX(duration_ms) AS max_ms FROM d GROUP BY day ORDER BY day DESC"
+        },
+        "07_pipeline_p95": {
+          "title": "Pipeline P95 latency (NFR-2, target < 30000ms)",
+          "description": "Approx P95 per day for pipeline.job_completed.",
+          "sql": "WITH d AS (SELECT date(ts) AS day, duration_ms FROM telemetry_event WHERE event_name='pipeline.job_completed' AND ts >= datetime('now','-7 days')) SELECT day, COUNT(*) AS n, MIN(duration_ms) AS min_ms, MAX(duration_ms) AS max_ms FROM d GROUP BY day ORDER BY day DESC"
+        },
+        "08_info_insufficient_rate": {
+          "title": "info_insufficient trigger rate",
+          "description": "Healthy band: 30%-60%. Above 70% triggers ALERT-11 (RISK-3).",
+          "sql": "SELECT date(ts) AS day, COUNT(*) AS dashboard_views, SUM(CASE WHEN json_extract(payload_json,'$.lean')='info_insufficient' THEN 1 ELSE 0 END) AS info_insufficient, ROUND(100.0 * SUM(CASE WHEN json_extract(payload_json,'$.lean')='info_insufficient' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 1) AS pct FROM telemetry_event WHERE event_name='research.dashboard_view' AND ts >= datetime('now','-7 days') GROUP BY date(ts) ORDER BY day DESC"
+        },
+        "09_funnel_weekly": {
+          "title": "Funnel — last 7 days",
+          "description": "Invite visit → register → unlock view → redeem attempt → success. Target invite→paid ≥ 15% (7d).",
+          "sql": "WITH this_week AS (SELECT user_id, event_name FROM telemetry_event WHERE ts >= datetime('now','-7 days') AND event_name IN ('auth.invite_visit','auth.register_success','billing.unlock_view','billing.redeem_attempt','billing.redeem_success')) SELECT SUM(CASE WHEN event_name='auth.invite_visit' THEN 1 ELSE 0 END) AS step1_visit, SUM(CASE WHEN event_name='auth.register_success' THEN 1 ELSE 0 END) AS step2_register, SUM(CASE WHEN event_name='billing.unlock_view' THEN 1 ELSE 0 END) AS step3_unlock_view, SUM(CASE WHEN event_name='billing.redeem_attempt' THEN 1 ELSE 0 END) AS step4_redeem_attempt, SUM(CASE WHEN event_name='billing.redeem_success' THEN 1 ELSE 0 END) AS step5_redeem_success FROM this_week"
+        },
+        "10_d1_retention": {
+          "title": "D1 retention by cohort",
+          "description": "Did user return the day after registration? Target ≥ 40% (7d), ≥ 50% (30d).",
+          "sql": "WITH cohort AS (SELECT user_id, date(ts) AS reg_date FROM telemetry_event WHERE event_name='auth.register_success' AND ts >= datetime('now','-30 days')) SELECT c.reg_date, COUNT(DISTINCT c.user_id) AS cohort_size, COUNT(DISTINCT CASE WHEN EXISTS (SELECT 1 FROM telemetry_event t WHERE t.user_id=c.user_id AND date(t.ts)=date(c.reg_date,'+1 day')) THEN c.user_id END) AS d1_returned, ROUND(100.0 * COUNT(DISTINCT CASE WHEN EXISTS (SELECT 1 FROM telemetry_event t WHERE t.user_id=c.user_id AND date(t.ts)=date(c.reg_date,'+1 day')) THEN c.user_id END) / NULLIF(COUNT(DISTINCT c.user_id), 0), 1) AS d1_pct FROM cohort c GROUP BY c.reg_date ORDER BY c.reg_date DESC"
+        },
+        "11_adapter_health": {
+          "title": "Adapter success rate (last 7 days)",
+          "description": "ALERT-12 fires if any adapter ok_pct < 30% for 24h.",
+          "sql": "SELECT json_extract(payload_json,'$.adapter') AS adapter, COUNT(*) AS total, SUM(CASE WHEN json_extract(payload_json,'$.status')='ok' THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN json_extract(payload_json,'$.status')='failed' THEN 1 ELSE 0 END) AS failed, SUM(CASE WHEN json_extract(payload_json,'$.status')='skipped' THEN 1 ELSE 0 END) AS skipped, ROUND(100.0 * SUM(CASE WHEN json_extract(payload_json,'$.status')='ok' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 1) AS ok_pct FROM telemetry_event WHERE event_name='pipeline.adapter_called' AND ts >= datetime('now','-7 days') GROUP BY json_extract(payload_json,'$.adapter') ORDER BY ok_pct ASC"
+        },
+        "12_llm_usage": {
+          "title": "LLM token usage (last 30 days)",
+          "description": "Multiply by DeepSeek pricing for monthly cost. Target < ¥500/month.",
+          "sql": "SELECT date(ts) AS day, json_extract(payload_json,'$.purpose') AS purpose, COUNT(*) AS calls, SUM(CAST(json_extract(payload_json,'$.prompt_tokens') AS INTEGER)) AS prompt_tok, SUM(CAST(json_extract(payload_json,'$.completion_tokens') AS INTEGER)) AS completion_tok FROM telemetry_event WHERE event_name='llm.call_completed' AND status='ok' AND ts >= datetime('now','-30 days') GROUP BY date(ts), json_extract(payload_json,'$.purpose') ORDER BY day DESC, purpose"
+        },
+        "13_recent_alerts": {
+          "title": "Recently fired alerts (last 7 days)",
+          "description": "Audit trail of ALERT-* with delivery status.",
+          "sql": "SELECT rule_id, severity, fired_at, delivery_status, sent_to, payload_json FROM alert_fired WHERE fired_at >= datetime('now','-7 days') ORDER BY fired_at DESC"
+        },
+        "14_event_volume": {
+          "title": "Event volume by name (last 7 days)",
+          "description": "Sanity check that all expected event names are showing up.",
+          "sql": "SELECT event_name, COUNT(*) AS n, MIN(ts) AS first_ts, MAX(ts) AS last_ts FROM telemetry_event WHERE ts >= datetime('now','-7 days') GROUP BY event_name ORDER BY n DESC"
+        }
+      }
+    }
+  }
+}

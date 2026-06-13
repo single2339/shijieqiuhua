@@ -269,6 +269,8 @@ async def body_size_limit_middleware(request: Request, call_next):
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(admin_router, prefix="/api/admin")
 app.include_router(football_osint_router)
+from backend.billing.routes import router as billing_router
+app.include_router(billing_router)
 
 # Cache-Control middleware — short TTL for live data, longer for analysis snapshots
 _CACHE_RULES: dict[str, str] = {

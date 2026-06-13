@@ -29,4 +29,6 @@ __all__ = [
     "generate_codes",
     "has_entitlement",
     "redeem_code",
+    "billing_router",
 ]
+from .routes import router as billing_router  # noqa: E402

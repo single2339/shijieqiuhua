@@ -14,5 +14,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["src"]
+  "include": [
+    "src/vite-env.d.ts",
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/components/ErrorBoundary.tsx",
+    "src/shijieqiuhua/**/*.ts",
+    "src/shijieqiuhua/**/*.tsx"
+  ]
 }

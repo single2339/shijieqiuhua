@@ -203,10 +203,16 @@ def redeem_code(
             "UPDATE activation_code SET status='used', granted_to_user_id=?, redeemed_at=? WHERE code=?",
             (user_id, now, code),
         )
-        cur = conn.execute(
+        # UPSERT: a previously expired entitlement row still exists (UNIQUE on
+        # user_id+type), so a plain INSERT would fail. Renew it in place.
+        conn.execute(
             """
             INSERT INTO entitlement (user_id, type, granted_at, expires_at, source)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, type) DO UPDATE SET
+                granted_at=excluded.granted_at,
+                expires_at=excluded.expires_at,
+                source=excluded.source
             """,
             (
                 user_id,
@@ -216,7 +222,10 @@ def redeem_code(
                 f"code:{code}",
             ),
         )
-        entitlement_id = cur.lastrowid
+        entitlement_id = conn.execute(
+            "SELECT id FROM entitlement WHERE user_id=? AND type=?",
+            (user_id, EntitlementType.FULL_ANALYSIS.value),
+        ).fetchone()["id"]
         audit.write(
             event="billing.code_redeemed",
             actor="user",

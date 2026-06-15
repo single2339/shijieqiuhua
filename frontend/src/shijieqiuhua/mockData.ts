@@ -1,10 +1,10 @@
 import type { FixtureStatus, FootballMatch, MatchQuestion } from './types'
 
 export const QUESTION_PRESETS: MatchQuestion[] = [
-  { id: 'half', label: '半场', prompt: '上半场哪一方更容易占据主动？' },
-  { id: 'cards', label: '红黄牌', prompt: '本场红黄牌风险是否偏高？' },
-  { id: 'corners', label: '角球', prompt: '上半场角球会不会偏多？' },
-  { id: 'goals', label: '进球数', prompt: '全场进球数压力更偏大还是偏小？' },
+  { id: 'half', label: '半场', prompt: '上半场比分预计是多少？' },
+  { id: 'cards', label: '红黄牌', prompt: '全场红黄牌的预测数量是多少？' },
+  { id: 'corners', label: '角球', prompt: '全场角球数预测是多少？' },
+  { id: 'goals', label: '进球数', prompt: '全场比分预测是多少？' },
   { id: 'player', label: '球员', prompt: '核心球员状态会怎样影响比赛？' },
   { id: 'risk', label: '风险', prompt: '这场比赛最大的临场风险是什么？' },
 ]

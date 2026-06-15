@@ -32,7 +32,7 @@ export default function App() {
   const [matches, setMatches] = useState<FootballMatch[]>([])
   const [fixturesLoading, setFixturesLoading] = useState(true)
   const [selectedId, setSelectedId] = useState('')
-  const [question, setQuestion] = useState('上半场角球会不会偏多？')
+  const [question, setQuestion] = useState('全场角球数预测是多少？')
   const [answer, setAnswer] = useState<FootballQuestionAnswer | null>(null)
   const [osintJob, setOsintJob] = useState<FootballOsintJob | null>(null)
   const [loading, setLoading] = useState(false)
@@ -349,7 +349,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
           <div className="sqh-input-row">
             <input value={question} onChange={e => onChange(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') onAsk() }}
-              placeholder="例如：本场红黄牌风险是否偏高？" />
+              placeholder="例如：全场红黄牌的预测数量是多少？" />
             <motion.button whileTap={{ scale: 0.96 }} onClick={onAsk}>
               {loading ? '判断中' : '提问'}<ArrowRight size={15} weight="bold" />
             </motion.button>

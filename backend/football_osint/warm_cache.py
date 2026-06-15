@@ -19,10 +19,10 @@ log = logging.getLogger(__name__)
 
 # Must match frontend/src/shijieqiuhua/mockData.ts QUESTION_PRESETS prompts.
 PRESET_QUESTIONS: list[str] = [
-    "上半场哪一方更容易占据主动？",
-    "本场红黄牌风险是否偏高？",
-    "上半场角球会不会偏多？",
-    "全场进球数压力更偏大还是偏小？",
+    "上半场比分预计是多少？",
+    "全场红黄牌的预测数量是多少？",
+    "全场角球数预测是多少？",
+    "全场比分预测是多少？",
     "核心球员状态会怎样影响比赛？",
     "这场比赛最大的临场风险是什么？",
 ]

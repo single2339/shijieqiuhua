@@ -193,6 +193,7 @@ def _is_match_related(request: FootballOsintJobRequest) -> bool:
         "平",
         "负",
         "进球",
+        "比分",
         "角球",
         "红黄牌",
         "半场",

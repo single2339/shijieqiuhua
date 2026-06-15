@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
 
 from .adapters import football_data_schedule
 from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
@@ -87,13 +86,11 @@ async def _warm_match(fixture: football_data_schedule.Fixture) -> None:
 
 async def _warm_today_matches() -> None:
     fixtures = await asyncio.to_thread(football_data_schedule.fetch_fixtures, 1)
-    today = datetime.now(football_data_schedule.CST).date()
-    todays = [
-        f for f in fixtures
-        if f.status != "finished" and f.kickoff_at.astimezone(football_data_schedule.CST).date() == today
-    ]
-    log.warning("football osint warm cache: starting %d match(es) for today", len(todays[:_WARM_MAX_MATCHES]))
-    for fixture in todays[:_WARM_MAX_MATCHES]:
+    # live + not-yet-kicked-off fixtures — covers late-night CST kickoffs that
+    # fall on "tomorrow" by calendar date but are still "today's matches".
+    candidates = football_data_schedule.upcoming(fixtures)
+    log.warning("football osint warm cache: starting %d match(es)", len(candidates[:_WARM_MAX_MATCHES]))
+    for fixture in candidates[:_WARM_MAX_MATCHES]:
         await _warm_match(fixture)
     log.warning("football osint warm cache: pass complete, %d cached answers", len(_warm_answers))
 

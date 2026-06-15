@@ -244,39 +244,36 @@ interface Section { title: string; body: string }
 function StructuredReport({ text }: { text: string }) {
   if (!text) return null
 
-  // Only activate for structured LLM synthesis reports.
-  if (!text.includes('【')) {
-    return <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+  // Strip intro fluff.
+  const cleaned = text.replace(/^好的[，,]\s*基于[^。\n]*。?\n*/s, '').replace(/^---+\s*\n*/m, '')
+
+  // When the LLM used 【Section】 markers, render as structured cards.
+  if (cleaned.includes('【')) {
+    const sections = parseSections(cleaned)
+    return (
+      <div className="sqh-structured-report">
+        {sections.map((sec, i) => {
+          const meta = SECTION_META[sec.title]
+          if (!meta) return <p key={i} style={{ whiteSpace: 'pre-wrap' }}>{sec.body}</p>
+          const bodyHtml = fmtBody(sec.body, sec.title)
+          return (
+            <div key={i} className="sqh-report-section" style={{ background: meta.bg, marginTop: i === 0 ? 8 : 10 }}>
+              <div className="sqh-report-section-hd" style={{ color: meta.color }}>
+                <span>{meta.icon}</span><strong>{sec.title}</strong>
+                {sec.title === '置信度' && <ConfidenceBadge body={sec.body} />}
+              </div>
+              <div className="sqh-report-section-bd" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+            </div>
+          )
+        })}
+      </div>
+    )
   }
 
-  // Strip intro fluff + horizontal rule.
-  const cleaned = text
-    .replace(/^好的[，,]\s*基于[^。\n]*。?\n*/s, '')
-    .replace(/^---+\s*\n*/m, '')
-
-  // Split on section headers: 【Name】
-  const sections = parseSections(cleaned)
-
-  return (
-    <div className="sqh-structured-report">
-      {sections.map((sec, i) => {
-        const meta = SECTION_META[sec.title]
-        if (!meta) return <p key={i} style={{ whiteSpace: 'pre-wrap' }}>{sec.body}</p>
-
-        const bodyHtml = fmtBody(sec.body, sec.title)
-
-        return (
-          <div key={i} className="sqh-report-section" style={{ background: meta.bg, marginTop: i === 0 ? 8 : 10 }}>
-            <div className="sqh-report-section-hd" style={{ color: meta.color }}>
-              <span>{meta.icon}</span><strong>{sec.title}</strong>
-              {sec.title === '置信度' && <ConfidenceBadge body={sec.body} />}
-            </div>
-            <div className="sqh-report-section-bd" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
-          </div>
-        )
-      })}
-    </div>
-  )
+  // Conversational / unstructured answer — still apply basic formatting.
+  const html = fmtBody(cleaned, '')
+  return <div className="sqh-structured-report" style={{ marginTop: 8, fontSize: 13, lineHeight: 1.7, color: '#3d4038' }}
+    dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 function parseSections(text: string): Section[] {
@@ -311,10 +308,8 @@ function fmtBody(body: string, section: string): string {
   html = html.replace(/\[(来源[：:][^\]]+|[^\s\]]+\.[a-z]{2,}[^\]]*)\]/g,
     '<span class="sqh-source-tag">$1</span>')
 
-  // Confidence level → colored badge
-  if (section === '置信度') {
-    html = html.replace(/\b(L[1-5])\b/g, '<span class="sqh-conf-badge sqh-conf-$1">$1</span>')
-  }
+  // Confidence level → colored badge (always on — works both in section-mode and conversational)
+  html = html.replace(/\b(L[1-5])\b/g, '<span class="sqh-conf-badge sqh-conf-$1">$1</span>')
 
   return html
 }

@@ -1,13 +1,28 @@
-import type { FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer } from './types'
+import type { FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer } from './types'
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
 
 async function readJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(`API error: ${res.status}${detail ? ` ${detail.slice(0, 160)}` : ''}`)
+    throw new Error(await readError(res))
   }
   return res.json()
+}
+
+// FastAPI errors come back as { detail: <string | { message_zh, error_code }> }.
+// Surface the human-readable Chinese message when present, else fall back.
+async function readError(res: Response): Promise<string> {
+  const raw = await res.text().catch(() => '')
+  try {
+    const body = JSON.parse(raw)
+    const detail = body?.detail
+    if (typeof detail === 'string') return detail
+    if (detail?.message_zh) return detail.message_zh
+    if (detail?.error_code) return detail.error_code
+  } catch {
+    // not JSON — fall through to the raw text
+  }
+  return raw ? raw.slice(0, 160) : `请求失败（${res.status}）`
 }
 
 export async function createFootballOsintJob(request: FootballOsintJobRequest): Promise<FootballOsintJob> {
@@ -33,6 +48,11 @@ export async function fetchFootballOsintJob(jobId: string): Promise<FootballOsin
   return readJson<FootballOsintJob>(res)
 }
 
+export async function fetchFixtures(days = 3): Promise<FixtureStatus[]> {
+  const res = await fetch(`/api/football/osint/fixtures?days=${days}`)
+  return readJson<FixtureStatus[]>(res)
+}
+
 // ── auth ──
 
 export interface AuthUser {
@@ -56,15 +76,24 @@ export async function loginUser(username: string, password: string): Promise<Aut
   return readJson<{ user: AuthUser }>(res).then(r => r.user)
 }
 
-export async function registerUser(username: string, password: string, inviteCode: string): Promise<AuthUser> {
+export async function registerUser(username: string, password: string, inviteCode: string, email = ''): Promise<AuthUser> {
   const res = await fetch('/api/auth/register', {
     method: 'POST',
     headers: JSON_HEADER,
-    body: JSON.stringify({ username, password, invite_code: inviteCode, email: '' }),
+    body: JSON.stringify({ username, password, invite_code: inviteCode, email }),
   })
   return readJson<{ user: AuthUser }>(res).then(r => r.user)
 }
 
 export async function logoutUser(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST' })
+}
+
+export interface RedeemResult { type: string; granted_at: string; expires_at: string | null; source: string }
+
+export async function redeemCode(code: string): Promise<RedeemResult> {
+  const res = await fetch('/api/billing/redeem', {
+    method: 'POST', headers: JSON_HEADER, body: JSON.stringify({ code }),
+  })
+  return readJson<RedeemResult>(res)
 }

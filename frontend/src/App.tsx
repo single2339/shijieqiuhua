@@ -17,6 +17,17 @@ import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
 
+// Entitlement expires_at is stored UTC as "YYYY-MM-DD HH:MM:SS" (no tz). Parse
+// it as a real timestamp instead of lexicographic string compare, which broke
+// at the space-vs-'T' boundary against Date.toISOString().
+function isExpired(expiresAt: string | null): boolean {
+  if (!expiresAt) return false // null = permanent
+  const normalized = expiresAt.includes('T') ? expiresAt : expiresAt.replace(' ', 'T') + 'Z'
+  const ts = Date.parse(normalized)
+  if (Number.isNaN(ts)) return false // unparseable → treat as active, fail open
+  return ts <= Date.now()
+}
+
 export default function App() {
   const [matches, setMatches] = useState<FootballMatch[]>([])
   const [fixturesLoading, setFixturesLoading] = useState(true)
@@ -69,8 +80,7 @@ export default function App() {
 
   const userTier: UserTier = useMemo(() => {
     if (!user) return 'guest'
-    const hasPaid = user.entitlements?.some(e => e.type === 'full_analysis'
-      && (!e.expires_at || e.expires_at > new Date().toISOString()))
+    const hasPaid = user.entitlements?.some(e => e.type === 'full_analysis' && !isExpired(e.expires_at))
     return hasPaid ? 'paid' : 'free'
   }, [user])
 

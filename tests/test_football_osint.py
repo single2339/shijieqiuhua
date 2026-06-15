@@ -242,10 +242,40 @@ def test_osint_prediction_uses_core_confidence_and_traceability(tmp_path):
     assert any("三方验证" in item for item in job.next_steps)
 
 
-def test_osint_prediction_api_is_public_and_returns_job(monkeypatch):
+def _bypass_paywall(monkeypatch):
+    """Stub the paid-tier gate so endpoint-behavior tests don't need real auth.
+
+    Auth enforcement itself is covered by test_osint_prediction_rejects_anonymous.
+    """
+    from backend.football_osint import routes
+
+    monkeypatch.setattr(routes, "_require_paid", lambda http_request: {"id": 1, "role": "user"})
+
+
+def test_osint_prediction_rejects_anonymous(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    from backend.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/football/osint/predict-sync",
+        json={
+            "home_team": "Home U23",
+            "away_team": "Away U23",
+            "kickoff_at": "2026-06-08 18:00",
+            "competition": "Friendly U23",
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_osint_prediction_returns_job_for_paid_user(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("OSINT_ROLE", "api")
     monkeypatch.delenv("BING_API_KEY", raising=False)
+    _bypass_paywall(monkeypatch)
 
     from backend.main import app
 
@@ -272,6 +302,7 @@ def test_osint_prediction_api_is_public_and_returns_job(monkeypatch):
 def test_osint_answer_rejects_unrelated_question(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("OSINT_ROLE", "api")
+    _bypass_paywall(monkeypatch)
 
     from backend.main import app
 
@@ -299,6 +330,7 @@ def test_osint_answer_handles_twelve_concurrent_related_requests(monkeypatch, tm
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("OSINT_ROLE", "api")
     monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
+    _bypass_paywall(monkeypatch)
 
     from backend.football_osint.routes import answer_question
     from backend.football_osint.models import FootballOsintJobRequest
@@ -312,7 +344,8 @@ def test_osint_answer_handles_twelve_concurrent_related_requests(monkeypatch, tm
                     kickoff_at="2026-06-08 18:00",
                     competition="AFC U23 Asian Cup",
                     question=f"这场比赛日本队胜面怎么样 {index}",
-                )
+                ),
+                None,
             )
 
         return await asyncio.gather(*(ask(i) for i in range(12)))

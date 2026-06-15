@@ -15,6 +15,7 @@ from backend.auth.models import (
     AdminStats,
     InviteCodeCreate,
     InviteCodeInfo,
+    PaymentCodeInfo,
 )
 from backend.auth.routes import require_admin
 
@@ -29,6 +30,8 @@ def _generate_code(length: int = 16) -> str:
 @router.get("/users")
 def list_users(request: Request, page: int = 1, page_size: int = 20):
     require_admin(request)
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
     db = get_db()
     offset = (page - 1) * page_size
     total = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -147,6 +150,35 @@ def create_invite_codes(body: InviteCodeCreate, request: Request):
     db.commit()
 
     return {"codes": codes, "expires_at": expires_at}
+
+
+@router.post("/payment-codes")
+def create_payment_codes(body: InviteCodeCreate, request: Request):
+    require_admin(request)
+    from backend.billing import generate_codes
+    codes = generate_codes(count=body.count, expires_days=body.expires_days)
+    return {"codes": codes, "count": len(codes)}
+
+
+@router.get("/payment-codes", response_model=list[PaymentCodeInfo])
+def list_payment_codes(request: Request):
+    require_admin(request)
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM activation_code ORDER BY created_at DESC LIMIT 100"
+    ).fetchall()
+    return [
+        PaymentCodeInfo(
+            code=r["code"],
+            status=r["status"],
+            granted_to_user_id=r["granted_to_user_id"],
+            redeemed_at=r["redeemed_at"],
+            created_at=r["created_at"],
+            expires_at=r["expires_at"],
+            note=r["note"],
+        )
+        for r in rows
+    ]
 
 
 @router.get("/invite-codes", response_model=list[InviteCodeInfo])

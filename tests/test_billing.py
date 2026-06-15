@@ -181,3 +181,30 @@ def test_generate_codes_rejects_zero_or_negative(tmp_db):
         billing.generate_codes(count=0)
     with pytest.raises(billing.BillingError):
         billing.generate_codes(count=-1)
+
+
+def test_redeem_renews_expired_entitlement(tmp_db):
+    # User 1 already holds an EXPIRED full_analysis entitlement. Because the
+    # table is UNIQUE(user_id, type), a plain INSERT on renewal would fail; the
+    # UPSERT must refresh the existing row instead.
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    tmp_db.execute(
+        "INSERT INTO entitlement (user_id, type, granted_at, expires_at, source) "
+        "VALUES (1, 'full_analysis', ?, ?, 'old')",
+        (past, past),
+    )
+    tmp_db.commit()
+    assert billing.has_entitlement(1) is False  # expired
+
+    code = _make_code(tmp_db, code="RENEW2345EFGH6789", validity_days_after_redeem=30)
+    ent = billing.redeem_code(code=code, user_id=1)
+
+    assert ent.type == "full_analysis"
+    assert ent.expires_at is not None
+    assert ent.expires_at > datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    # exactly one row — renewed in place, not duplicated
+    count = tmp_db.execute(
+        "SELECT COUNT(*) FROM entitlement WHERE user_id=1 AND type='full_analysis'"
+    ).fetchone()[0]
+    assert count == 1
+    assert billing.has_entitlement(1) is True

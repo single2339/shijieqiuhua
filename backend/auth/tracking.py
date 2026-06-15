@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 
-from backend.auth.db import get_db
+from backend.auth.db import close_db, get_db
 
 ACTION_TYPES = {
     "login",
@@ -33,6 +33,10 @@ def record_activity(user_id: int, action_type: str, details: dict | None = None,
             db.commit()
         except Exception:
             pass
+        finally:
+            # This runs in a short-lived worker thread; close its thread-local
+            # connection so we don't leak one sqlite handle per activity.
+            close_db()
 
     t = threading.Thread(target=_write, daemon=True)
     t.start()

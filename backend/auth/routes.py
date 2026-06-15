@@ -38,7 +38,7 @@ def _set_auth_cookies(response: JSONResponse, access_token: str, refresh_token: 
 
 def _clear_auth_cookies(response: JSONResponse):
     response.delete_cookie(_ACCESS_COOKIE, path="/")
-    response.delete_cookie(_REFRESH_COOKIE, path="/api/auth")
+    response.delete_cookie(_REFRESH_COOKIE, path="/")
 
 
 def _extract_token(request: Request) -> str | None:
@@ -77,6 +77,14 @@ def require_admin(request: Request) -> dict:
     return user
 
 
+def _get_entitlements(user_id: int) -> list[dict]:
+    from backend.auth.db import get_db
+    rows = get_db().execute(
+        "SELECT type, granted_at, expires_at FROM entitlement WHERE user_id=?", (user_id,),
+    ).fetchall()
+    return [{"type": r["type"], "granted_at": r["granted_at"], "expires_at": r["expires_at"]} for r in rows]
+
+
 def _get_client_ip(request: Request) -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
     if forwarded:
@@ -96,8 +104,10 @@ def register(body: RegisterRequest, request: Request):
     access_token = service.create_access_token(user["id"], user["role"])
     refresh_token = service.create_refresh_token(user["id"], ip, ua)
     record_activity(user["id"], "login", ip_address=ip)
+    _ents = _get_entitlements(user["id"])
     resp = JSONResponse(
-        LoginResponse(user=UserInfo(**user), access_token=access_token, refresh_token=refresh_token).model_dump()
+        {"user": {**UserInfo(**user).model_dump(), "entitlements": _ents},
+         "access_token": access_token, "refresh_token": refresh_token}
     )
     _set_auth_cookies(resp, access_token, refresh_token)
     return resp
@@ -114,12 +124,10 @@ def login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail=str(e))
 
     record_activity(result["user"]["id"], "login", ip_address=ip)
+    _ents = _get_entitlements(result["user"]["id"])
     resp = JSONResponse(
-        LoginResponse(
-            user=UserInfo(**result["user"]),
-            access_token=result["access_token"],
-            refresh_token=result["refresh_token"],
-        ).model_dump()
+        {"user": {**UserInfo(**result["user"]).model_dump(), "entitlements": _ents},
+         "access_token": result["access_token"], "refresh_token": result["refresh_token"]}
     )
     _set_auth_cookies(resp, result["access_token"], result["refresh_token"])
     return resp
@@ -151,13 +159,5 @@ def logout(request: Request):
 @router.get("/me")
 def me(request: Request):
     user = get_current_user(request)
-    from backend.auth.db import get_db
-    conn = get_db()
-    entitlements = []
-    row = conn.execute(
-        "SELECT type, granted_at, expires_at FROM entitlement WHERE user_id=?",
-        (user["id"],),
-    ).fetchone()
-    if row:
-        entitlements.append({"type": row["type"], "granted_at": row["granted_at"], "expires_at": row["expires_at"]})
+    entitlements = _get_entitlements(user["id"])
     return {**UserInfo(**user).model_dump(), "entitlements": entitlements}

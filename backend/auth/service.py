@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,12 +21,18 @@ ACCESS_TOKEN_EXPIRE = timedelta(hours=1)
 REFRESH_TOKEN_EXPIRE = timedelta(days=7)
 
 
+# bcrypt only consumes the first 72 bytes and raises on longer inputs in newer
+# versions. Truncate consistently in both hash + verify (back-compatible, since
+# bytes beyond 72 were already ignored).
+_BCRYPT_MAX_BYTES = 72
+
+
 def hash_password(password: str) -> str:
-    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt(rounds=12)).decode()
+    return _bcrypt.hashpw(password.encode()[:_BCRYPT_MAX_BYTES], _bcrypt.gensalt(rounds=12)).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return _bcrypt.checkpw(password.encode(), password_hash.encode())
+    return _bcrypt.checkpw(password.encode()[:_BCRYPT_MAX_BYTES], password_hash.encode())
 
 
 def create_access_token(user_id: int, role: str) -> str:
@@ -93,21 +100,42 @@ def consume_invite_code(code: str, user_id: int) -> None:
     db.commit()
 
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 def register_user(username: str, email: str, password: str, invite_code: str) -> dict:
+    if email and not EMAIL_RE.match(email):
+        raise ValueError("邮箱格式不正确")
     db = get_db()
-    existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-    if existing:
-        raise ValueError("用户名已存在")
-    if not verify_invite_code(invite_code):
-        raise ValueError("邀请码无效、已使用或已过期")
-    password_hash = hash_password(password)
-    cursor = db.execute(
-        "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
-        (username, email, password_hash),
-    )
-    db.commit()
-    user_id = cursor.lastrowid
-    consume_invite_code(invite_code, user_id)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        if existing:
+            raise ValueError("用户名已存在")
+        code = invite_code.upper().strip()
+        row = db.execute(
+            "SELECT * FROM registration_codes WHERE code = ? AND is_active = 1", (code,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("邀请码无效、已使用或已过期")
+        if row["current_uses"] >= row["max_uses"]:
+            raise ValueError("邀请码无效、已使用或已过期")
+        if row["expires_at"] and row["expires_at"] < datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"):
+            raise ValueError("邀请码无效、已使用或已过期")
+        password_hash = hash_password(password)
+        cursor = db.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+            (username, email, password_hash),
+        )
+        user_id = cursor.lastrowid
+        db.execute(
+            "UPDATE registration_codes SET current_uses = current_uses + 1 WHERE code = ?",
+            (code,),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return _user_row_to_dict(
         db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     )
@@ -115,10 +143,11 @@ def register_user(username: str, email: str, password: str, invite_code: str) ->
 
 def login_user(username: str, password: str, ip_address: str = "", user_agent: str = "") -> dict:
     db = get_db()
-    db.execute(
+    cur = db.execute(
         "INSERT INTO login_attempts (identifier, ip_address, success) VALUES (?, ?, 0)",
         (username, ip_address),
     )
+    attempt_id = cur.lastrowid
     db.commit()
     row = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
     if row is None:
@@ -128,8 +157,7 @@ def login_user(username: str, password: str, ip_address: str = "", user_agent: s
     if not verify_password(password, row["password_hash"]):
         raise ValueError("用户名或密码错误")
     db.execute(
-        "UPDATE login_attempts SET success = 1 WHERE id = (SELECT MAX(id) FROM login_attempts WHERE identifier = ?)",
-        (username,),
+        "UPDATE login_attempts SET success = 1 WHERE id = ?", (attempt_id,),
     )
     db.execute("UPDATE users SET last_login_at = datetime('now') WHERE id = ?", (row["id"],))
     db.commit()

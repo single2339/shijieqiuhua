@@ -10,7 +10,7 @@ W1-W2 split per PRD §5.1 / decision Q5. This file is now thin orchestration:
   and evidence.py, no longer owning subprocess or URL logic
 
 Everything else lives in:
-- adapters/        — data sources (lightpanda, win007, user_supplied, url_safety)
+- adapters/        — data sources (lightpanda, dongqiudi, user_supplied, url_safety)
 - analysis/        — prediction / confidence / intelligence / report
 - factor_registry  — per-match factor scoring rules
 - evidence         — evidence construction + classification
@@ -19,15 +19,22 @@ Everything else lives in:
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+log = logging.getLogger(__name__)
+
 from .adapters import lightpanda as lightpanda_adapter
+from . import cache
 from .adapters import user_supplied as user_supplied_adapter
-from .adapters import win007 as win007_adapter
+from .adapters import dongqiudi as dongqiudi_adapter
+from .adapters import dongqiudi_analysis as dongqiudi_analysis_adapter
+from .adapters import dongqiudi_schedule as dongqiudi_schedule_adapter
 from .analysis import confidence as confidence_module
 from .analysis import intelligence as intelligence_module
 from .analysis import prediction as prediction_module
@@ -44,7 +51,10 @@ from .models import (
     OsintMatch,
     OsintSourceStatus,
 )
-from .sources import WIN007_SOURCE_TEMPLATES
+from .sources import DONGQIUDI_SOURCE_TEMPLATES, SEARCH_SOURCE_TEMPLATES
+from .adapters import open_meteo as weather_adapter
+from .adapters import rss_feed as rss_adapter
+from .adapters import web_search as web_search_adapter
 
 
 # ── public entry point ──
@@ -154,6 +164,36 @@ def _collect_zero_config_sources(
     )
     _collect_farich_foot_sources(request, evidence, sources)
 
+    # ── weather / search / RSS — run in parallel (independent I/O) ──
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {
+            pool.submit(_collect_one_weather, request, evidence): "weather",
+            pool.submit(_collect_search_sources, request, evidence, sources): "search",
+            pool.submit(rss_adapter.collect_all, request, evidence): "rss",
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            try:
+                result = future.result(timeout=60)
+                if label == "weather":
+                    weather_id, weather_reason = result
+                    sources.append(OsintSourceStatus(
+                        adapter="open_meteo", label="Open-Meteo 天气",
+                        status="ok" if weather_id else "skipped",
+                        evidence_ids=[weather_id] if weather_id else [],
+                        reason=weather_reason if not weather_id else "",
+                    ))
+                elif label == "rss":
+                    for adapter, status, count in result:
+                        sources.append(OsintSourceStatus(
+                            adapter=adapter, label="RSS 新闻",
+                            status=status,
+                            reason="" if status == "ok" else "未匹配到相关新闻",
+                        ))
+                # search appends to evidence + sources internally
+            except Exception:
+                log.warning("%s phase failed or timed out", label)
+
     if request.user_supplied.notes:
         note_ids = []
         for note in request.user_supplied.notes:
@@ -174,6 +214,14 @@ def _collect_zero_config_sources(
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="skipped", reason="未提供伤病、首发或球队新闻补充"))
 
 
+def _collect_one_weather(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:
+    """Tiny wrapper so weather can be submitted to ThreadPoolExecutor."""
+    return weather_adapter.collect(request, evidence)
+
+
+_DONGQIUDI_HTTP_ADAPTERS = {"dongqiudi_schedule", "dongqiudi_analysis"}
+
+
 def _collect_farich_foot_sources(
     request: FootballOsintJobRequest,
     evidence: list[OsintEvidence],
@@ -181,20 +229,24 @@ def _collect_farich_foot_sources(
 ) -> None:
     command = os.getenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", "lp-fetch-md")
     binary = command if Path(command).exists() else shutil.which(command)
-    if not binary:
-        for source in WIN007_SOURCE_TEMPLATES:
-            if source.default_enabled:
-                sources.append(OsintSourceStatus(adapter=source.adapter, label=source.label, status="skipped", reason=f"{command} not available"))
-        return
 
-    for source, urls in win007_adapter.candidate_urls(request):
+    for source, urls in dongqiudi_adapter.candidate_urls(request):
         if not urls:
-            sources.append(OsintSourceStatus(adapter=source.adapter, label=source.label, status="skipped", reason="缺少 Win007 matchId 或历史赛程参数"))
+            sources.append(OsintSourceStatus(adapter=source.adapter, label=source.label, status="skipped", reason="缺少懂球帝 matchId 或历史赛程参数"))
             continue
+
+        if source.adapter not in _DONGQIUDI_HTTP_ADAPTERS and not binary:
+            sources.append(OsintSourceStatus(adapter=source.adapter, label=source.label, status="skipped", reason=f"{command} not available"))
+            continue
+
         evidence_ids: list[str] = []
         failures: list[str] = []
         for url in urls:
-            evidence_id, failure = lightpanda_adapter.fetch_url(binary, url, source_type=source.source_type, topic=source.topic, source_label=source.label, request=request, evidence=evidence)
+            if source.adapter in _DONGQIUDI_HTTP_ADAPTERS:
+                adapter_fn = dongqiudi_schedule_adapter.fetch_url if source.adapter == "dongqiudi_schedule" else dongqiudi_analysis_adapter.fetch_url
+                evidence_id, failure = adapter_fn(url, source_type=source.source_type, topic=source.topic, source_label=source.label, request=request, evidence=evidence)
+            else:
+                evidence_id, failure = lightpanda_adapter.fetch_url(binary, url, source_type=source.source_type, topic=source.topic, source_label=source.label, request=request, evidence=evidence)
             if evidence_id:
                 evidence_ids.append(evidence_id)
             elif failure:
@@ -221,20 +273,125 @@ def _collect_farich_foot_sources(
 
     manual_urls = user_supplied_adapter.candidate_urls(request)
     if manual_urls:
-        evidence_ids = []
-        failures = []
-        for url in manual_urls[:3]:
-            evidence_id, failure = lightpanda_adapter.fetch_url(binary, url, source_type="web", topic="collection.manual_url", source_label="用户补充公开来源", request=request, evidence=evidence)
-            if evidence_id:
-                evidence_ids.append(evidence_id)
-            elif failure:
-                failures.append(failure)
-        sources.append(
-            OsintSourceStatus(
-                adapter="manual_public_url",
-                label="用户补充公开来源",
-                status="ok" if evidence_ids else "failed",
-                evidence_ids=evidence_ids,
-                reason="" if evidence_ids else "; ".join(failures[:2]),
+        if not binary:
+            sources.append(OsintSourceStatus(adapter="manual_public_url", label="用户补充公开来源", status="skipped", reason=f"{command} not available"))
+        else:
+            evidence_ids = []
+            failures = []
+            for url in manual_urls[:3]:
+                evidence_id, failure = lightpanda_adapter.fetch_url(binary, url, source_type="web", topic="collection.manual_url", source_label="用户补充公开来源", request=request, evidence=evidence)
+                if evidence_id:
+                    evidence_ids.append(evidence_id)
+                elif failure:
+                    failures.append(failure)
+            sources.append(
+                OsintSourceStatus(
+                    adapter="manual_public_url",
+                    label="用户补充公开来源",
+                    status="ok" if evidence_ids else "failed",
+                    evidence_ids=evidence_ids,
+                    reason="" if evidence_ids else "; ".join(failures[:2]),
+                )
             )
-        )
+
+
+def _collect_search_sources(
+    request: FootballOsintJobRequest,
+    evidence: list[OsintEvidence],
+    sources: list[OsintSourceStatus],
+) -> None:
+    home = request.home_team
+    away = request.away_team
+
+    for source in SEARCH_SOURCE_TEMPLATES:
+        if not source.default_enabled:
+            continue
+        if source.adapter == "ddg_search":
+            _collect_ddg_search(source, home, away, request, evidence, sources)
+            continue
+        sources.append(OsintSourceStatus(adapter=source.adapter, label=source.label,
+            status="skipped", reason="not implemented"))
+
+
+def _collect_ddg_search(
+    source,
+    home: str,
+    away: str,
+    request: FootballOsintJobRequest,
+    evidence: list[OsintEvidence],
+    sources: list[OsintSourceStatus],
+) -> None:
+    from .adapters import name_translation
+
+    # Quality preview/stats sites are English — search the English originals,
+    # not the translated Chinese display names.
+    home_en = name_translation.to_english(home)
+    away_en = name_translation.to_english(away)
+
+    question = (request.question or "").strip()
+    # Primary query targets pre-match previews (injuries/lineups/predictions);
+    # then a question-specific query, then dimension-targeted ones.
+    queries = [f"{home_en} vs {away_en} World Cup 2026 preview team news injuries prediction"]
+    if question and len(question) > 2:
+        queries.append(f"{home_en} vs {away_en} {question}")
+    queries.extend(_targeted_queries(question, home_en, away_en))
+
+    evidence_ids = []
+    for i, query in enumerate(queries[:4]):  # max 4 queries to stay fast
+        sk = cache.search_key(query)
+        results = cache.search_cache.get(sk)
+        if results is None:
+            # Bias the primary preview query toward high-signal football domains.
+            domains = web_search_adapter.PREVIEW_DOMAINS if i == 0 else None
+            results = web_search_adapter.search(query, include_domains=domains)
+            cache.search_cache.set(sk, results)
+        topic = source.topic if i == 0 else f"{source.topic}.q{i}"
+        for result in results:
+            evidence_ids.append(evidence_module.append_evidence(
+                evidence,
+                source=source.label,
+                source_type=source.source_type,
+                claim=result["title"],
+                topic=topic,
+                side="neutral",
+                confidence=0.25,
+                raw_excerpt=result["snippet"],
+                url=result["url"],
+            ))
+
+    sources.append(OsintSourceStatus(
+        adapter=source.adapter, label=source.label,
+        status="ok" if evidence_ids else "skipped",
+        evidence_ids=evidence_ids,
+        reason="" if evidence_ids else "无搜索结果",
+    ))
+
+
+def _targeted_queries(question: str, home: str, away: str) -> list[str]:
+    """Return dimension-specific English search queries to fill data gaps.
+
+    Detection keys stay Chinese (the user's question), but emitted queries are
+    English so they hit international preview/stats sites.
+    """
+    q = question.lower()
+    queries: list[str] = []
+
+    if any(kw in q for kw in ["红黄牌", "黄牌", "红牌", "牌", "犯规", "裁判"]):
+        queries.append(f"{home} {away} cards fouls referee stats")
+
+    if any(kw in q for kw in ["角球", "角"]):
+        queries.append(f"{home} {away} corners stats average")
+
+    if any(kw in q for kw in ["进球", "总进球", "进球数", "大球", "小球", "比分"]):
+        queries.append(f"{home} {away} goals scored conceded form stats")
+
+    if any(kw in q for kw in ["球员", "核心", "主力", "首发", "伤病", "缺席", "阵容"]):
+        queries.append(f"{home} {away} injuries suspensions predicted lineup")
+
+    if any(kw in q for kw in ["半场", "上半", "下半"]):
+        queries.append(f"{home} {away} first half performance trends")
+
+    if any(kw in q for kw in ["风险", "临场", "变数", "不确定"]):
+        queries.append(f"{home} {away} latest team news preview")
+
+    return queries

@@ -122,7 +122,8 @@ async def answer_question(request: FootballOsintJobRequest, http_request: Reques
     async with _ANSWER_SEMAPHORE:
         job = await asyncio.to_thread(run_prediction_sync, request)
     _JOBS.set(job.job_id, job)
-    return _answer_from_job(job, request.question)
+    # _answer_from_job does blocking LLM calls — keep it off the event loop.
+    return await asyncio.to_thread(_answer_from_job, job, request.question)
 
 
 @router.get("/fixtures")
@@ -208,7 +209,21 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
     prediction = job.prediction
     confidence = job.confidence
 
-    # ── osint-core analysis pipeline ──
+    # ── preferred: LLM synthesis over all collected multi-source evidence ──
+    from .analysis import match_report
+
+    report = match_report.synthesize(job, question)
+    if report:
+        return FootballOsintAnswer(
+            related=True,
+            analysis_started=True,
+            answer=report,
+            judgment=_LEAN_JUDGMENT.get(prediction.lean, "") if prediction else "",
+            reasons=prediction.drivers[:3] if prediction else [],
+            confidence_level=confidence.level if confidence else "L4",
+        )
+
+    # ── fallback: osint-core template / short LLM / prediction summary ──
     from .analysis import osint_qa
 
     analysis = osint_qa.analyze(job, question)

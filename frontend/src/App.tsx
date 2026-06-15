@@ -274,7 +274,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
                 <strong>{answer.related ? `判断 · ${answer.confidence_level}` : '无法回答'}</strong>
                 {answer.related && answer.judgment && <span>{answer.judgment}</span>}
               </div>
-              <p>{answer.answer}</p>
+              <p style={{ whiteSpace: 'pre-wrap' }}>{answer.answer}</p>
               {answer.reasons.length > 0 && <ul>{answer.reasons.map(r => <li key={r}>{r}</li>)}</ul>}
             </motion.div>
           )}

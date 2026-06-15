@@ -1,4 +1,4 @@
-import type { FootballMatch, MatchQuestion } from './types'
+import type { FixtureStatus, FootballMatch, MatchQuestion } from './types'
 
 export const QUESTION_PRESETS: MatchQuestion[] = [
   { id: 'half', label: '半场', prompt: '上半场哪一方更容易占据主动？' },
@@ -8,6 +8,27 @@ export const QUESTION_PRESETS: MatchQuestion[] = [
   { id: 'player', label: '球员', prompt: '核心球员状态会怎样影响比赛？' },
   { id: 'risk', label: '风险', prompt: '这场比赛最大的临场风险是什么？' },
 ]
+
+const STATUS_LABELS: Record<FixtureStatus['status'], string> = {
+  scheduled: '未开赛',
+  live: '进行中',
+  finished: '已结束',
+}
+
+export function fixtureToMatch(fixture: FixtureStatus): FootballMatch {
+  const scoreLabel = fixture.home_score != null && fixture.away_score != null
+    ? `${STATUS_LABELS[fixture.status]} ${fixture.home_score}-${fixture.away_score}`
+    : STATUS_LABELS[fixture.status]
+  return {
+    id: `dqd-${fixture.id}`,
+    league: fixture.league,
+    kickoffAt: fixture.kickoff_at,
+    homeTeam: fixture.home_team,
+    awayTeam: fixture.away_team,
+    publicLean: scoreLabel,
+    questions: [...QUESTION_PRESETS],
+  }
+}
 
 export const MATCHES: FootballMatch[] = [
   {

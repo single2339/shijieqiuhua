@@ -20,6 +20,16 @@ from ..models import (
 )
 
 
+_LEAN_CN: dict[str, str] = {
+    "home": "主队占优",
+    "away": "客队占优",
+    "draw": "平局倾向",
+    "home_or_draw": "主队不败",
+    "away_or_draw": "客队不败",
+    "info_insufficient": "信息不足",
+}
+
+
 def predict(request: FootballOsintJobRequest, factors: list[FactorImpact]) -> PredictionResult:
     home_impact = sum(f.impact * f.weight for f in factors if f.enabled and f.direction == "home")
     away_impact = sum(abs(f.impact) * f.weight for f in factors if f.enabled and f.direction == "away")
@@ -34,17 +44,23 @@ def predict(request: FootballOsintJobRequest, factors: list[FactorImpact]) -> Pr
     home_mid = max(0.24, min(0.52, 0.36 + edge))
     away_mid = max(0.20, min(0.50, 0.32 - edge))
     draw_mid = max(0.20, min(0.34, 1.0 - home_mid - away_mid))
+
+    # drivers use Chinese factor labels, not internal factor_ids
     drivers = [
-        f.factor_id
+        f.label
         for f in sorted(factors, key=lambda item: abs(item.impact) * item.weight, reverse=True)
-        if f.enabled
+        if f.enabled and abs(f.impact) > 0.005
     ][:4]
+    if not drivers:
+        drivers = [f.label for f in factors if f.enabled and f.factor_id == "fixture.existence"][:1]
+
     uncertainties = [f.label for f in factors if f.group == "uncertainty" and f.enabled]
     uncertainties.extend(f.missing_reason for f in factors if f.missing_reason)
 
+    lean_cn = _LEAN_CN.get(lean, lean)
     return PredictionResult(
         lean=lean,  # type: ignore[arg-type]
-        summary=f"{request.home_team} vs {request.away_team} 当前为 {lean} 倾向，置信受数据覆盖度约束。",
+        summary=f"{request.home_team} vs {request.away_team}，判断为「{lean_cn}」，置信度受数据覆盖度约束。",
         probability_band={
             "home_win": band(home_mid),
             "draw": band(draw_mid),

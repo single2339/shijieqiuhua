@@ -13,6 +13,7 @@ from fastapi.responses import PlainTextResponse
 from .adapters import dongqiudi_schedule, football_data_schedule
 from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
 from .pipeline import run_prediction_sync
+from . import warm_cache
 
 
 def _require_paid(http_request: Request) -> dict:
@@ -93,6 +94,9 @@ _JOBS = _JobCache(_JOB_CACHE_MAX, _JOB_CACHE_TTL)
 @router.post("/predict-sync", response_model=FootballOsintJob)
 async def predict_sync(request: FootballOsintJobRequest, http_request: Request):
     _require_paid(http_request)
+    cached = warm_cache.get_cached_job(request)
+    if cached is not None:
+        return cached
     async with _ANSWER_SEMAPHORE:
         job = await asyncio.to_thread(run_prediction_sync, request)
     _JOBS.set(job.job_id, job)
@@ -102,6 +106,9 @@ async def predict_sync(request: FootballOsintJobRequest, http_request: Request):
 @router.post("/jobs", response_model=FootballOsintJob)
 async def create_job(request: FootballOsintJobRequest, http_request: Request):
     _require_paid(http_request)
+    cached = warm_cache.get_cached_job(request)
+    if cached is not None:
+        return cached
     async with _ANSWER_SEMAPHORE:
         job = await asyncio.to_thread(run_prediction_sync, request)
     _JOBS.set(job.job_id, job)
@@ -118,6 +125,10 @@ async def answer_question(request: FootballOsintJobRequest, http_request: Reques
             answer="问题与比赛无关",
             reasons=[],
         )
+
+    cached = warm_cache.get_cached_answer(request)
+    if cached is not None:
+        return cached
 
     async with _ANSWER_SEMAPHORE:
         job = await asyncio.to_thread(run_prediction_sync, request)

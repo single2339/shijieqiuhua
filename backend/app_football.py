@@ -1,6 +1,7 @@
 """Minimal FastAPI app for shijieqiuhua — no osint-network agent deps."""
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,7 +17,13 @@ if _dotenv.exists():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    from backend.football_osint import warm_cache
+
+    task = asyncio.create_task(warm_cache.warm_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
 
 
 app = FastAPI(title="ShijieQiuhua API", version="1.0.0", lifespan=lifespan)

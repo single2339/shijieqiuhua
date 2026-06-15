@@ -68,6 +68,16 @@ class InviteCodeInfo(BaseModel):
     expires_at: str
 
 
+class PaymentCodeInfo(BaseModel):
+    code: str
+    status: str
+    granted_to_user_id: Optional[int]
+    redeemed_at: Optional[str]
+    created_at: str
+    expires_at: str
+    note: str
+
+
 class AdminStats(BaseModel):
     total_users: int
     active_users_7d: int

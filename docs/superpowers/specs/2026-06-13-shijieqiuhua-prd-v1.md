@@ -542,6 +542,7 @@ Web 三栏：
 | `AccountStatus` | 账号状态卡（在右栏顶部） |
 | `PaymentUnlock` | 付费码兑换面板 |
 | `InvitePanel` | 已付费用户生成邀请码 + 二维码 |
+| `AdminPanel` | 管理面板：用户列表、批量生成邀请码/付费码（仅 admin 角色可见） |
 
 延后到 v1.5：`SharePoster`、`SubscribeButton`、跨端账号合并 UI。
 

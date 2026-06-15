@@ -16,6 +16,17 @@ export interface FootballMatch {
   questions: MatchQuestion[]
 }
 
+export interface FixtureStatus {
+  id: string
+  league: string
+  kickoff_at: string
+  home_team: string
+  away_team: string
+  status: 'scheduled' | 'live' | 'finished'
+  home_score: number | null
+  away_score: number | null
+}
+
 export type OsintJobStatus = 'queued' | 'running' | 'needs_review' | 'completed' | 'failed'
 export type OsintJobPhase = 'queued' | 'verify' | 'collect' | 'normalize' | 'score' | 'report' | 'done'
 
@@ -95,7 +106,7 @@ export interface FactorImpact {
 }
 
 export interface PredictionResult {
-  lean: 'home' | 'away' | 'draw' | 'home_or_draw' | 'away_or_draw'
+  lean: 'home' | 'away' | 'draw' | 'home_or_draw' | 'away_or_draw' | 'info_insufficient'
   summary: string
   probability_band: Record<'home_win' | 'draw' | 'away_win', [number, number]>
   scoreline_band: string[]

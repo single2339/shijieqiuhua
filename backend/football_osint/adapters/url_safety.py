@@ -1,7 +1,7 @@
 """URL safety helpers (W2.2 — extracted from pipeline.py).
 
 Single owner of:
-- the host allowlist (default win007.com + FOOTBALL_OSINT_URL_ALLOWLIST env)
+- the host allowlist (default dongqiudi.com + FOOTBALL_OSINT_URL_ALLOWLIST env)
 - DNS-resolution-based private/loopback/link-local rejection
 - the candidate URL → safe URL filter
 
@@ -19,9 +19,9 @@ import socket
 from urllib.parse import urlparse
 
 DEFAULT_HOST_ALLOWLIST = (
-    "win007.com",
-    "m.win007.com",
-    "live.win007.com",
+    "api.dongqiudi.com",
+    "m.dongqiudi.com",
+    "dongqiudi.com",
 )
 
 

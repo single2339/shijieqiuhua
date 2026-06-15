@@ -7,14 +7,12 @@ describe('shijieqiuhua app shell', () => {
     const html = renderToString(<App />)
     // brand always visible
     expect(html).toContain('世界球花')
-    // left rail always visible
+    // left rail always visible; starts in loading state (no mock data)
     expect(html).toContain('今日赛事')
-    expect(html).toContain('阿根廷')
-    // right panel: auth loading (SSR doesn't run useEffect)
     expect(html).toContain('加载中')
     // disclaimer always visible
     expect(html).toContain('不构成投注建议')
-    // AuthGate blocks the question input for unauthenticated users
-    expect(html).toContain('使用邀请码注册后继续')
+    // middle panel: no match data during loading → empty state
+    expect(html).toContain('暂无赛事数据')
   })
 })

@@ -84,7 +84,7 @@ def test_hash_text_is_deterministic_and_short():
 
 
 def test_host_of_strips_path_and_query():
-    assert telemetry.host_of("https://m.win007.com/phone/Schedule_0_2.txt?x=1") == "m.win007.com"
+    assert telemetry.host_of("https://m.dongqiudi.com/matchDetail/54329996/analysis") == "m.dongqiudi.com"
     assert telemetry.host_of("not a url") == ""
     assert telemetry.host_of(None) == ""
     assert telemetry.host_of("https://EXAMPLE.com/") == "example.com"

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Security
 
-- **DO NOT hardcode credentials.** The `.env` file at root holds `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`. Server passwords and SSH keys must be handled outside this file.
+- **DO NOT hardcode credentials.** The `.env` file at root holds `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, and `FOOTBALL_DATA_API_KEY` (free key from football-data.org, powers the upcoming-fixtures sidebar). Server passwords and SSH keys must be handled outside this file.
 - If you discover exposed secrets (API keys, passwords), flag them immediately and stop — do not proceed with other work until they are rotated.
 
 ## Architecture
@@ -52,12 +52,10 @@ Source layout:
 | Frontend build | `npm run build` (= `tsc && vite build`) | `frontend/` |
 | Frontend test | `npm test` (vitest) | `frontend/` |
 | Backend test | `pytest` | root (`.venv` active) |
-| Deploy backend | `source .env && rsync -avz -e "ssh -p 9022" backend/ ubuntu@221.239.50.138:/opt/osint-network/backend/ && ssh osint-server "echo \$SERVER_SUDO_PASSWORD \| sudo -S systemctl restart osint-network.service"` | root |
-| Deploy frontend | `source .env && rsync -avz -e "ssh -p 9022" frontend/dist/ ubuntu@221.239.50.138:/opt/osint-network/frontend/dist/` | root (after `npm run build`) |
-| Trigger reclassify | `curl -X POST http://221.239.50.138/api/reclassify` | — |
-| Trigger merge | `curl -X POST http://221.239.50.138/api/merge` | — |
-| Trigger collect | `curl -X POST http://221.239.50.138/api/collect` | — |
-| Health check | `curl http://221.239.50.138/api/health` | — |
+| Deploy backend | `rsync -avz --exclude='__pycache__' --exclude='*.pyc' backend/ sqh-server:/opt/shijieqiuhua/backend/ && ssh sqh-server 'systemctl restart shijieqiuhua'` | root |
+| Deploy frontend | `rsync -avz frontend/dist/ sqh-server:/opt/shijieqiuhua/frontend/dist/` | root (after `npm run build`) |
+| Fixtures smoke test | `curl 'http://139.155.117.190/api/football/osint/fixtures?days=7'` | — |
+| Service status | `ssh sqh-server 'systemctl status shijieqiuhua --no-pager -n 5'` | — |
 
 Backend test file: `tests/test_*.py`. Frontend test file: `frontend/__tests__/mapview-regression.test.ts`.
 
@@ -154,21 +152,21 @@ Files to touch (order matters):
 
 ## Server Deployment
 
-Production server: use `ssh osint-server` (configured in `~/.ssh/config` with ControlMaster multiplexing).
+Production server: use `ssh sqh-server` (`root@139.155.117.190`, configured in `~/.ssh/config`). **Do not confuse with `osint-server` (221.239.50.138) or `football-server` (221.239.50.142) — those are different systems.**
 
 ```
 # Sync backend and restart
-rsync -avz -e "ssh -p 9022" backend/ ubuntu@221.239.50.138:/opt/osint-network/backend/
-ssh osint-server 'sudo systemctl restart osint-network.service'
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' backend/ sqh-server:/opt/shijieqiuhua/backend/
+ssh sqh-server 'systemctl restart shijieqiuhua'
 
 # Sync frontend dist/ after local build
-rsync -avz -e "ssh -p 9022" frontend/dist/ ubuntu@221.239.50.138:/opt/osint-network/frontend/dist/
+rsync -avz frontend/dist/ sqh-server:/opt/shijieqiuhua/frontend/dist/
 ```
 
 Server stack:
-- Ubuntu 24.04, nginx on port 80 (static files + `/api/` proxy to `127.0.0.1:8000`)
-- `osint-network.service` (systemd) — the FastAPI backend
-- RSSHub Docker container on `:1200` — provides RSS feeds for Weibo, CLS, Zaobao
+- TencentOS VM, nginx on port 80 (`/etc/nginx/conf.d/shijieqiuhua.conf`: static `root /opt/shijieqiuhua/frontend/dist` + `/api/` proxy to `127.0.0.1:8002`)
+- `shijieqiuhua.service` (systemd) — runs `backend.app_football:app` on `127.0.0.1:8002`, `WorkingDirectory=/opt/shijieqiuhua`, `EnvironmentFile=/opt/shijieqiuhua/.env`
+- `.env` on server must hold `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `JWT_SECRET`, `FOOTBALL_DATA_API_KEY`
 - No Node.js on server — frontend must be built locally
 
 ## Ongoing: iFairy Reproduction (`ifairy-repro/`)

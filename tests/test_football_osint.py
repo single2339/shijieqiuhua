@@ -6,13 +6,13 @@ from fastapi.testclient import TestClient
 
 from backend.football_osint.models import FootballOsintJobStatus
 from backend.football_osint.pipeline import run_prediction_sync
-from backend.football_osint.sources import WIN007_SOURCE_TEMPLATES
+from backend.football_osint.sources import DONGQIUDI_SOURCE_TEMPLATES
 
 
-def test_farich_foot_source_catalog_contains_only_win007_fundamentals():
-    adapters = {source.adapter for source in WIN007_SOURCE_TEMPLATES}
+def test_farich_foot_source_catalog_contains_only_dongqiudi_fundamentals():
+    adapters = {source.adapter for source in DONGQIUDI_SOURCE_TEMPLATES}
 
-    assert adapters == {"win007_schedule", "win007_baseface", "win007_history_fixture"}
+    assert adapters == {"dongqiudi_schedule", "dongqiudi_analysis"}
 
 
 def test_osint_prediction_runs_without_api_keys(monkeypatch, tmp_path):
@@ -40,7 +40,7 @@ def test_osint_prediction_runs_without_api_keys(monkeypatch, tmp_path):
     assert job.alternative_explanations
     assert job.next_steps
     assert any(source.adapter == "farich_foot_plan" and source.status == "skipped" for source in job.sources)
-    assert any(source.adapter == "win007_schedule" and source.status == "skipped" for source in job.sources)
+    assert any(source.adapter == "dongqiudi_schedule" and source.status == "failed" for source in job.sources)
     assert not any(ev.topic == "collection.plan" for ev in job.evidence)
 
 
@@ -134,16 +134,17 @@ def test_osint_prediction_rejects_internal_or_unlisted_urls(monkeypatch, tmp_pat
     assert not any(source.adapter == "manual_public_url" and source.status == "ok" for source in job.sources)
 
 
-def test_osint_prediction_uses_only_farich_foot_fundamental_sources(monkeypatch, tmp_path):
-    lightpanda = tmp_path / "lp-fetch-md"
-    lightpanda.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf 'url=%s\\n' \"$1\"\n",
-        encoding="utf-8",
-    )
-    lightpanda.chmod(0o755)
-    monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(lightpanda))
-    monkeypatch.setenv("FOOTBALL_OSINT_WIN007_MATCH_LEVEL", "2")
+def test_osint_prediction_collects_ddg_search_results(monkeypatch, tmp_path):
+    from backend.football_osint.adapters import web_search
+
+    def fake_search(query, **kwargs):
+        assert "Japan U23" in query and "Korea U23" in query
+        return [
+            {"title": "Japan U23 vs Korea U23 preview", "url": "https://example.com/preview", "snippet": "Team news and lineups."},
+        ]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
 
     job = run_prediction_sync(
         {
@@ -151,21 +152,71 @@ def test_osint_prediction_uses_only_farich_foot_fundamental_sources(monkeypatch,
             "away_team": "Korea U23",
             "kickoff_at": "2026-06-08 18:00",
             "competition": "AFC U23 Asian Cup",
-            "question": "win007:123456",
         },
         storage_root=tmp_path,
     )
 
     source_status = {source.adapter: source.status for source in job.sources}
-    urls = {ev.url for ev in job.evidence}
+    assert source_status["ddg_search"] == "ok"
+    assert any(ev.topic == "search.ddg.preview" and ev.url == "https://example.com/preview" for ev in job.evidence)
 
-    assert source_status["win007_schedule"] == "ok"
-    assert source_status["win007_baseface"] == "ok"
-    assert "win007_asia_handicap" not in source_status
-    assert "win007_euro_odds" not in source_status
-    assert "win007_euro_track" not in source_status
-    assert "http://m.win007.com/phone/Schedule_0_2.txt" in urls
-    assert "http://m.win007.com/analy/Analysis/123456.htm" in urls
+
+def test_osint_prediction_uses_only_farich_foot_fundamental_sources(monkeypatch, tmp_path):
+    """Dongqiudi schedule + analysis adapters produce ok status, no odds in report."""
+    from backend.football_osint.adapters import dongqiudi_analysis
+    from backend.football_osint.adapters import dongqiudi_schedule
+    from datetime import datetime, timedelta, timezone
+
+    # Mock schedule: return a fixture matching the request's teams
+    match_time = datetime.now(timezone.utc) + timedelta(hours=48)
+    fake_fixture = dongqiudi_schedule.Fixture(
+        match_id="54329996",
+        league="AFC U23 Asian Cup",
+        kickoff_at=match_time,
+        home_team="Japan U23",
+        away_team="Korea U23",
+        status="scheduled",
+        home_score=None,
+        away_score=None,
+    )
+    monkeypatch.setattr(dongqiudi_schedule, "fetch_fixtures", lambda: [fake_fixture])
+
+    # Mock analysis page: rich data with no odds content
+    monkeypatch.setattr(
+        dongqiudi_analysis,
+        "fetch_text",
+        lambda url: (
+            '<html><script>window.__INITIAL_STATE__={"matchContentStore":'
+            '{"matchAnalysisData":{"info":{"team_A":"Japan U23","team_B":"Korea U23",'
+            '"battle_history":{"team_A":{"win":2,"draw":0,"lose":1},'
+            '"team_B":{"win":1,"draw":0,"lose":2},"list":[]},'
+            '"recent_record":{"team_A":[{"color":"win"},{"color":"draw"},{"color":"lose"}],'
+            '"team_B":[{"color":"win"},{"color":"win"},{"color":"lose"}]},'
+            '"cup_table":{"name":"积分榜","list":[{"name":"Japan U23","rank":"1","points":"6"}]},'
+            '"sideline":{"team_A":[],"team_B":[]},'
+            '"has_odds":true,"asia_companys":[],"euro_companys":[]}}}};</script></html>'
+        ),
+    )
+
+    monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
+    monkeypatch.setenv("FOOTBALL_OSINT_SKIP_DNS_CHECK", "1")
+
+    job = run_prediction_sync(
+        {
+            "home_team": "Japan U23",
+            "away_team": "Korea U23",
+            "kickoff_at": "2026-06-08 18:00",
+            "competition": "AFC U23 Asian Cup",
+        },
+        storage_root=tmp_path,
+    )
+
+    source_status = {source.adapter: source.status for source in job.sources}
+
+    assert source_status["dongqiudi_schedule"] == "ok"
+    assert source_status["dongqiudi_analysis"] == "ok"
+    assert "dongqiudi_asia_handicap" not in source_status
+    assert "dongqiudi_euro_odds" not in source_status
     assert "欧赔" not in job.report_markdown
     assert "亚赔" not in job.report_markdown
     assert "赔率" not in job.report_markdown
@@ -328,3 +379,54 @@ def test_job_cache_drops_expired_entries():
     time.sleep(1.1)
     assert cache.get("fo_short") is None
 
+
+def test_football_data_parse_and_upcoming_filter(monkeypatch):
+    """football-data payload parses, translates via cache, and drops finished/past."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.football_osint.adapters import football_data_schedule as fds
+
+    # Stub translation so the test needs no LLM/disk.
+    monkeypatch.setattr(fds.name_translation, "translate", lambda names: {n: n for n in names})
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {
+        "matches": [
+            {
+                "id": 1, "utcDate": future, "status": "TIMED",
+                "competition": {"name": "FIFA World Cup"},
+                "homeTeam": {"name": "Brazil"}, "awayTeam": {"name": "Serbia"},
+                "score": {"fullTime": {"home": None, "away": None}},
+            },
+            {
+                "id": 2, "utcDate": "2020-01-01T00:00:00Z", "status": "FINISHED",
+                "competition": {"name": "Premier League"},
+                "homeTeam": {"name": "Arsenal"}, "awayTeam": {"name": "Chelsea"},
+                "score": {"fullTime": {"home": 2, "away": 1}},
+            },
+        ]
+    }
+
+    fixtures = fds.parse_matches(payload)
+    assert len(fixtures) == 2
+
+    upcoming = fds.upcoming(fixtures)
+    assert [f.match_id for f in upcoming] == ["1"]
+    assert upcoming[0].status == "scheduled"
+
+
+def test_football_data_fetch_returns_empty_without_key(monkeypatch):
+    from backend.football_osint.adapters import football_data_schedule as fds
+
+    monkeypatch.delenv("FOOTBALL_DATA_API_KEY", raising=False)
+    assert fds.fetch_fixtures() == []
+
+
+def test_name_translation_falls_back_to_english_without_llm(monkeypatch, tmp_path):
+    from backend.football_osint.adapters import name_translation as nt
+
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setattr(nt, "_CACHE_PATH", tmp_path / "names.json")
+
+    result = nt.translate(["Real Madrid", "Barcelona"])
+    assert result == {"Real Madrid": "Real Madrid", "Barcelona": "Barcelona"}

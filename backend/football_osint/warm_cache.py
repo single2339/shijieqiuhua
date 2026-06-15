@@ -55,6 +55,7 @@ async def _warm_match(fixture: football_data_schedule.Fixture) -> None:
     from .routes import _answer_from_job
 
     kickoff_at = fixture.kickoff_at.astimezone(football_data_schedule.CST).strftime("%m-%d %H:%M")
+    ok_count = 0
 
     for question in PRESET_QUESTIONS:
         request = FootballOsintJobRequest(
@@ -78,6 +79,10 @@ async def _warm_match(fixture: football_data_schedule.Fixture) -> None:
         async with _lock:
             _warm_jobs[key] = job
             _warm_answers[key] = answer
+        ok_count += 1
+
+    log.warning("football osint warm cache: %s vs %s done (%d/%d questions)",
+             fixture.home_team, fixture.away_team, ok_count, len(PRESET_QUESTIONS))
 
 
 async def _warm_today_matches() -> None:
@@ -87,8 +92,10 @@ async def _warm_today_matches() -> None:
         f for f in fixtures
         if f.status != "finished" and f.kickoff_at.astimezone(football_data_schedule.CST).date() == today
     ]
+    log.warning("football osint warm cache: starting %d match(es) for today", len(todays[:_WARM_MAX_MATCHES]))
     for fixture in todays[:_WARM_MAX_MATCHES]:
         await _warm_match(fixture)
+    log.warning("football osint warm cache: pass complete, %d cached answers", len(_warm_answers))
 
 
 async def warm_loop() -> None:

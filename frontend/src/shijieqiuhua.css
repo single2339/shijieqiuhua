@@ -448,6 +448,72 @@
   background: #143c2d;
 }
 
+/* ── structured OSINT report ── */
+.sqh-structured-report {
+  margin: 0;
+}
+
+.sqh-report-section {
+  padding: 12px 14px;
+  border-radius: 12px;
+  line-height: 1.6;
+}
+
+.sqh-report-section-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.sqh-report-section-hd strong {
+  font-size: 14px;
+}
+
+.sqh-report-section-bd {
+  font-size: 13px;
+  color: #3d4038;
+}
+
+.sqh-report-section-bd b {
+  font-weight: 700;
+  color: #25342a;
+}
+
+.sqh-list-num {
+  display: inline-block;
+  min-width: 20px;
+  font-weight: 700;
+  color: #143c2d;
+}
+
+.sqh-source-tag {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(20, 60, 45, 0.08);
+  font-size: 11px;
+  color: #5a7d6a;
+  font-weight: 500;
+}
+
+.sqh-conf-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.sqh-conf-L1 { background: #2e7d32; }
+.sqh-conf-L2 { background: #1976d2; }
+.sqh-conf-L3 { background: #f9a825; color: #333; }
+.sqh-conf-L4 { background: #e65100; }
+.sqh-conf-L5 { background: #b71c1c; }
+
 @media (max-width: 1080px) {
   .sqh-app {
     overflow: auto;

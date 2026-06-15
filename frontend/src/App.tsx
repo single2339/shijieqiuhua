@@ -229,6 +229,104 @@ export default function App() {
   )
 }
 
+// ── Structured Report Renderer ──
+
+const SECTION_META: Record<string, { icon: string; color: string; bg: string }> = {
+  '方向研判': { icon: '🎯', color: '#143c2d', bg: '#edf3e8' },
+  '置信度':    { icon: '📊', color: '#1a3a5c', bg: '#eaf0f8' },
+  '确认事实':  { icon: '✓', color: '#2d5016', bg: '#edf3e8' },
+  '替代解释':  { icon: '⚠', color: '#8a6d3b', bg: '#faf7e6' },
+  '数据缺口':  { icon: '○', color: '#6d725f', bg: '#f5f2ed' },
+}
+
+interface Section { title: string; body: string }
+
+function StructuredReport({ text }: { text: string }) {
+  if (!text) return null
+
+  // Only activate for structured LLM synthesis reports.
+  if (!text.includes('【')) {
+    return <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+  }
+
+  // Strip intro fluff + horizontal rule.
+  const cleaned = text
+    .replace(/^好的[，,]\s*基于[^。\n]*。?\n*/s, '')
+    .replace(/^---+\s*\n*/m, '')
+
+  // Split on section headers: 【Name】
+  const sections = parseSections(cleaned)
+
+  return (
+    <div className="sqh-structured-report">
+      {sections.map((sec, i) => {
+        const meta = SECTION_META[sec.title]
+        if (!meta) return <p key={i} style={{ whiteSpace: 'pre-wrap' }}>{sec.body}</p>
+
+        const bodyHtml = fmtBody(sec.body, sec.title)
+
+        return (
+          <div key={i} className="sqh-report-section" style={{ background: meta.bg, marginTop: i === 0 ? 8 : 10 }}>
+            <div className="sqh-report-section-hd" style={{ color: meta.color }}>
+              <span>{meta.icon}</span><strong>{sec.title}</strong>
+              {sec.title === '置信度' && <ConfidenceBadge body={sec.body} />}
+            </div>
+            <div className="sqh-report-section-bd" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function parseSections(text: string): Section[] {
+  const sections: Section[] = []
+  const re = /【([^】]+)】/g
+  let match: RegExpExecArray | null
+  let lastIdx = 0
+  let lastTitle = ''
+
+  while ((match = re.exec(text)) !== null) {
+    if (lastTitle) {
+      sections.push({ title: lastTitle, body: text.slice(lastIdx, match.index).trim() })
+    }
+    lastTitle = match[1]
+    lastIdx = match.index + match[0].length
+  }
+  if (lastTitle) {
+    sections.push({ title: lastTitle, body: text.slice(lastIdx).trim() })
+  }
+  return sections
+}
+
+function fmtBody(body: string, section: string): string {
+  // Preserve bold markers and list numbering.
+  let html = body
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/^(\d+)[\.\、]\s*/gm, '<span class="sqh-list-num">$1.</span> ')
+    .replace(/\n/g, '<br/>')
+
+  // Highlight source citations (e.g., [来源：goal.com] or [sportsmole.co.uk])
+  html = html.replace(/\[(来源[：:][^\]]+|[^\s\]]+\.[a-z]{2,}[^\]]*)\]/g,
+    '<span class="sqh-source-tag">$1</span>')
+
+  // Confidence level → colored badge
+  if (section === '置信度') {
+    html = html.replace(/\b(L[1-5])\b/g, '<span class="sqh-conf-badge sqh-conf-$1">$1</span>')
+  }
+
+  return html
+}
+
+function ConfidenceBadge({ body }: { body: string }) {
+  const m = body.match(/L[1-5]/)
+  if (!m) return null
+  const level = m[0]
+  const labels: Record<string, string> = { L1: '确认', L2: '高可信', L3: '中可信', L4: '推测', L5: '无效' }
+  return <span className={`sqh-conf-badge sqh-conf-${level}`}>{level} · {labels[level] || ''}</span>
+}
+
 // ── MatchQuestionCard ──
 
 function MatchCard({ match, question, answer, osintJob, loading, error, userTier, onChange, onAsk, onPreset }: {
@@ -274,7 +372,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
                 <strong>{answer.related ? `判断 · ${answer.confidence_level}` : '无法回答'}</strong>
                 {answer.related && answer.judgment && <span>{answer.judgment}</span>}
               </div>
-              <p style={{ whiteSpace: 'pre-wrap' }}>{answer.answer}</p>
+              <StructuredReport text={answer.answer} />
               {answer.reasons.length > 0 && <ul>{answer.reasons.map(r => <li key={r}>{r}</li>)}</ul>}
             </motion.div>
           )}

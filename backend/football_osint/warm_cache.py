@@ -27,7 +27,7 @@ PRESET_QUESTIONS: list[str] = [
     "这场比赛最大的临场风险是什么？",
 ]
 
-REFRESH_INTERVAL_SECONDS = 3600
+REFRESH_INTERVAL_SECONDS = 4 * 3600
 
 _WARM_ENABLED = os.getenv("FOOTBALL_OSINT_WARM_ENABLED", "1") not in ("0", "false", "False")
 _WARM_MAX_MATCHES = max(0, int(os.getenv("FOOTBALL_OSINT_WARM_MAX_MATCHES", "6")))

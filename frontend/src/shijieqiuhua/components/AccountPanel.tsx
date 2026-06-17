@@ -1,6 +1,9 @@
 import { Crown, FileText, Key } from '@phosphor-icons/react'
 import type { AuthUser } from '../api'
+import { PLANS } from '../plans'
 import type { UserTier } from './AuthGate'
+
+const PAID_PLAN = PLANS.find(p => p.id === 'paid')!
 
 export interface HistoryItem {
   question: string
@@ -94,7 +97,7 @@ export default function AccountPanel({
           <ul className="sqh-promo-feat">
             {UNLOCK_FEATURES.map(f => <li key={f}>{f}</li>)}
           </ul>
-          <button className="btn btn-gold btn-block" onClick={onUnlock}>¥39/月 · 解锁完整研判</button>
+          <button className="btn btn-gold btn-block" onClick={onUnlock}>¥{PAID_PLAN.price}/月 · 解锁完整研判</button>
         </div>
       )}
 

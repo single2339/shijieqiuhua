@@ -21,7 +21,7 @@ export const PLANS: Plan[] = [
     featured: false,
   },
   {
-    id: 'paid', name: '情报通', price: '39', unit: '/ 月',
+    id: 'paid', name: '情报通', price: '888', unit: '/ 月',
     items: ['无限次完整研判', '因子权重与贝叶斯轨迹', '开赛前自动复扫提醒', '导出研判报告', '优先接入新信源'],
     featured: true,
   },

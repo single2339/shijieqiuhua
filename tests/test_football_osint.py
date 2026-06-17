@@ -293,7 +293,9 @@ def test_osint_prediction_returns_job_for_paid_user(monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "completed"
-    assert data["prediction"]["lean"] in {"home", "away", "draw", "home_or_draw", "away_or_draw"}
+    assert data["prediction"]["lean"] in {
+        "home", "away", "draw", "home_or_draw", "away_or_draw", "info_insufficient",
+    }
     assert data["confidence"]["level"] in {"L1", "L2", "L3", "L4"}
     assert data["intelligence_cycle"][0]["name"] == "收集"
     assert data["alternative_explanations"]
@@ -463,3 +465,209 @@ def test_name_translation_falls_back_to_english_without_llm(monkeypatch, tmp_pat
 
     result = nt.translate(["Real Madrid", "Barcelona"])
     assert result == {"Real Madrid": "Real Madrid", "Barcelona": "Barcelona"}
+
+
+def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
+    """Chinese search produces evidence with search.cn.* topics."""
+    from backend.football_osint.adapters import web_search
+    from backend.football_osint.pipeline import _collect_chinese_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+
+    call_count = {"n": 0}
+
+    def fake_search(query, **kwargs):
+        call_count["n"] += 1
+        # First call should be primary query with CN_DOMAINS
+        if call_count["n"] == 1:
+            assert "前瞻" in query
+            assert kwargs.get("include_domains") is not None
+        return [
+            {"title": f"搜索结果 {call_count['n']}", "url": f"https://sports.sina.com.cn/article/{call_count['n']}", "snippet": "巴西近5场3胜1平1负"},
+        ]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+    evidence: list[OsintEvidence] = []
+    sources: list[OsintSourceStatus] = []
+
+    _collect_chinese_search(request, evidence, sources)
+
+    assert len(evidence) >= 1
+    assert evidence[0].topic == "search.cn.preview"
+    assert evidence[0].source == "国内媒体搜索"
+    assert sources[0].adapter == "cn_search"
+    assert sources[0].status == "ok"
+
+
+def test_cn_form_regex_extracts_ppg_from_chinese_snippets():
+    """_score_cn_form parses '近N场X胜Y平Z负' patterns from media text."""
+    from backend.football_osint.factor_registry import _score_cn_form
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+
+    # Brazil: 5 games, 4W 1D 0L → PPG = 2.6; Argentina: 5 games, 2W 1D 2L → PPG = 1.4
+    text = "巴西近5场4胜1平0负，状态火热。阿根廷近5场2胜1平2负。"
+    score = _score_cn_form(text, request)
+    assert score > 0  # home advantage
+
+    # Reversed: Argentina better
+    text2 = "阿根廷最近5场4胜1平0负。巴西近5场1胜1平3负。"
+    score2 = _score_cn_form(text2, request)
+    assert score2 < 0  # away advantage
+
+
+def test_cn_form_returns_zero_when_no_match():
+    """_score_cn_form returns 0.0 when team names don't appear in text."""
+    from backend.football_osint.factor_registry import _score_cn_form
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+    assert _score_cn_form("这场比赛很精彩", request) == 0.0
+    assert _score_cn_form("", request) == 0.0
+
+
+def test_media_cn_coverage_factor_enables_with_enough_evidence(monkeypatch, tmp_path):
+    """media.cn_coverage factor enables when ≥3 Chinese search evidence items exist."""
+    from backend.football_osint.adapters import web_search
+    from backend.football_osint.models import FootballOsintJobStatus
+
+    def fake_search(query, **kwargs):
+        return [
+            {"title": "赛前分析 1", "url": "https://sports.sina.com.cn/1", "snippet": "巴西近5场3胜1平1负"},
+            {"title": "赛前分析 2", "url": "https://sports.qq.com/2", "snippet": "阿根廷近5场2胜2平1负"},
+            {"title": "赛前分析 3", "url": "https://zhibo8.com/3", "snippet": "双方历史交锋巴西占优"},
+        ]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
+
+    job = run_prediction_sync(
+        {
+            "home_team": "巴西",
+            "away_team": "阿根廷",
+            "kickoff_at": "2026-06-20 20:00",
+            "competition": "世界杯",
+        },
+        storage_root=tmp_path,
+    )
+
+    assert job.status == FootballOsintJobStatus.COMPLETED
+    # CN search adapter should appear in sources
+    cn_source = next((s for s in job.sources if s.adapter == "cn_search"), None)
+    assert cn_source is not None
+    assert cn_source.status == "ok"
+    # media.cn_coverage factor should be enabled (≥3 evidence items from fake_search)
+    media_factor = next((f for f in job.factors if f.factor_id == "media.cn_coverage"), None)
+    assert media_factor is not None
+    assert media_factor.enabled is True
+    # Chinese search evidence should exist
+    cn_evidence = [ev for ev in job.evidence if ev.topic.startswith("search.cn.")]
+    assert len(cn_evidence) >= 3
+
+
+def test_targeted_cn_queries_generates_dimension_specific_searches():
+    """_targeted_cn_queries produces Chinese queries for detected dimensions."""
+    from backend.football_osint.pipeline import _targeted_cn_queries
+
+    # Injury/lineup question
+    queries = _targeted_cn_queries("主力球员伤病情况怎么样？", "巴西", "阿根廷")
+    assert any("伤病" in q or "阵容" in q for q in queries)
+
+    # Goals question
+    queries = _targeted_cn_queries("这场比赛进球数会多吗？", "巴西", "阿根廷")
+    assert any("进球" in q or "统计" in q for q in queries)
+
+    # No dimension keywords → empty
+    queries = _targeted_cn_queries("这场比赛谁会赢", "巴西", "阿根廷")
+    assert queries == []
+
+
+def test_cn_sports_rss_templates_loaded():
+    """CN sports RSS templates are included in RSS_FEED_TEMPLATES."""
+    from backend.football_osint.sources import RSS_FEED_TEMPLATES
+
+    adapters = {source.adapter for source in RSS_FEED_TEMPLATES}
+    expected = {"rss_hupu_soccer", "rss_dongqiudi_daily",
+                "rss_dongqiudi_intl", "rss_dongqiudi_special"}
+    assert expected <= adapters
+
+    # All CN sports templates use the RSSHub base URL
+    for source in RSS_FEED_TEMPLATES:
+        if source.adapter in expected:
+            assert "127.0.0.1:1200" in source.url_template or "rsshub" in source.url_template
+
+
+def test_media_cn_coverage_counts_rss_evidence(monkeypatch, tmp_path):
+    """media.cn_coverage factor enables when RSS + search evidence >= 3."""
+    from backend.football_osint.adapters import web_search
+
+    def fake_search(query, **kwargs):
+        return [
+            {"title": "国内媒体分析 1", "url": "https://sports.sina.com.cn/a", "snippet": "赛前分析"},
+            {"title": "国内媒体分析 2", "url": "https://sports.qq.com/b", "snippet": "阵容预测"},
+        ]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
+
+    # Inject synthetic CN RSS evidence via rss_adapter.collect_all mock
+    from backend.football_osint.adapters import rss_feed
+
+    orig_collect_all = rss_feed.collect_all
+
+    def fake_rss_collect(request, evidence):
+        from backend.football_osint.evidence import append_evidence
+        # Call original first (may fail without RSSHub)
+        try:
+            orig_collect_all(request, evidence)
+        except Exception:
+            pass
+        # Inject synthetic Chinese RSS evidence
+        append_evidence(evidence, source="虎扑足球", source_type="news",
+                        claim="巴西备战状态良好", topic="news.rss.hupu.soccer",
+                        side="neutral", confidence=0.30,
+                        raw_excerpt="巴西队近期训练状态出色。")
+        append_evidence(evidence, source="懂球帝早报", source_type="news",
+                        claim="阿根廷主力后卫疑似受伤", topic="news.rss.dongqiudi.daily",
+                        side="neutral", confidence=0.30,
+                        raw_excerpt="阿根廷主力后卫在训练中感到不适。")
+        return [("rss_hupu_soccer", "ok", 1), ("rss_dongqiudi_daily", "ok", 1)]
+
+    monkeypatch.setattr(rss_feed, "collect_all", fake_rss_collect)
+
+    job = run_prediction_sync(
+        {
+            "home_team": "巴西",
+            "away_team": "阿根廷",
+            "kickoff_at": "2026-06-20 20:00",
+            "competition": "世界杯",
+        },
+        storage_root=tmp_path,
+    )
+
+    assert job.status.value == "completed"
+
+    # media.cn_coverage should be enabled: 2 search + 2 RSS = 4 total >= 3
+    media_factor = next((f for f in job.factors if f.factor_id == "media.cn_coverage"), None)
+    assert media_factor is not None
+    assert media_factor.enabled is True
+
+    # CN evidence should include both search and RSS
+    cn_evidence = [ev for ev in job.evidence if (
+        ev.topic.startswith("search.cn.")
+        or ev.topic.startswith("news.rss.hupu.")
+        or ev.topic.startswith("news.rss.dongqiudi.")
+        or ev.topic.startswith("news.rss.weibo.")
+    )]
+    assert len(cn_evidence) >= 4

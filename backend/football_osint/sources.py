@@ -176,6 +176,12 @@ else:
     # Default football KOL accounts (UID verified via public weibo.com/u/ URLs).
     _weibo_pairs = [
         ("微博足球", "3082733222"),          # 微博赛事足球官方账号
+        ("体坛周报", "5350271203"),          # 国内最权威体育媒体之一
+        ("足球报", "1716376363"),            # 足球专业媒体
+        ("董路", "1189615035"),              # 足球评论员、解说
+        ("黄健翔", "1362607654"),            # 资深足球解说
+        ("新浪体育", "1638781994"),          # 新浪体育官方
+        ("足球周刊", "1913412967"),          # 足球杂志官方账号
     ]
 
 _weibo_templates: list[FootballSourceTemplate] = []
@@ -192,3 +198,43 @@ for _label, _uid in _weibo_pairs:
     )
 
 RSS_FEED_TEMPLATES = RSS_FEED_TEMPLATES + tuple(_weibo_templates)
+
+# ── Chinese sports media via RSSHub ──
+# Routes confirmed against RSSHub master (2026-06).
+# These complement the en-only BBC/ESPN/Sky feeds with Chinese-language coverage.
+_CN_SPORTS_RSS_TEMPLATES = (
+    FootballSourceTemplate(
+        adapter="rss_hupu_soccer",
+        label="虎扑足球",
+        source_type="news",
+        url_template=f"{_RSSHUB_BASE}/hupu/soccer",
+        topic="news.rss.hupu.soccer",
+        description="虎扑足球新闻聚合，覆盖五大联赛+中超。通过 RSSHub。",
+    ),
+    FootballSourceTemplate(
+        adapter="rss_dongqiudi_daily",
+        label="懂球帝早报",
+        source_type="news",
+        url_template=f"{_RSSHUB_BASE}/dongqiudi/daily",
+        topic="news.rss.dongqiudi.daily",
+        description="懂球帝每日早报，聚合当日足球资讯。",
+    ),
+    FootballSourceTemplate(
+        adapter="rss_dongqiudi_intl",
+        label="懂球帝国际足球",
+        source_type="news",
+        url_template=f"{_RSSHUB_BASE}/dongqiudi/top_news/120",
+        topic="news.rss.dongqiudi.international",
+        description="懂球帝国际足球新闻（含英超/西甲/意甲/德甲）。",
+    ),
+    FootballSourceTemplate(
+        adapter="rss_dongqiudi_special",
+        label="懂球帝新闻大爆炸",
+        source_type="news",
+        url_template=f"{_RSSHUB_BASE}/dongqiudi/special/41",
+        topic="news.rss.dongqiudi.special",
+        description="懂球帝新闻大爆炸专题，深度足球分析与趣闻。",
+    ),
+)
+
+RSS_FEED_TEMPLATES = RSS_FEED_TEMPLATES + _CN_SPORTS_RSS_TEMPLATES

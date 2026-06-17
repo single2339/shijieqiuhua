@@ -32,13 +32,24 @@ def build_factors(
 
     # Parse the fundamental evidence text for form/H2H/squad/standings signals
     fundamental_text = "\n".join(ev.raw_excerpt for ev in evidence if ev.topic.startswith("fundamental."))
+
+    # Chinese search + RSS evidence: enriches form scoring when dongqiudi is sparse
+    cn_evidence = [ev for ev in evidence if (
+        ev.topic.startswith("search.cn.")
+        or ev.topic.startswith("news.rss.hupu.")
+        or ev.topic.startswith("news.rss.dongqiudi.")
+        or ev.topic.startswith("news.rss.weibo.")
+    )]
+    cn_text = "\n".join(ev.raw_excerpt for ev in cn_evidence)
+    cn_form_score = _score_cn_form(cn_text, request)
+
     form_score = _score_recent_form(fundamental_text, request)
     h2h_score = _score_h2h(fundamental_text, request)
     squad_score, has_sideline = _score_squad(fundamental_text, request)
     standings_score = _score_standings(fundamental_text, request)
 
-    # Combine form + standings into a single form signal
-    combined_form = form_score + standings_score
+    # Combine form + standings + cn media form into a single form signal
+    combined_form = form_score + standings_score + cn_form_score
     combined_form = max(-0.18, min(0.18, combined_form))
 
     return [
@@ -113,6 +124,18 @@ def build_factors(
             evidence_ids=weather_evidence,
             missing_reason="" if has_weather else "未获取比赛日天气数据，可从 Open-Meteo 自动补采",
         ),
+        FactorImpact(
+            factor_id="media.cn_coverage",
+            label="国内媒体报道覆盖",
+            group="media",
+            enabled=len(cn_evidence) >= 3,
+            weight=0.06 if len(cn_evidence) >= 3 else 0.0,
+            impact=0.0,
+            direction="neutral",
+            confidence=0.30 if cn_evidence else 0.0,
+            evidence_ids=[ev.id for ev in cn_evidence],
+            missing_reason="" if cn_evidence else "未抓取到国内媒体报道，中文覆盖因子不启用",
+        ),
     ]
 
 
@@ -124,6 +147,9 @@ _H2H_RE = re.compile(
 )
 _SIDELINE_RE = re.compile(r"伤停信息[：:]\s*([^\s]+)\s*(\d+)\s*人缺席[，,]\s*([^\s]+)\s*(\d+)\s*人缺席")
 _STANDINGS_RE = re.compile(r"积分榜[：:]\s*(.+?)(?:，|；|$)")
+
+# Chinese media form patterns — matches snippets like "巴西近5场3胜1平1负"
+_CN_FORM_RE = re.compile(r"([一-鿿\w]+?)(?:近期|最近|近)\d*场[：:\s]*(\d+)胜(\d+)平(\d+)负")
 
 
 def _score_recent_form(text: str, request: FootballOsintJobRequest) -> float:
@@ -230,6 +256,36 @@ def _score_standings(text: str, request: FootballOsintJobRequest) -> float:
 
     # Lower rank number = better. Each rank diff → 0.015 impact, capped at ±0.06
     raw = (away_rank - home_rank) * 0.015
+    return max(-0.06, min(0.06, round(raw, 3)))
+
+
+def _score_cn_form(text: str, request: FootballOsintJobRequest) -> float:
+    """Extract form signal from Chinese media search snippets.
+
+    Weaker than dongqiudi structured data (snippets are shorter and less
+    reliable), so the impact is capped at ±0.06 — half of _score_recent_form.
+    """
+    home_name = request.home_team
+    away_name = request.away_team
+    records: dict[str, tuple[int, int, int]] = {}
+    for m in _CN_FORM_RE.finditer(text):
+        name = m.group(1)
+        w, d, l = int(m.group(2)), int(m.group(3)), int(m.group(4))
+        records[name] = (w, d, l)
+
+    home_rec = records.get(home_name)
+    away_rec = records.get(away_name)
+    if not home_rec or not away_rec:
+        return 0.0
+
+    games = sum(home_rec)
+    if games == 0:
+        return 0.0
+    home_ppg = (home_rec[0] * 3 + home_rec[1]) / games
+    away_games = sum(away_rec)
+    away_ppg = (away_rec[0] * 3 + away_rec[1]) / away_games if away_games else 0.0
+
+    raw = (home_ppg - away_ppg) * 0.06
     return max(-0.06, min(0.06, round(raw, 3)))
 
 

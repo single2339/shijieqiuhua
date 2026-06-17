@@ -312,6 +312,10 @@ def _collect_search_sources(
         sources.append(OsintSourceStatus(adapter=source.adapter, label=source.label,
             status="skipped", reason="not implemented"))
 
+    # Chinese domestic media search — runs after DDG so both English and
+    # Chinese coverage contribute evidence independently.
+    _collect_chinese_search(request, evidence, sources)
+
 
 def _collect_ddg_search(
     source,
@@ -395,3 +399,87 @@ def _targeted_queries(question: str, home: str, away: str) -> list[str]:
         queries.append(f"{home} {away} latest team news preview")
 
     return queries
+
+
+# ── Chinese domestic media search ──
+
+# High-signal Chinese sports media domains for Tavily include_domains.
+CN_DOMAINS = [
+    "sports.sina.com.cn",
+    "sports.qq.com",
+    "zhibo8.com",
+    "hupu.com",
+    "titansports.cn",
+    "dongqiudi.com",
+    "sohu.com",
+    "163.com",
+]
+
+
+def _targeted_cn_queries(question: str, home: str, away: str) -> list[str]:
+    """Dimension-specific Chinese search queries for domestic media."""
+    q = question.lower()
+    queries: list[str] = []
+
+    if any(kw in q for kw in ["进球", "总进球", "进球数", "大球", "小球", "比分"]):
+        queries.append(f"{home} {away} 进球 数据 统计")
+
+    if any(kw in q for kw in ["球员", "核心", "主力", "首发", "伤病", "缺席", "阵容"]):
+        queries.append(f"{home} {away} 伤病 首发 阵容")
+
+    if any(kw in q for kw in ["红黄牌", "黄牌", "红牌", "犯规", "裁判"]):
+        queries.append(f"{home} {away} 红黄牌 裁判")
+
+    if any(kw in q for kw in ["角球", "角"]):
+        queries.append(f"{home} {away} 角球 统计")
+
+    if any(kw in q for kw in ["风险", "临场", "变数", "不确定"]):
+        queries.append(f"{home} {away} 最新消息 赛前")
+
+    return queries
+
+
+def _collect_chinese_search(
+    request: FootballOsintJobRequest,
+    evidence: list[OsintEvidence],
+    sources: list[OsintSourceStatus],
+) -> None:
+    home = request.home_team
+    away = request.away_team
+
+    # Primary: preview + team news; then question-specific; then dimension-targeted.
+    queries = [f"{home} {away} 前瞻 分析 预测"]
+    question = (request.question or "").strip()
+    if question and len(question) > 2:
+        queries.append(f"{home} {away} {question}")
+    queries.extend(_targeted_cn_queries(question, home, away))
+
+    evidence_ids = []
+    for i, query in enumerate(queries[:4]):
+        sk = cache.search_key(f"cn:{query}")
+        results = cache.search_cache.get(sk)
+        if results is None:
+            domains = CN_DOMAINS if i == 0 else None
+            results = web_search_adapter.search(query, include_domains=domains)
+            cache.search_cache.set(sk, results)
+        topic = "search.cn.preview" if i == 0 else f"search.cn.q{i}"
+        for result in results:
+            evidence_ids.append(evidence_module.append_evidence(
+                evidence,
+                source="国内媒体搜索",
+                source_type="search",
+                claim=result["title"],
+                topic=topic,
+                side="neutral",
+                confidence=0.28,
+                raw_excerpt=result["snippet"],
+                url=result["url"],
+            ))
+
+    sources.append(OsintSourceStatus(
+        adapter="cn_search",
+        label="国内媒体搜索",
+        status="ok" if evidence_ids else "skipped",
+        evidence_ids=evidence_ids,
+        reason="" if evidence_ids else "无中文搜索结果",
+    ))

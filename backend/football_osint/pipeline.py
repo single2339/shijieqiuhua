@@ -455,12 +455,12 @@ def _collect_chinese_search(
     queries.extend(_targeted_cn_queries(question, home, away))
 
     evidence_ids = []
-    for i, query in enumerate(queries[:4]):
+    # Max 2 queries: primary + question. DDG-only to avoid Tavily API costs.
+    for i, query in enumerate(queries[:2]):
         sk = cache.search_key(f"cn:{query}")
         results = cache.search_cache.get(sk)
         if results is None:
-            domains = CN_DOMAINS if i == 0 else None
-            results = web_search_adapter.search(query, include_domains=domains)
+            results = web_search_adapter.search(query, use_tavily=False)
             cache.search_cache.set(sk, results)
         topic = "search.cn.preview" if i == 0 else f"search.cn.q{i}"
         for result in results:

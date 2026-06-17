@@ -468,7 +468,7 @@ def test_name_translation_falls_back_to_english_without_llm(monkeypatch, tmp_pat
 
 
 def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
-    """Chinese search produces evidence with search.cn.* topics."""
+    """Chinese search produces evidence with search.cn.* topics, DDG-only."""
     from backend.football_osint.adapters import web_search
     from backend.football_osint.pipeline import _collect_chinese_search
     from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
@@ -477,10 +477,10 @@ def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
 
     def fake_search(query, **kwargs):
         call_count["n"] += 1
-        # First call should be primary query with CN_DOMAINS
+        # First call should be primary query, must be DDG-only (no Tavily)
         if call_count["n"] == 1:
             assert "前瞻" in query
-            assert kwargs.get("include_domains") is not None
+            assert kwargs.get("use_tavily") is False
         return [
             {"title": f"搜索结果 {call_count['n']}", "url": f"https://sports.sina.com.cn/article/{call_count['n']}", "snippet": "巴西近5场3胜1平1负"},
         ]

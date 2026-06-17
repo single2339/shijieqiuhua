@@ -41,14 +41,20 @@ def search(
     *,
     max_results: int = MAX_RESULTS,
     include_domains: list[str] | None = None,
+    use_tavily: bool = True,
 ) -> list[dict[str, str]]:
-    """Return [{title, url, snippet}, ...]. Tavily if keyed, else DDG."""
-    api_key = os.getenv("TAVILY_API_KEY", "")
-    if api_key:
-        results = _tavily_search(api_key, query, max_results, include_domains)
-        if results:
-            return results
-        # Tavily failed/empty → fall through to DDG so we still return something.
+    """Return [{title, url, snippet}, ...]. Tavily if keyed, else DDG.
+
+    Set use_tavily=False to skip Tavily and go straight to DDG,
+    e.g. for cost-sensitive or lower-signal queries.
+    """
+    if use_tavily:
+        api_key = os.getenv("TAVILY_API_KEY", "")
+        if api_key:
+            results = _tavily_search(api_key, query, max_results, include_domains)
+            if results:
+                return results
+            # Tavily failed/empty → fall through to DDG so we still return something.
     return _ddg_search(query, max_results)
 
 

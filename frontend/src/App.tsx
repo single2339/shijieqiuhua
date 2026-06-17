@@ -20,6 +20,7 @@ import type { AuthCredentials } from './shijieqiuhua/components/AuthScreen'
 import AccountPanel from './shijieqiuhua/components/AccountPanel'
 import type { HistoryItem } from './shijieqiuhua/components/AccountPanel'
 import IdleHint from './shijieqiuhua/components/IdleHint'
+import { useStagedProgress } from './shijieqiuhua/useStagedProgress'
 import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
@@ -52,6 +53,7 @@ export default function App() {
   const [view, setView] = useState<'landing' | 'auth' | 'app'>('landing')
   const [history, setHistory] = useState<HistoryItem[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const { staged, start: startStaged, finish: finishStaged, reset: resetStaged } = useStagedProgress()
 
   useEffect(() => { getMe().then(setUser).finally(() => setAuthLoading(false)) }, [])
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
@@ -133,6 +135,7 @@ export default function App() {
     setAnswer(null)
     setOsintJob(null)
     stopPoll()
+    startStaged()
     const request = {
       home_team: selectedMatch.homeTeam,
       away_team: selectedMatch.awayTeam,
@@ -154,14 +157,16 @@ export default function App() {
           at: '刚刚',
         }, ...h].slice(0, 6))
       }
-      if (!job) { setLoading(false); return }
-      setOsintJob(job)
-      // If job already terminal, stop here.
+      if (!job) { resetStaged(); setLoading(false); return }
+      // If job already terminal, snap progress to done and show the report.
       if (job.phase === 'done' || job.status === 'completed' || job.status === 'failed') {
+        finishStaged()
+        setOsintJob(job)
         setLoading(false)
         return
       }
-      // Poll for live progress.
+      // Defensive: if the backend ever returns a non-terminal job, poll for it.
+      setOsintJob(job)
       const jobId = job.job_id
       pollRef.current = setInterval(async () => {
         try {
@@ -169,14 +174,17 @@ export default function App() {
           setOsintJob(updated)
           if (updated.phase === 'done' || updated.status === 'completed' || updated.status === 'failed') {
             stopPoll()
+            finishStaged()
             setLoading(false)
           }
         } catch {
           stopPoll()
+          resetStaged()
           setLoading(false)
         }
       }, 2000)
     } catch (e) {
+      resetStaged()
       setError(e instanceof Error ? e.message : '问题处理失败')
       setLoading(false)
     }
@@ -239,7 +247,7 @@ export default function App() {
                 const isLive = m.publicLean.startsWith('进行中')
                 return (
                   <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
-                    onClick={() => { stopPoll(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false) }}>
+                    onClick={() => { stopPoll(); resetStaged(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false) }}>
                     <div className="sqh-fixture-top">
                       <span className="sqh-fixture-league">{m.league}</span>
                       {isLive && <span className="sqh-fixture-live">LIVE</span>}
@@ -263,6 +271,7 @@ export default function App() {
         {/* center */}
         <MatchCard match={selectedMatch} question={question} answer={answer}
           osintJob={osintJob} loading={loading} error={error} userTier={userTier}
+          staged={staged}
           onChange={setQuestion} onAsk={() => ask()} onPreset={ask}
           onUpgrade={() => setShowPaywall(true)} />
 
@@ -404,9 +413,10 @@ function ConfidenceBadge({ body }: { body: string }) {
 
 // ── MatchQuestionCard ──
 
-function MatchCard({ match, question, answer, osintJob, loading, error, userTier, onChange, onAsk, onPreset, onUpgrade }: {
+function MatchCard({ match, question, answer, osintJob, loading, error, userTier, staged, onChange, onAsk, onPreset, onUpgrade }: {
   match: FootballMatch | null; question: string; answer: FootballQuestionAnswer | null
   osintJob: FootballOsintJob | null; loading: boolean; error: string; userTier: UserTier
+  staged: { phase: string; progress: number }
   onChange: (v: string) => void; onAsk: () => void; onPreset: (v: string) => void
   onUpgrade: () => void
 }) {
@@ -449,7 +459,6 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
             ))}
           </div>
           {error && <div className="sqh-answer-error">{error}</div>}
-          {loading && !osintJob && <div className="sqh-answer-loading"><i><b /></i><span>正在判断…</span></div>}
           {!loading && !answer && !osintJob && <IdleHint />}
           {answer && (
             <motion.div className="sqh-answer" data-related={answer.related} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -464,9 +473,9 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
         </div>
       </AuthGate>
 
-      {/* live progress — shown during polling */}
-      {loading && osintJob && (
-        <PhaseTracker phase={osintJob.phase} progress={osintJob.progress} sources={osintJob.sources} />
+      {/* live progress — staged phase animation while the synchronous job runs */}
+      {loading && (
+        <PhaseTracker phase={staged.phase} progress={staged.progress} />
       )}
 
       {/* evidence — shown when full OSINT job data is available */}

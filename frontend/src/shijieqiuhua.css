@@ -1506,7 +1506,10 @@
    ────────────────────────────────────────────────────── */
 
 .sqh-land {
-  min-height: 100dvh;
+  /* #root is height:100% + overflow:hidden (dashboard needs that), so the
+     landing page must own its own scroll or everything below one viewport
+     gets clipped. Fix the height to the viewport and scroll internally. */
+  height: 100dvh;
   overflow-y: auto;
   background:
     radial-gradient(1100px 520px at 50% -10%, rgba(20, 60, 45, .09), transparent 55%),
@@ -1784,7 +1787,8 @@
 
 /* ─────────────────────── auth screen (full page) ─────────────────────── */
 .sqh-auth-screen {
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow-y: auto;
   display: grid;
   grid-template-columns: minmax(320px, 460px) 1fr;
   background: #f7f3e7;

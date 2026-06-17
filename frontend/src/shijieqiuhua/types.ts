@@ -10,6 +10,7 @@ export interface FootballMatch {
   id: string
   league: string
   kickoffAt: string
+  kickoffIso: string
   homeTeam: string
   awayTeam: string
   publicLean: string
@@ -20,6 +21,7 @@ export interface FixtureStatus {
   id: string
   league: string
   kickoff_at: string
+  kickoff_iso?: string
   home_team: string
   away_team: string
   status: 'scheduled' | 'live' | 'finished'

@@ -425,7 +425,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
         <div className="sqh-hero-foot">
           <span className="sqh-hero-pill"><Eye size={13} weight="duotone" />公开倾向 · {match.publicLean}</span>
           {(() => {
-            const countdown = kickoffCountdown(match.kickoffAt)
+            const countdown = kickoffCountdown(match.kickoffIso)
             return countdown
               ? <span className="sqh-hero-stat"><b className="mono">{countdown}</b><span>距开赛</span></span>
               : null

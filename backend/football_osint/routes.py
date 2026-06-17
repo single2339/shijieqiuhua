@@ -147,6 +147,7 @@ async def list_fixtures(days: int = 3):
             "id": f.match_id,
             "league": f.league,
             "kickoff_at": f.kickoff_at.astimezone(football_data_schedule.CST).strftime("%m-%d %H:%M"),
+            "kickoff_iso": f.kickoff_at.astimezone(football_data_schedule.CST).isoformat(),
             "home_team": f.home_team,
             "away_team": f.away_team,
             "status": f.status,

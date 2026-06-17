@@ -1,6 +1,6 @@
 import {
-  ArrowRight, Check, Clock, Gauge, Graph, Key,
-  Lightning, MagnifyingGlass, Scales, ShieldCheck, Stack,
+  ArrowRight, Check, CheckCircle, Clock, Gauge, Graph, Key,
+  Lightning, MagnifyingGlass, Scales, ShieldCheck, SpinnerGap, Stack,
 } from '@phosphor-icons/react'
 import { PLANS } from '../plans'
 
@@ -81,6 +81,8 @@ export default function LandingPage({ onEnter, onRegister, onLogin }: LandingPag
           ))}
         </div>
       </header>
+
+      <ShowcaseMock onEnter={onEnter} />
 
       {/* how it works */}
       <section className="sqh-land-section" id="how">
@@ -165,6 +167,62 @@ export default function LandingPage({ onEnter, onRegister, onLogin }: LandingPag
           </span>
         </div>
       </footer>
+    </div>
+  )
+}
+
+// Static product preview shown in the hero — a glimpse of the 研判台.
+const MOCK_STEPS: { label: string; state: 'done' | 'active' | 'todo' }[] = [
+  { label: '核验', state: 'done' },
+  { label: '采集', state: 'done' },
+  { label: '归一', state: 'done' },
+  { label: '打分', state: 'active' },
+  { label: '研判', state: 'todo' },
+]
+
+const MOCK_PROB: [string, number][] = [['主胜', 48], ['平局', 27], ['客胜', 25]]
+
+function ShowcaseMock({ onEnter }: { onEnter: () => void }) {
+  return (
+    <div className="sqh-showcase" onClick={onEnter} role="button" tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter') onEnter() }}>
+      <div className="sqh-showcase-bar">
+        <i /><i /><i />
+        <span className="mono">qiuhua.app / 研判台</span>
+      </div>
+      <div className="sqh-showcase-body">
+        <div className="sqh-showcase-card">
+          <div className="sqh-showcase-league">英超 · 第32轮</div>
+          <div className="sqh-showcase-teams">
+            <span>阿森纳</span><em>VS</em><span>曼城</span>
+          </div>
+          <span className="sqh-cbadge sqh-cbadge--L2" style={{ marginTop: 14 }}>L2 · 高可信</span>
+          <div className="sqh-showcase-prob">
+            {MOCK_PROB.map(([l, v]) => (
+              <div key={l}>
+                <span>{l}</span>
+                <b className="mono">{v}%</b>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="sqh-showcase-steps">
+          {MOCK_STEPS.map((s, i) => (
+            <div className={`sqh-showcase-step sqh-showcase-step--${s.state}`} key={s.label}>
+              <span className="sqh-showcase-bead">
+                {s.state === 'done' ? <CheckCircle size={13} weight="fill" />
+                  : s.state === 'active' ? <SpinnerGap size={13} weight="bold" className="sqh-phase-spin" />
+                  : <span className="mono">{i + 1}</span>}
+              </span>
+              <span>{s.label}</span>
+              {s.state === 'done' && <span className="sqh-tag sqh-tag--ok">命中</span>}
+            </div>
+          ))}
+          <div className="sqh-showcase-note">
+            <ShieldCheck size={14} weight="duotone" />主队首发完整 · 客队中卫停赛（双源确认）
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

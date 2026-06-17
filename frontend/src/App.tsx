@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Clock, Question } from '@phosphor-icons/react'
+import { ArrowRight, Clock, Eye, House, Question } from '@phosphor-icons/react'
 import { motion } from 'framer-motion'
 import {
   askFootballQuestion, createFootballOsintJob, fetchFixtures, fetchFootballOsintJob,
@@ -10,13 +10,16 @@ import { fixtureToMatch } from './shijieqiuhua/mockData'
 import type { FootballMatch, FootballOsintJob, FootballQuestionAnswer } from './shijieqiuhua/types'
 import AuthGate from './shijieqiuhua/components/AuthGate'
 import type { UserTier } from './shijieqiuhua/components/AuthGate'
-import AccountStatus from './shijieqiuhua/components/AccountStatus'
-import PaymentUnlock from './shijieqiuhua/components/PaymentUnlock'
 import AdminPanel from './shijieqiuhua/components/AdminPanel'
 import ReportView from './shijieqiuhua/components/ReportView'
 import PhaseTracker from './shijieqiuhua/components/PhaseTracker'
 import PaywallModal from './shijieqiuhua/components/PaywallModal'
 import LandingPage from './shijieqiuhua/components/LandingPage'
+import AuthScreen from './shijieqiuhua/components/AuthScreen'
+import type { AuthCredentials } from './shijieqiuhua/components/AuthScreen'
+import AccountPanel from './shijieqiuhua/components/AccountPanel'
+import type { HistoryItem } from './shijieqiuhua/components/AccountPanel'
+import IdleHint from './shijieqiuhua/components/IdleHint'
 import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
@@ -43,15 +46,11 @@ export default function App() {
   const [error, setError] = useState('')
   const [user, setUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
-  const [loginUser_, setLoginUser_] = useState('')
-  const [loginPass, setLoginPass] = useState('')
-  const [loginEmail, setLoginEmail] = useState('')
-  const [loginInvite, setLoginInvite] = useState('')
-  const [loginMode, setLoginMode] = useState<'login' | 'register'>('login')
-  const [authError, setAuthError] = useState('')
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [showPaywall, setShowPaywall] = useState(false)
   const [fixtureFilter, setFixtureFilter] = useState('全部')
-  const [view, setView] = useState<'landing' | 'app'>('landing')
+  const [view, setView] = useState<'landing' | 'auth' | 'app'>('landing')
+  const [history, setHistory] = useState<HistoryItem[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => { getMe().then(setUser).finally(() => setAuthLoading(false)) }, [])
@@ -93,20 +92,17 @@ export default function App() {
     return hasPaid ? 'paid' : 'free'
   }, [user])
 
-  async function handleAuth() {
-    setAuthError('')
-    try {
-      const u = loginMode === 'login'
-        ? await loginUser(loginUser_, loginPass)
-        : await registerUser(loginUser_, loginPass, loginInvite, loginEmail)
-      setUser(u)
-      setLoginUser_(''); setLoginPass(''); setLoginEmail(''); setLoginInvite('')
-    } catch (e) {
-      setAuthError(e instanceof Error ? e.message : '认证失败')
-    }
+  async function handleAuthSubmit(creds: AuthCredentials) {
+    const u = authMode === 'login'
+      ? await loginUser(creds.username, creds.password)
+      : await registerUser(creds.username, creds.password, creds.invite, creds.email)
+    setUser(u)
+    setView('app')
   }
 
   async function handleLogout() { await logoutUser(); setUser(null); setAnswer(null); setOsintJob(null); setError('') }
+
+  function goAuth(mode: 'login' | 'register') { setAuthMode(mode); setView('auth') }
 
   function handlePaid(u: AuthUser) { setUser(u); setShowPaywall(false) }
 
@@ -150,6 +146,14 @@ export default function App() {
         askFootballQuestion(request),
       ])
       setAnswer(qa)
+      if (qa.related) {
+        setHistory(h => [{
+          question: next,
+          match: `${selectedMatch.homeTeam} vs ${selectedMatch.awayTeam}`,
+          level: qa.confidence_level,
+          at: '刚刚',
+        }, ...h].slice(0, 6))
+      }
       if (!job) { setLoading(false); return }
       setOsintJob(job)
       // If job already terminal, stop here.
@@ -182,8 +186,19 @@ export default function App() {
     return (
       <LandingPage
         onEnter={() => setView('app')}
-        onRegister={() => { setView('app'); setLoginMode('register') }}
-        onLogin={() => { setView('app'); setLoginMode('login') }}
+        onRegister={() => goAuth('register')}
+        onLogin={() => goAuth('login')}
+      />
+    )
+  }
+
+  if (view === 'auth') {
+    return (
+      <AuthScreen
+        mode={authMode}
+        onModeChange={setAuthMode}
+        onSubmit={handleAuthSubmit}
+        onBack={() => setView('landing')}
       />
     )
   }
@@ -191,10 +206,14 @@ export default function App() {
   return (
     <main className="sqh-app">
       <header className="sqh-topbar">
-        <div className="sqh-brand">
+        <div className="sqh-brand sqh-brand--clickable" onClick={() => setView('landing')}
+          role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') setView('landing') }}>
           <div className="sqh-mark">世</div>
           <div><h1>世界球花</h1><p>足球情报问答</p></div>
         </div>
+        <button className="btn btn-quiet btn-sm" onClick={() => setView('landing')}>
+          <House size={15} weight="bold" /> 首页
+        </button>
       </header>
 
       <section className="sqh-shell">
@@ -251,57 +270,20 @@ export default function App() {
         <aside className="sqh-panel sqh-ask-panel">
           {authLoading ? (
             <span style={{ fontSize: 12, color: '#6d725f' }}>加载中…</span>
-          ) : user ? (
-            <>
-              <AccountStatus tier={userTier} nickname={user.username} />
-              {userTier === 'free' && <PaymentUnlock user={user} onRedeemed={setUser} />}
-              {user.role === 'admin' && <AdminPanel user={user} />}
-              <AuthGate tier={userTier} requiredTier="paid">
-                <div className="sqh-section-title"><Question size={16} weight="duotone" /><span>问答历史</span></div>
-                {answer ? (
-                  <div style={{ fontSize: 12, color: '#6d725f', marginTop: 8 }}>
-                    最近：{question.slice(0, 30)}…<br />判断：{answer.judgment || '—'}
-                  </div>
-                ) : (
-                  <p style={{ fontSize: 12, color: '#6d725f', marginTop: 8 }}>暂无记录，选择比赛开始提问</p>
-                )}
-              </AuthGate>
-              <button style={{ marginTop: 8, border: '1px solid #e3d8c7', borderRadius: 8, background: 'transparent', padding: '6px 12px', cursor: 'pointer', fontSize: 12 }} onClick={handleLogout}>退出</button>
-            </>
           ) : (
-            <div>
-              <AccountStatus tier="guest" />
-              <div style={{ marginTop: 12 }}>
-                <div className="sqh-section-title"><span>{loginMode === 'login' ? '登录' : '注册'}</span></div>
-                <input style={{ width: '100%', marginTop: 8, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
-                  placeholder="用户名" value={loginUser_} onChange={e => setLoginUser_(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
-                <input style={{ width: '100%', marginTop: 6, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
-                  type="password" placeholder="密码" value={loginPass} onChange={e => setLoginPass(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
-                {loginMode === 'register' && (
-                  <>
-                    <input style={{ width: '100%', marginTop: 6, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
-                      placeholder="邮箱（选填）" value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
-                    <input style={{ width: '100%', marginTop: 6, padding: '6px 8px', border: '1px solid #e1d7c6', borderRadius: 8, fontSize: 12 }}
-                      placeholder="邀请码" value={loginInvite} onChange={e => setLoginInvite(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleAuth() }} />
-                  </>
-                )}
-                {authError && <div style={{ marginTop: 6, fontSize: 11, color: '#8a523f' }}>{authError}</div>}
-                <button style={{ marginTop: 8, width: '100%', border: 0, borderRadius: 8, background: '#143c2d', color: '#f8f1df', padding: '8px', fontWeight: 900, cursor: 'pointer' }}
-                  onClick={handleAuth}>{loginMode === 'login' ? '登录' : '注册'}</button>
-                <button style={{ marginTop: 4, width: '100%', border: 0, borderRadius: 8, background: 'transparent', color: '#6d725f', padding: '6px', fontSize: 11, cursor: 'pointer' }}
-                  onClick={() => { setLoginMode(loginMode === 'login' ? 'register' : 'login'); setAuthError('') }}>
-                  {loginMode === 'login' ? '没有账号？注册' : '已有账号？登录'}
-                </button>
-              </div>
-            </div>
+            <>
+              <AccountPanel
+                user={user}
+                tier={userTier}
+                history={history}
+                onLogin={() => goAuth('login')}
+                onRegister={() => goAuth('register')}
+                onUnlock={() => setShowPaywall(true)}
+                onLogout={handleLogout}
+              />
+              {user?.role === 'admin' && <AdminPanel user={user} />}
+            </>
           )}
-          <div style={{ marginTop: 12, fontSize: 11, color: '#c9a86a' }}>
-            研判结论不构成投注建议 · 缺数据时明说，不编造倾向 · <a href="/terms.html" style={{color:'inherit'}}>用户协议</a> · <a href="/privacy.html" style={{color:'inherit'}}>隐私政策</a>
-          </div>
         </aside>
       </section>
 
@@ -310,6 +292,18 @@ export default function App() {
       )}
     </main>
   )
+}
+
+// Compute "T-Nh" countdown only when kickoffAt parses to a real future time.
+// Returns null for display-only strings (e.g. "今晚 20:00") — we never fabricate.
+function kickoffCountdown(kickoffAt: string): string | null {
+  const ts = Date.parse(kickoffAt)
+  if (Number.isNaN(ts)) return null
+  const diffH = (ts - Date.now()) / 3_600_000
+  if (diffH <= 0) return '进行中'
+  if (diffH < 1) return `T-${Math.round(diffH * 60)}min`
+  if (diffH < 72) return `T-${Math.round(diffH)}h`
+  return `T-${Math.round(diffH / 24)}d`
 }
 
 // ── Structured Report Renderer ──
@@ -425,7 +419,15 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
       <div className="sqh-match-hero">
         <div className="sqh-hero-meta"><span>{match.league}</span><span>{match.kickoffAt}</span></div>
         <div className="sqh-teams"><strong>{match.homeTeam}</strong><span>对阵</span><strong>{match.awayTeam}</strong></div>
-        <p>{match.publicLean}</p>
+        <div className="sqh-hero-foot">
+          <span className="sqh-hero-pill"><Eye size={13} weight="duotone" />公开倾向 · {match.publicLean}</span>
+          {(() => {
+            const countdown = kickoffCountdown(match.kickoffAt)
+            return countdown
+              ? <span className="sqh-hero-stat"><b className="mono">{countdown}</b><span>距开赛</span></span>
+              : null
+          })()}
+        </div>
       </div>
       <AuthGate tier={userTier} requiredTier="paid">
         <div className="sqh-ask-box">
@@ -445,6 +447,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
           </div>
           {error && <div className="sqh-answer-error">{error}</div>}
           {loading && !osintJob && <div className="sqh-answer-loading"><i><b /></i><span>正在判断…</span></div>}
+          {!loading && !answer && !osintJob && <IdleHint />}
           {answer && (
             <motion.div className="sqh-answer" data-related={answer.related} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
               <div className="sqh-answer-head">

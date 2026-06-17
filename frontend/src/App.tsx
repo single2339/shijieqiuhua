@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Clock, Question } from '@phosphor-icons/react'
 import { motion } from 'framer-motion'
 import {
-  askFootballQuestion, createFootballOsintJob, fetchFixtures, getMe, loginUser, logoutUser, registerUser,
+  askFootballQuestion, createFootballOsintJob, fetchFixtures, fetchFootballOsintJob,
+  getMe, loginUser, logoutUser, registerUser,
 } from './shijieqiuhua/api'
 import type { AuthUser } from './shijieqiuhua/api'
 import { fixtureToMatch } from './shijieqiuhua/mockData'
@@ -10,9 +11,12 @@ import type { FootballMatch, FootballOsintJob, FootballQuestionAnswer } from './
 import AuthGate from './shijieqiuhua/components/AuthGate'
 import type { UserTier } from './shijieqiuhua/components/AuthGate'
 import AccountStatus from './shijieqiuhua/components/AccountStatus'
-import EvidenceStrength from './shijieqiuhua/components/EvidenceStrength'
 import PaymentUnlock from './shijieqiuhua/components/PaymentUnlock'
 import AdminPanel from './shijieqiuhua/components/AdminPanel'
+import ReportView from './shijieqiuhua/components/ReportView'
+import PhaseTracker from './shijieqiuhua/components/PhaseTracker'
+import PaywallModal from './shijieqiuhua/components/PaywallModal'
+import LandingPage from './shijieqiuhua/components/LandingPage'
 import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
@@ -45,8 +49,13 @@ export default function App() {
   const [loginInvite, setLoginInvite] = useState('')
   const [loginMode, setLoginMode] = useState<'login' | 'register'>('login')
   const [authError, setAuthError] = useState('')
+  const [showPaywall, setShowPaywall] = useState(false)
+  const [fixtureFilter, setFixtureFilter] = useState('全部')
+  const [view, setView] = useState<'landing' | 'app'>('landing')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => { getMe().then(setUser).finally(() => setAuthLoading(false)) }, [])
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -99,10 +108,26 @@ export default function App() {
 
   async function handleLogout() { await logoutUser(); setUser(null); setAnswer(null); setOsintJob(null); setError('') }
 
+  function handlePaid(u: AuthUser) { setUser(u); setShowPaywall(false) }
+
   const selectedMatch = useMemo(
     () => matches.find(m => m.id === selectedId) ?? (matches.length > 0 ? matches[0] : null),
     [matches, selectedId],
   )
+
+  const filteredMatches = useMemo(() => {
+    if (fixtureFilter === '全部') return matches
+    if (fixtureFilter === '进行中') return matches.filter(m => m.publicLean.includes('进行中'))
+    if (fixtureFilter === '今日') return matches.filter(m => m.publicLean.includes('未开赛') || m.publicLean.includes('进行中'))
+    return matches.filter(m => m.league.includes(fixtureFilter))
+  }, [matches, fixtureFilter])
+
+  const fixtureLeagues = useMemo(
+    () => [...new Set(matches.map(m => m.league.split('·')[0].trim()))].slice(0, 4),
+    [matches],
+  )
+
+  function stopPoll() { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
 
   async function ask(next = question) {
     if (!selectedMatch) return
@@ -111,6 +136,7 @@ export default function App() {
     setError('')
     setAnswer(null)
     setOsintJob(null)
+    stopPoll()
     const request = {
       home_team: selectedMatch.homeTeam,
       away_team: selectedMatch.awayTeam,
@@ -124,12 +150,42 @@ export default function App() {
         askFootballQuestion(request),
       ])
       setAnswer(qa)
+      if (!job) { setLoading(false); return }
       setOsintJob(job)
+      // If job already terminal, stop here.
+      if (job.phase === 'done' || job.status === 'completed' || job.status === 'failed') {
+        setLoading(false)
+        return
+      }
+      // Poll for live progress.
+      const jobId = job.job_id
+      pollRef.current = setInterval(async () => {
+        try {
+          const updated = await fetchFootballOsintJob(jobId)
+          setOsintJob(updated)
+          if (updated.phase === 'done' || updated.status === 'completed' || updated.status === 'failed') {
+            stopPoll()
+            setLoading(false)
+          }
+        } catch {
+          stopPoll()
+          setLoading(false)
+        }
+      }, 2000)
     } catch (e) {
       setError(e instanceof Error ? e.message : '问题处理失败')
-    } finally {
       setLoading(false)
     }
+  }
+
+  if (view === 'landing') {
+    return (
+      <LandingPage
+        onEnter={() => setView('app')}
+        onRegister={() => { setView('app'); setLoginMode('register') }}
+        onLogin={() => { setView('app'); setLoginMode('login') }}
+      />
+    )
   }
 
   return (
@@ -144,21 +200,43 @@ export default function App() {
       <section className="sqh-shell">
         {/* left */}
         <aside className="sqh-panel sqh-match-rail" aria-label="赛事列表">
-          <div className="sqh-section-title"><Clock size={16} weight="duotone" /><span>今日赛事</span></div>
-          <div className="sqh-match-list">
+          <div className="sqh-rail-hd">
+            <div className="sqh-section-title"><Clock size={16} weight="duotone" /><span>赛程</span></div>
+            <div className="sqh-rail-count mono">{matches.length} 场</div>
+          </div>
+          <div className="sqh-rail-filters">
+            {['全部', '今日', '进行中', ...fixtureLeagues].map(f => (
+              <button key={f} className={`sqh-filter-chip${fixtureFilter === f ? ' sqh-filter-chip--on' : ''}`}
+                onClick={() => setFixtureFilter(f)}>{f}</button>
+            ))}
+          </div>
+          <div className="sqh-rail-list">
             {fixturesLoading ? (
               <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>加载中…</span>
-            ) : matches.length === 0 ? (
+            ) : filteredMatches.length === 0 ? (
               <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>暂无赛事</span>
             ) : (
-              matches.map(m => (
-                <button key={m.id} className="sqh-match-row" data-active={m.id === selectedId}
-                  onClick={() => { setSelectedId(m.id); setAnswer(null); setError('') }}>
-                  <span className="sqh-match-league">{m.league}</span>
-                  <strong>{m.homeTeam} vs {m.awayTeam}</strong>
-                  <span>{m.kickoffAt} · {m.publicLean}</span>
-                </button>
-              ))
+              filteredMatches.map(m => {
+                const isLive = m.publicLean.startsWith('进行中')
+                return (
+                  <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
+                    onClick={() => { setSelectedId(m.id); setAnswer(null); setError('') }}>
+                    <div className="sqh-fixture-top">
+                      <span className="sqh-fixture-league">{m.league}</span>
+                      {isLive && <span className="sqh-fixture-live">LIVE</span>}
+                    </div>
+                    <div className="sqh-fixture-teams">
+                      <span>{m.homeTeam}</span>
+                      <span className="sqh-fixture-vs">VS</span>
+                      <span>{m.awayTeam}</span>
+                    </div>
+                    <div className="sqh-fixture-foot">
+                      <span className={`sqh-status-dot${isLive ? ' sqh-status-dot--live' : ''}`} />
+                      <span>{m.kickoffAt} · {m.publicLean}</span>
+                    </div>
+                  </button>
+                )
+              })
             )}
           </div>
         </aside>
@@ -166,7 +244,8 @@ export default function App() {
         {/* center */}
         <MatchCard match={selectedMatch} question={question} answer={answer}
           osintJob={osintJob} loading={loading} error={error} userTier={userTier}
-          onChange={setQuestion} onAsk={() => ask()} onPreset={ask} />
+          onChange={setQuestion} onAsk={() => ask()} onPreset={ask}
+          onUpgrade={() => setShowPaywall(true)} />
 
         {/* right */}
         <aside className="sqh-panel sqh-ask-panel">
@@ -225,6 +304,10 @@ export default function App() {
           </div>
         </aside>
       </section>
+
+      {showPaywall && (
+        <PaywallModal user={user} onClose={() => setShowPaywall(false)} onPaid={handlePaid} />
+      )}
     </main>
   )
 }
@@ -324,10 +407,11 @@ function ConfidenceBadge({ body }: { body: string }) {
 
 // ── MatchQuestionCard ──
 
-function MatchCard({ match, question, answer, osintJob, loading, error, userTier, onChange, onAsk, onPreset }: {
+function MatchCard({ match, question, answer, osintJob, loading, error, userTier, onChange, onAsk, onPreset, onUpgrade }: {
   match: FootballMatch | null; question: string; answer: FootballQuestionAnswer | null
   osintJob: FootballOsintJob | null; loading: boolean; error: string; userTier: UserTier
   onChange: (v: string) => void; onAsk: () => void; onPreset: (v: string) => void
+  onUpgrade: () => void
 }) {
   if (!match) {
     return (
@@ -360,7 +444,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
             ))}
           </div>
           {error && <div className="sqh-answer-error">{error}</div>}
-          {loading && <div className="sqh-answer-loading"><i><b /></i><span>正在判断…</span></div>}
+          {loading && !osintJob && <div className="sqh-answer-loading"><i><b /></i><span>正在判断…</span></div>}
           {answer && (
             <motion.div className="sqh-answer" data-related={answer.related} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
               <div className="sqh-answer-head">
@@ -374,28 +458,13 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
         </div>
       </AuthGate>
 
-      {/* evidence — shown when full OSINT job data is available */}
-      {osintJob && osintJob.evidence.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <EvidenceStrength evidence={osintJob.evidence} factors={osintJob.factors} />
-        </div>
+      {/* live progress — shown during polling */}
+      {loading && osintJob && (
+        <PhaseTracker phase={osintJob.phase} progress={osintJob.progress} sources={osintJob.sources} />
       )}
 
-      {/* prediction summary — shown from OSINT job */}
-      {osintJob?.prediction && (
-        <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: osintJob.prediction.lean === 'info_insufficient' ? '#f1e4dd' : '#edf3e8', fontSize: 13, lineHeight: 1.6 }}>
-          <strong>情报研判 · {osintJob.confidence?.level ?? '—'}</strong>
-          <p style={{ margin: '4px 0 0' }}>{osintJob.prediction.summary}</p>
-          {osintJob.prediction.lean === 'info_insufficient' && (
-            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#8a523f' }}>我们没编。这场缺关键数据，等开赛前 2 小时还会再扫一遍。</p>
-          )}
-          {osintJob.prediction.drivers.length > 0 && (
-            <span style={{ color: '#6d725f', fontSize: 11 }}>
-              关键因子：{osintJob.prediction.drivers.join('、')}
-            </span>
-          )}
-        </div>
-      )}
+      {/* evidence — shown when full OSINT job data is available */}
+      <ReportView osintJob={osintJob} userTier={userTier} onUpgrade={onUpgrade} />
     </section>
   )
 }

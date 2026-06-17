@@ -477,10 +477,9 @@ def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
 
     def fake_search(query, **kwargs):
         call_count["n"] += 1
-        # First call should be primary query, must be DDG-only (no Tavily)
+        # Only 1 primary query with CN_DOMAINS (Tavily, DDG doesn't index Chinese)
         if call_count["n"] == 1:
             assert "前瞻" in query
-            assert kwargs.get("use_tavily") is False
         return [
             {"title": f"搜索结果 {call_count['n']}", "url": f"https://sports.sina.com.cn/article/{call_count['n']}", "snippet": "巴西近5场3胜1平1负"},
         ]

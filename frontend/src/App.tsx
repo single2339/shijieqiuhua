@@ -239,7 +239,7 @@ export default function App() {
                 const isLive = m.publicLean.startsWith('进行中')
                 return (
                   <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
-                    onClick={() => { setSelectedId(m.id); setAnswer(null); setError('') }}>
+                    onClick={() => { stopPoll(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false) }}>
                     <div className="sqh-fixture-top">
                       <span className="sqh-fixture-league">{m.league}</span>
                       {isLive && <span className="sqh-fixture-live">LIVE</span>}
@@ -294,9 +294,12 @@ export default function App() {
   )
 }
 
-// Compute "T-Nh" countdown only when kickoffAt parses to a real future time.
-// Returns null for display-only strings (e.g. "今晚 20:00") — we never fabricate.
+// Compute "T-Nh" countdown only from a strict ISO timestamp. The fixtures API
+// returns pre-formatted display strings like "06-18 07:00" (no year/timezone),
+// which Date.parse silently mis-reads as year 2001 → a bogus "进行中". Require a
+// full ISO datetime so we never render a fabricated/garbage countdown.
 function kickoffCountdown(kickoffAt: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(kickoffAt)) return null
   const ts = Date.parse(kickoffAt)
   if (Number.isNaN(ts)) return null
   const diffH = (ts - Date.now()) / 3_600_000

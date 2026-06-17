@@ -455,12 +455,14 @@ def _collect_chinese_search(
     queries.extend(_targeted_cn_queries(question, home, away))
 
     evidence_ids = []
-    # Max 2 queries: primary + question. DDG-only to avoid Tavily API costs.
-    for i, query in enumerate(queries[:2]):
+    # Primary query via Tavily (1 call per job — DDG doesn't index Chinese well).
+    # Dimension-specific queries are skipped; RSSHub feeds (hupu/dongqiudi/weibo)
+    # provide ample Chinese coverage without API cost.
+    for i, query in enumerate(queries[:1]):
         sk = cache.search_key(f"cn:{query}")
         results = cache.search_cache.get(sk)
         if results is None:
-            results = web_search_adapter.search(query, use_tavily=False)
+            results = web_search_adapter.search(query, include_domains=CN_DOMAINS)
             cache.search_cache.set(sk, results)
         topic = "search.cn.preview" if i == 0 else f"search.cn.q{i}"
         for result in results:

@@ -72,6 +72,8 @@ def build_factors(
         squad_weight = 0.10 if has_sideline else 0.0
         squad_confidence = 0.35 if has_sideline else 0.0
         squad_missing_reason = "" if has_sideline else "LLM 未能从多源证据中抽取伤停/缺席数据，阵容因子不启用"
+        squad_evidence_ids = form_evidence_ids
+        h2h_evidence_ids = form_evidence_ids
     else:
         cn_text = "\n".join(ev.raw_excerpt for ev in cn_evidence)
         cn_form_score = _score_cn_form(cn_text, request)
@@ -96,6 +98,8 @@ def build_factors(
         squad_weight = 0.10 if squad_enabled else 0.0
         squad_confidence = 0.35 if has_sideline else 0.0
         squad_missing_reason = "" if has_sideline else "暂无伤病/缺席数据，阵容因子不启用"
+        squad_evidence_ids = fundamental_evidence
+        h2h_evidence_ids = fundamental_evidence
 
     return [
         FactorImpact(
@@ -130,7 +134,7 @@ def build_factors(
             impact=squad_score,
             direction=_direction(squad_score),
             confidence=squad_confidence,
-            evidence_ids=fundamental_evidence,
+            evidence_ids=squad_evidence_ids,
             missing_reason=squad_missing_reason,
         ),
         FactorImpact(
@@ -154,7 +158,7 @@ def build_factors(
             impact=h2h_score,
             direction=_direction(h2h_score),
             confidence=h2h_confidence,
-            evidence_ids=fundamental_evidence,
+            evidence_ids=h2h_evidence_ids,
             missing_reason=h2h_missing_reason,
         ),
         FactorImpact(

@@ -771,6 +771,52 @@ def test_build_factors_uses_llm_extraction_when_available(monkeypatch):
     assert squad_factor.direction == "home"  # away has more absences
 
 
+def test_build_factors_llm_extraction_attributes_evidence_ids_for_squad_and_h2h(monkeypatch):
+    from backend.football_osint import factor_registry as fr
+    from backend.football_osint.analysis import evidence_extraction as ee
+    from backend.football_osint.models import FootballOsintJobRequest, MatchProfile, OsintEvidence
+
+    fake_facts = ee.ExtractedFacts(
+        home_form=(4, 1, 0), away_form=(2, 1, 2),
+        h2h_home_wins=3, h2h_draws=1, h2h_home_losses=1,
+        home_absences=1, away_absences=3,
+        home_rank=2, away_rank=5,
+    )
+    monkeypatch.setattr(fr.evidence_extraction, "extract", lambda evidence, request: fake_facts)
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+    profile = MatchProfile(competition_type="club", time_to_kickoff_hours=None,
+                            data_density="low", factor_pack="default")
+    # Only search/news evidence — no fundamental.* evidence at all. The LLM
+    # extraction can still pull absence/H2H facts out of this evidence, so
+    # the resulting factors must trace back to it via evidence_ids.
+    evidence = [
+        OsintEvidence(
+            id="ev_search_001", source="国内媒体搜索", source_type="search",
+            claim="赛前分析：阿根廷多名主力缺席", topic="search.cn.preview", side="away",
+            confidence=0.28, raw_excerpt="阿根廷因伤病多名主力缺席",
+        ),
+        OsintEvidence(
+            id="ev_news_001", source="虎扑", source_type="news",
+            claim="历史交锋：巴西近期占优", topic="news.rss.hupu.soccer", side="home",
+            confidence=0.30, raw_excerpt="历史交锋巴西3胜1平1负",
+        ),
+    ]
+
+    factors = fr.build_factors(request, profile, evidence)
+    squad_factor = next(f for f in factors if f.factor_id == "squad.availability")
+    h2h_factor = next(f for f in factors if f.factor_id == "h2h.relevance")
+
+    assert squad_factor.enabled is True
+    assert squad_factor.evidence_ids != []
+
+    assert h2h_factor.enabled is True
+    assert h2h_factor.evidence_ids != []
+
+
 def test_build_factors_falls_back_to_regex_when_llm_extraction_fails(monkeypatch):
     from backend.football_osint import factor_registry as fr
     from backend.football_osint.models import FootballOsintJobRequest, MatchProfile, OsintEvidence

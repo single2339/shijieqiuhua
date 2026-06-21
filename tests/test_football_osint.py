@@ -794,3 +794,63 @@ def test_build_factors_falls_back_to_regex_when_llm_extraction_fails(monkeypatch
     form_factor = next(f for f in factors if f.factor_id == "form.recent_signal")
     assert form_factor.enabled is True
     assert form_factor.direction == "home"
+
+
+def test_weather_score_from_raw_excerpt_penalises_heavy_rain():
+    from backend.football_osint.factor_registry import _weather_score_from_raw_excerpt
+    import json as _json
+
+    raw = _json.dumps({"daily": {
+        "precipitation_probability_max": [90], "wind_speed_10m_max": [10],
+        "temperature_2m_max": [22], "temperature_2m_min": [15], "weather_code": [65],
+    }})
+    score = _weather_score_from_raw_excerpt(raw)
+    assert score < 0  # heavy rain → negative (lower-scoring, less predictable match)
+
+
+def test_weather_score_from_raw_excerpt_neutral_for_calm_weather():
+    from backend.football_osint.factor_registry import _weather_score_from_raw_excerpt
+    import json as _json
+
+    raw = _json.dumps({"daily": {
+        "precipitation_probability_max": [5], "wind_speed_10m_max": [8],
+        "temperature_2m_max": [20], "temperature_2m_min": [12], "weather_code": [1],
+    }})
+    score = _weather_score_from_raw_excerpt(raw)
+    assert score == 0.0
+
+
+def test_weather_score_from_raw_excerpt_returns_zero_on_bad_json():
+    from backend.football_osint.factor_registry import _weather_score_from_raw_excerpt
+
+    assert _weather_score_from_raw_excerpt("not json") == 0.0
+    assert _weather_score_from_raw_excerpt("") == 0.0
+
+
+def test_weather_factor_reflects_real_precipitation(monkeypatch):
+    from backend.football_osint import factor_registry as fr
+    from backend.football_osint.models import FootballOsintJobRequest, MatchProfile, OsintEvidence
+    import json as _json
+
+    monkeypatch.setattr(fr.evidence_extraction, "extract", lambda evidence, request: None)
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+    profile = MatchProfile(competition_type="club", time_to_kickoff_hours=None,
+                            data_density="low", factor_pack="default")
+    raw = _json.dumps({"daily": {
+        "precipitation_probability_max": [90], "wind_speed_10m_max": [10],
+        "temperature_2m_max": [22], "temperature_2m_min": [15], "weather_code": [65],
+    }})
+    evidence = [OsintEvidence(
+        id="ev_001", source="Open-Meteo", source_type="weather",
+        claim="比赛日天气: 雨", topic="weather.open_meteo", side="neutral",
+        confidence=0.55, raw_excerpt=raw,
+    )]
+
+    factors = fr.build_factors(request, profile, evidence)
+    weather_factor = next(f for f in factors if f.factor_id == "weather.exposure")
+    assert weather_factor.enabled is True
+    assert weather_factor.impact == -0.03

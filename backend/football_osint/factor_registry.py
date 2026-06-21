@@ -13,6 +13,7 @@ dongqiudi analysis excerpt for form/H2H direction signals:
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .analysis import evidence_extraction
@@ -26,6 +27,11 @@ def build_factors(
 ) -> list[FactorImpact]:
     fixture_evidence = [ev.id for ev in evidence if ev.topic.startswith("fixture.")]
     fundamental_evidence = [ev.id for ev in evidence if ev.topic.startswith("fundamental.")]
+    weather_score = 0.0
+    for ev in evidence:
+        if ev.topic == "weather.open_meteo" and ev.raw_excerpt:
+            weather_score = _weather_score_from_raw_excerpt(ev.raw_excerpt)
+            break
     weather_evidence = [ev.id for ev in evidence if ev.topic.startswith("weather.")]
     has_fundamental = bool(fundamental_evidence)
     has_weather = bool(weather_evidence)
@@ -157,7 +163,7 @@ def build_factors(
             group="weather",
             enabled=has_weather,
             weight=0.08 if has_weather else 0.0,
-            impact=0.03 if has_weather else 0.0,
+            impact=weather_score,
             direction="neutral",
             confidence=0.45 if has_weather else 0.0,
             evidence_ids=weather_evidence,
@@ -331,6 +337,34 @@ def _score_cn_form(text: str, request: FootballOsintJobRequest) -> float:
 
     raw = (home_ppg - away_ppg) * 0.06
     return max(-0.06, min(0.06, round(raw, 3)))
+
+
+def _weather_score_from_raw_excerpt(raw_excerpt: str) -> float:
+    """Score weather exposure from Open-Meteo's raw JSON response.
+
+    Heavy rain or high wind makes the match harder to predict and tends to
+    suppress scoring/tempo — small negative, neutral direction (it affects
+    both sides, not home vs away). Calm weather → 0.0 (no signal either way).
+    Capped at [-0.05, 0.0]: this factor nudges confidence, it doesn't pick a
+    winner.
+    """
+    try:
+        data = json.loads(raw_excerpt)
+        daily = data.get("daily") or {}
+        precip = (daily.get("precipitation_probability_max") or [None])[0]
+        wind = (daily.get("wind_speed_10m_max") or [None])[0]
+    except (json.JSONDecodeError, TypeError, IndexError):
+        return 0.0
+
+    if precip is None and wind is None:
+        return 0.0
+
+    penalty = 0.0
+    if precip is not None and precip >= 70:
+        penalty -= 0.03
+    if wind is not None and wind >= 30:
+        penalty -= 0.02
+    return round(penalty, 3)
 
 
 def _direction(score: float) -> str:

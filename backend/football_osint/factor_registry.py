@@ -52,6 +52,12 @@ def build_factors(
     combined_form = form_score + standings_score + cn_form_score
     combined_form = max(-0.18, min(0.18, combined_form))
 
+    # Form signal must not depend on dongqiudi alone — CN search/RSS snippets
+    # can carry it when matchId resolution fails or dongqiudi has no analysis page.
+    has_cn_form = cn_form_score != 0.0
+    has_form_signal = has_fundamental or has_cn_form
+    form_evidence_ids = fundamental_evidence + ([ev.id for ev in cn_evidence] if cn_evidence else [])
+
     return [
         FactorImpact(
             factor_id="fixture.existence",
@@ -68,13 +74,16 @@ def build_factors(
             factor_id="form.recent_signal",
             label="近期状态信号",
             group="form",
-            enabled=has_fundamental,
-            weight=0.16 if (has_fundamental and not youth) else (0.12 if has_fundamental else 0.0),
+            enabled=has_form_signal,
+            weight=(
+                (0.12 if youth else 0.16) if has_fundamental
+                else (0.08 if has_cn_form else 0.0)
+            ),
             impact=combined_form,
             direction=_direction(combined_form),
-            confidence=0.42 if has_fundamental else 0.0,
-            evidence_ids=fundamental_evidence,
-            missing_reason="" if has_fundamental else "未抓取到懂球帝赛前分析，无法形成近期状态信号",
+            confidence=0.42 if has_fundamental else (0.22 if has_cn_form else 0.0),
+            evidence_ids=form_evidence_ids,
+            missing_reason="" if has_form_signal else "未抓取到懂球帝赛前分析或国内媒体近期战绩，无法形成近期状态信号",
         ),
         FactorImpact(
             factor_id="squad.availability",

@@ -827,6 +827,22 @@ def test_weather_score_from_raw_excerpt_returns_zero_on_bad_json():
     assert _weather_score_from_raw_excerpt("") == 0.0
 
 
+def test_weather_score_from_raw_excerpt_returns_zero_on_non_numeric_values():
+    from backend.football_osint.factor_registry import _weather_score_from_raw_excerpt
+    import json as _json
+
+    raw = _json.dumps({"daily": {
+        "precipitation_probability_max": ["heavy"], "wind_speed_10m_max": ["strong"],
+    }})
+    assert _weather_score_from_raw_excerpt(raw) == 0.0
+
+
+def test_weather_score_from_raw_excerpt_returns_zero_on_top_level_list():
+    from backend.football_osint.factor_registry import _weather_score_from_raw_excerpt
+
+    assert _weather_score_from_raw_excerpt("[1,2,3]") == 0.0
+
+
 def test_weather_factor_reflects_real_precipitation(monkeypatch):
     from backend.football_osint import factor_registry as fr
     from backend.football_osint.models import FootballOsintJobRequest, MatchProfile, OsintEvidence

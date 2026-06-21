@@ -353,18 +353,18 @@ def _weather_score_from_raw_excerpt(raw_excerpt: str) -> float:
         daily = data.get("daily") or {}
         precip = (daily.get("precipitation_probability_max") or [None])[0]
         wind = (daily.get("wind_speed_10m_max") or [None])[0]
-    except (json.JSONDecodeError, TypeError, IndexError):
-        return 0.0
 
-    if precip is None and wind is None:
-        return 0.0
+        if precip is None and wind is None:
+            return 0.0
 
-    penalty = 0.0
-    if precip is not None and precip >= 70:
-        penalty -= 0.03
-    if wind is not None and wind >= 30:
-        penalty -= 0.02
-    return round(penalty, 3)
+        penalty = 0.0
+        if precip is not None and precip >= 70:
+            penalty -= 0.03
+        if wind is not None and wind >= 30:
+            penalty -= 0.02
+        return round(penalty, 3)
+    except Exception:
+        return 0.0
 
 
 def _direction(score: float) -> str:

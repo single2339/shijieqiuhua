@@ -730,3 +730,67 @@ def test_media_cn_coverage_counts_rss_evidence(monkeypatch, tmp_path):
         or ev.topic.startswith("news.rss.weibo.")
     )]
     assert len(cn_evidence) >= 4
+
+
+def test_build_factors_uses_llm_extraction_when_available(monkeypatch):
+    from backend.football_osint import factor_registry as fr
+    from backend.football_osint.analysis import evidence_extraction as ee
+    from backend.football_osint.models import FootballOsintJobRequest, MatchProfile, OsintEvidence
+
+    fake_facts = ee.ExtractedFacts(
+        home_form=(4, 1, 0), away_form=(2, 1, 2),
+        h2h_home_wins=3, h2h_draws=1, h2h_home_losses=1,
+        home_absences=1, away_absences=3,
+        home_rank=2, away_rank=5,
+    )
+    monkeypatch.setattr(fr.evidence_extraction, "extract", lambda evidence, request: fake_facts)
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+    profile = MatchProfile(competition_type="club", time_to_kickoff_hours=None,
+                            data_density="low", factor_pack="default")
+    # No fundamental.* evidence at all — this is the case that's broken today.
+    evidence = [OsintEvidence(
+        id="ev_001", source="国内媒体搜索", source_type="search",
+        claim="赛前分析", topic="search.cn.preview", side="neutral",
+        confidence=0.28, raw_excerpt="巴西近期表现出色",
+    )]
+
+    factors = fr.build_factors(request, profile, evidence)
+    form_factor = next(f for f in factors if f.factor_id == "form.recent_signal")
+    h2h_factor = next(f for f in factors if f.factor_id == "h2h.relevance")
+    squad_factor = next(f for f in factors if f.factor_id == "squad.availability")
+
+    assert form_factor.enabled is True
+    assert form_factor.direction == "home"  # Brazil's PPG is higher
+    assert h2h_factor.enabled is True
+    assert h2h_factor.direction == "home"  # 3W1L for home in H2H
+    assert squad_factor.enabled is True
+    assert squad_factor.direction == "home"  # away has more absences
+
+
+def test_build_factors_falls_back_to_regex_when_llm_extraction_fails(monkeypatch):
+    from backend.football_osint import factor_registry as fr
+    from backend.football_osint.models import FootballOsintJobRequest, MatchProfile, OsintEvidence
+
+    monkeypatch.setattr(fr.evidence_extraction, "extract", lambda evidence, request: None)
+
+    request = FootballOsintJobRequest(
+        home_team="巴西", away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00", competition="世界杯",
+    )
+    profile = MatchProfile(competition_type="club", time_to_kickoff_hours=None,
+                            data_density="low", factor_pack="default")
+    evidence = [OsintEvidence(
+        id="ev_001", source="懂球帝赛前分析", source_type="fundamental",
+        claim="赛前分析", topic="fundamental.dongqiudi.analysis", side="neutral",
+        confidence=0.5,
+        raw_excerpt="巴西近期战绩：4胜1平0负\n阿根廷近期战绩：2胜1平2负",
+    )]
+
+    factors = fr.build_factors(request, profile, evidence)
+    form_factor = next(f for f in factors if f.factor_id == "form.recent_signal")
+    assert form_factor.enabled is True
+    assert form_factor.direction == "home"

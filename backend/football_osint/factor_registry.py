@@ -5,16 +5,17 @@ the prediction layer consumes. v1 ships 6 baseline factors that parse the
 dongqiudi analysis excerpt for form/H2H direction signals:
 
 - fixture.existence       — always enabled; the spine of every job
-- form.recent_signal      — enabled iff fundamental.* evidence, scored from PPG
+- form.recent_signal      — enabled iff LLM extraction or fundamental.* evidence yields form, scored from PPG
 - squad.availability      — disabled until the user supplies lineup info
 - uncertainty.youth_volatility — penalty applied only on U23/youth profiles
-- h2h.relevance           — enabled iff fundamental.* evidence, scored from W-L
+- h2h.relevance           — enabled iff LLM extraction or fundamental.* evidence yields H2H, scored from W-L
 - weather.exposure        — enabled iff weather evidence present
 """
 from __future__ import annotations
 
 import re
 
+from .analysis import evidence_extraction
 from .models import FactorImpact, FootballOsintJobRequest, MatchProfile, OsintEvidence
 
 
@@ -30,33 +31,65 @@ def build_factors(
     has_weather = bool(weather_evidence)
     youth = "u23" in profile.competition_type
 
-    # Parse the fundamental evidence text for form/H2H/squad/standings signals
     fundamental_text = "\n".join(ev.raw_excerpt for ev in evidence if ev.topic.startswith("fundamental."))
 
-    # Chinese search + RSS evidence: enriches form scoring when dongqiudi is sparse
+    # Chinese search + RSS evidence: enriches form scoring when dongqiudi is sparse,
+    # and feeds the media.cn_coverage factor below regardless of which path wins.
     cn_evidence = [ev for ev in evidence if (
         ev.topic.startswith("search.cn.")
         or ev.topic.startswith("news.rss.hupu.")
         or ev.topic.startswith("news.rss.dongqiudi.")
         or ev.topic.startswith("news.rss.weibo.")
     )]
-    cn_text = "\n".join(ev.raw_excerpt for ev in cn_evidence)
-    cn_form_score = _score_cn_form(cn_text, request)
 
-    form_score = _score_recent_form(fundamental_text, request)
-    h2h_score = _score_h2h(fundamental_text, request)
-    squad_score, has_sideline = _score_squad(fundamental_text, request)
-    standings_score = _score_standings(fundamental_text, request)
+    extracted = evidence_extraction.extract(evidence, request)
 
-    # Combine form + standings + cn media form into a single form signal
-    combined_form = form_score + standings_score + cn_form_score
-    combined_form = max(-0.18, min(0.18, combined_form))
+    if extracted is not None:
+        form_score = _form_score_from_records(extracted.home_form, extracted.away_form)
+        h2h_score = _h2h_score_from_counts(extracted.h2h_home_wins, extracted.h2h_home_losses)
+        has_sideline = extracted.home_absences is not None and extracted.away_absences is not None
+        squad_score = _squad_score_from_absences(extracted.home_absences, extracted.away_absences)
+        standings_score = _standings_score_from_ranks(extracted.home_rank, extracted.away_rank)
+        combined_form = max(-0.18, min(0.18, form_score + standings_score))
 
-    # Form signal must not depend on dongqiudi alone — CN search/RSS snippets
-    # can carry it when matchId resolution fails or dongqiudi has no analysis page.
-    has_cn_form = cn_form_score != 0.0
-    has_form_signal = has_fundamental or has_cn_form
-    form_evidence_ids = fundamental_evidence + ([ev.id for ev in cn_evidence] if cn_evidence else [])
+        has_form_signal = extracted.home_form is not None and extracted.away_form is not None
+        has_h2h = extracted.h2h_home_wins is not None and extracted.h2h_home_losses is not None
+        form_evidence_ids = fundamental_evidence + [ev.id for ev in cn_evidence]
+        form_weight = (0.12 if youth else 0.16) if has_form_signal else 0.0
+        form_confidence = 0.42 if has_form_signal else 0.0
+        form_missing_reason = "" if has_form_signal else "LLM 未能从多源证据中抽取近期战绩，无法形成近期状态信号"
+        h2h_enabled = has_h2h
+        h2h_weight = ((0.05 if youth else 0.10) if has_h2h else 0.0)
+        h2h_confidence = 0.25 if has_h2h else 0.0
+        h2h_missing_reason = "" if has_h2h else "LLM 未能从多源证据中抽取历史交锋数据，h2h 因子不启用"
+        squad_enabled = has_sideline
+        squad_weight = 0.10 if has_sideline else 0.0
+        squad_confidence = 0.35 if has_sideline else 0.0
+        squad_missing_reason = "" if has_sideline else "LLM 未能从多源证据中抽取伤停/缺席数据，阵容因子不启用"
+    else:
+        cn_text = "\n".join(ev.raw_excerpt for ev in cn_evidence)
+        cn_form_score = _score_cn_form(cn_text, request)
+
+        form_score = _score_recent_form(fundamental_text, request)
+        h2h_score = _score_h2h(fundamental_text, request)
+        squad_score, has_sideline = _score_squad(fundamental_text, request)
+        standings_score = _score_standings(fundamental_text, request)
+        combined_form = max(-0.18, min(0.18, form_score + standings_score + cn_form_score))
+
+        has_cn_form = cn_form_score != 0.0
+        has_form_signal = has_fundamental or has_cn_form
+        form_evidence_ids = fundamental_evidence + ([ev.id for ev in cn_evidence] if cn_evidence else [])
+        form_weight = (0.12 if youth else 0.16) if has_fundamental else (0.08 if has_cn_form else 0.0)
+        form_confidence = 0.42 if has_fundamental else (0.22 if has_cn_form else 0.0)
+        form_missing_reason = "" if has_form_signal else "未抓取到懂球帝赛前分析或国内媒体近期战绩，无法形成近期状态信号"
+        h2h_enabled = has_fundamental
+        h2h_weight = (0.05 if youth else 0.10) if has_fundamental else 0.0
+        h2h_confidence = 0.25 if has_fundamental else 0.0
+        h2h_missing_reason = "" if has_fundamental else "缺历史交锋证据，h2h 因子不启用"
+        squad_enabled = has_fundamental and has_sideline
+        squad_weight = 0.10 if squad_enabled else 0.0
+        squad_confidence = 0.35 if has_sideline else 0.0
+        squad_missing_reason = "" if has_sideline else "暂无伤病/缺席数据，阵容因子不启用"
 
     return [
         FactorImpact(
@@ -75,27 +108,24 @@ def build_factors(
             label="近期状态信号",
             group="form",
             enabled=has_form_signal,
-            weight=(
-                (0.12 if youth else 0.16) if has_fundamental
-                else (0.08 if has_cn_form else 0.0)
-            ),
+            weight=form_weight,
             impact=combined_form,
             direction=_direction(combined_form),
-            confidence=0.42 if has_fundamental else (0.22 if has_cn_form else 0.0),
+            confidence=form_confidence,
             evidence_ids=form_evidence_ids,
-            missing_reason="" if has_form_signal else "未抓取到懂球帝赛前分析或国内媒体近期战绩，无法形成近期状态信号",
+            missing_reason=form_missing_reason,
         ),
         FactorImpact(
             factor_id="squad.availability",
             label="阵容可用性",
             group="squad",
-            enabled=has_fundamental and has_sideline,
-            weight=0.10 if (has_fundamental and has_sideline) else 0.0,
+            enabled=squad_enabled,
+            weight=squad_weight,
             impact=squad_score,
             direction=_direction(squad_score),
-            confidence=0.35 if has_sideline else 0.0,
+            confidence=squad_confidence,
             evidence_ids=fundamental_evidence,
-            missing_reason="" if has_sideline else "暂无伤病/缺席数据，阵容因子不启用",
+            missing_reason=squad_missing_reason,
         ),
         FactorImpact(
             factor_id="uncertainty.youth_volatility",
@@ -113,13 +143,13 @@ def build_factors(
             factor_id="h2h.relevance",
             label="历史交锋参考性",
             group="h2h",
-            enabled=has_fundamental,
-            weight=(0.05 if youth else 0.10) if has_fundamental else 0.0,
+            enabled=h2h_enabled,
+            weight=h2h_weight,
             impact=h2h_score,
             direction=_direction(h2h_score),
-            confidence=0.25 if has_fundamental else 0.0,
+            confidence=h2h_confidence,
             evidence_ids=fundamental_evidence,
-            missing_reason="" if has_fundamental else "缺历史交锋证据，h2h 因子不启用",
+            missing_reason=h2h_missing_reason,
         ),
         FactorImpact(
             factor_id="weather.exposure",

@@ -161,11 +161,29 @@ _STANDINGS_RE = re.compile(r"积分榜[：:]\s*(.+?)(?:，|；|$)")
 _CN_FORM_RE = re.compile(r"([一-鿿\w]+?)(?:近期|最近|近)\d*场[：:\s]*(\d+)胜(\d+)平(\d+)负")
 
 
-def _score_recent_form(text: str, request: FootballOsintJobRequest) -> float:
-    """Compare home vs away recent form PPG from the analysis excerpt.
+def _form_score_from_records(
+    home_rec: tuple[int, int, int] | None,
+    away_rec: tuple[int, int, int] | None,
+) -> float:
+    """Compare home vs away recent form PPG. Positive favours home.
 
-    Returns a score in [-0.15, 0.15]: positive favours home.
+    Pure arithmetic, no parsing — shared by the regex path (_score_recent_form)
+    and the LLM extraction path in build_factors.
     """
+    if not home_rec or not away_rec:
+        return 0.0
+    games = sum(home_rec)
+    if games == 0:
+        return 0.0
+    home_ppg = (home_rec[0] * 3 + home_rec[1]) / games
+    away_games = sum(away_rec)
+    away_ppg = (away_rec[0] * 3 + away_rec[1]) / away_games if away_games else 0.0
+    raw = (home_ppg - away_ppg) * 0.10
+    return max(-0.15, min(0.15, round(raw, 3)))
+
+
+def _score_recent_form(text: str, request: FootballOsintJobRequest) -> float:
+    """Parse '{name}近期战绩：W胜D平L负' from dongqiudi text, then score it."""
     home_name = request.home_team
     away_name = request.away_team
     records: dict[str, tuple[int, int, int]] = {}
@@ -173,29 +191,22 @@ def _score_recent_form(text: str, request: FootballOsintJobRequest) -> float:
         name = m.group(1)
         w, d, l = int(m.group(2)), int(m.group(3)), int(m.group(4))
         records[name] = (w, d, l)
+    return _form_score_from_records(records.get(home_name), records.get(away_name))
 
-    home_rec = records.get(home_name)
-    away_rec = records.get(away_name)
-    if not home_rec or not away_rec:
+
+def _h2h_score_from_counts(home_wins: int | None, home_losses: int | None) -> float:
+    """Compare H2H win/loss counts for the home side. Positive favours home."""
+    if home_wins is None or home_losses is None:
         return 0.0
-
-    games = sum(home_rec)
-    if games == 0:
+    total = home_wins + home_losses
+    if total == 0:
         return 0.0
-    home_ppg = (home_rec[0] * 3 + home_rec[1]) / games
-    away_games = sum(away_rec)
-    away_ppg = (away_rec[0] * 3 + away_rec[1]) / away_games if away_games else 0.0
-
-    # 1.0 PPG diff ≈ 0.10 impact, capped at ±0.15
-    raw = (home_ppg - away_ppg) * 0.10
-    return max(-0.15, min(0.15, round(raw, 3)))
+    advantage = (home_wins - home_losses) / total
+    return max(-0.12, min(0.12, round(advantage * 0.12, 3)))
 
 
 def _score_h2h(text: str, request: FootballOsintJobRequest) -> float:
-    """Extract H2H advantage from the analysis excerpt.
-
-    Returns a score in [-0.12, 0.12]: positive favours home.
-    """
+    """Parse '历史交锋：A W胜D平L负，B W胜D平L负' from dongqiudi text, then score it."""
     home_name = request.home_team
     away_name = request.away_team
     m = _H2H_RE.search(text)
@@ -212,19 +223,19 @@ def _score_h2h(text: str, request: FootballOsintJobRequest) -> float:
         home_w, home_l = wa, la
     else:
         home_w, home_l = wb, lb
+    return _h2h_score_from_counts(home_w, home_l)
 
-    total = home_w + home_l
-    if total == 0:
+
+def _squad_score_from_absences(home_abs: int | None, away_abs: int | None) -> float:
+    """Compare absence counts: fewer absences = advantage. Positive favours home."""
+    if home_abs is None or away_abs is None:
         return 0.0
-    advantage = (home_w - home_l) / total
-    return max(-0.12, min(0.12, round(advantage * 0.12, 3)))
+    raw = (away_abs - home_abs) * 0.03
+    return max(-0.10, min(0.10, round(raw, 3)))
 
 
 def _score_squad(text: str, request: FootballOsintJobRequest) -> tuple[float, bool]:
-    """Compare absence counts: fewer absences = advantage.
-
-    Returns (score, has_data). Score in [-0.10, 0.10].
-    """
+    """Parse '伤停信息：A N人缺席，B M人缺席' from dongqiudi text, then score it."""
     m = _SIDELINE_RE.search(text)
     if not m:
         return 0.0, False
@@ -239,33 +250,27 @@ def _score_squad(text: str, request: FootballOsintJobRequest) -> tuple[float, bo
 
     home_abs = abs_a if name_a == home_name else abs_b
     away_abs = abs_b if name_a == home_name else abs_a
+    return _squad_score_from_absences(home_abs, away_abs), True
 
-    # Each extra absence → 0.03 impact, capped at ±0.10
-    raw = (away_abs - home_abs) * 0.03
-    return max(-0.10, min(0.10, round(raw, 3))), True
+
+def _standings_score_from_ranks(home_rank: int | None, away_rank: int | None) -> float:
+    """Compare standings rank: lower number (better rank) = advantage. Positive favours home."""
+    if not home_rank or not away_rank:
+        return 0.0
+    raw = (away_rank - home_rank) * 0.015
+    return max(-0.06, min(0.06, round(raw, 3)))
 
 
 def _score_standings(text: str, request: FootballOsintJobRequest) -> float:
-    """Compare standings rank: better rank → small advantage.
-
-    Returns a score in [-0.06, 0.06].
-    """
+    """Parse '{name} 第N名' from dongqiudi text, then score it."""
     home_name = request.home_team
     away_name = request.away_team
 
     def _find_rank(name: str) -> int | None:
-        # Look for "{name} 第N名" in the text
         m = re.search(re.escape(name) + r"\s*第(\d+)名", text)
         return int(m.group(1)) if m else None
 
-    home_rank = _find_rank(home_name)
-    away_rank = _find_rank(away_name)
-    if not home_rank or not away_rank:
-        return 0.0
-
-    # Lower rank number = better. Each rank diff → 0.015 impact, capped at ±0.06
-    raw = (away_rank - home_rank) * 0.015
-    return max(-0.06, min(0.06, round(raw, 3)))
+    return _standings_score_from_ranks(_find_rank(home_name), _find_rank(away_name))
 
 
 def _score_cn_form(text: str, request: FootballOsintJobRequest) -> float:

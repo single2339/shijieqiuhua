@@ -477,7 +477,7 @@ def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
 
     def fake_search(query, **kwargs):
         call_count["n"] += 1
-        # Only 1 primary query with CN_DOMAINS (Tavily, DDG doesn't index Chinese)
+        # Only 1 primary query with CN_DOMAINS (Sogou, DDG doesn't index Chinese well)
         if call_count["n"] == 1:
             assert "前瞻" in query
         return [
@@ -534,6 +534,66 @@ def test_cn_form_returns_zero_when_no_match():
     )
     assert _score_cn_form("这场比赛很精彩", request) == 0.0
     assert _score_cn_form("", request) == 0.0
+
+
+def test_form_score_from_records_favours_better_ppg():
+    from backend.football_osint.factor_registry import _form_score_from_records
+
+    # Home: 4W1D0L → PPG 2.6; Away: 2W1D2L → PPG 1.4 → diff 1.2 * 0.10 = 0.12
+    score = _form_score_from_records((4, 1, 0), (2, 1, 2))
+    assert score == 0.12
+
+
+def test_form_score_from_records_returns_zero_when_missing():
+    from backend.football_osint.factor_registry import _form_score_from_records
+
+    assert _form_score_from_records(None, (2, 1, 2)) == 0.0
+    assert _form_score_from_records((4, 1, 0), None) == 0.0
+
+
+def test_h2h_score_from_counts_favours_home_wins():
+    from backend.football_osint.factor_registry import _h2h_score_from_counts
+
+    # 3 wins, 1 loss → advantage (3-1)/4 = 0.5 * 0.12 = 0.06
+    score = _h2h_score_from_counts(3, 1)
+    assert score == 0.06
+
+
+def test_h2h_score_from_counts_returns_zero_when_missing():
+    from backend.football_osint.factor_registry import _h2h_score_from_counts
+
+    assert _h2h_score_from_counts(None, 1) == 0.0
+    assert _h2h_score_from_counts(3, None) == 0.0
+
+
+def test_squad_score_from_absences_favours_fewer_absences():
+    from backend.football_osint.factor_registry import _squad_score_from_absences
+
+    # away has 2 more absences → (2)*0.03 = 0.06
+    score = _squad_score_from_absences(1, 3)
+    assert score == 0.06
+
+
+def test_squad_score_from_absences_returns_zero_when_missing():
+    from backend.football_osint.factor_registry import _squad_score_from_absences
+
+    assert _squad_score_from_absences(None, 3) == 0.0
+    assert _squad_score_from_absences(1, None) == 0.0
+
+
+def test_standings_score_from_ranks_favours_better_rank():
+    from backend.football_osint.factor_registry import _standings_score_from_ranks
+
+    # home rank 2, away rank 5 → (5-2)*0.015 = 0.045
+    score = _standings_score_from_ranks(2, 5)
+    assert score == 0.045
+
+
+def test_standings_score_from_ranks_returns_zero_when_missing():
+    from backend.football_osint.factor_registry import _standings_score_from_ranks
+
+    assert _standings_score_from_ranks(None, 5) == 0.0
+    assert _standings_score_from_ranks(2, None) == 0.0
 
 
 def test_media_cn_coverage_factor_enables_with_enough_evidence(monkeypatch, tmp_path):

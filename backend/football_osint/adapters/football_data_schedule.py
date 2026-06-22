@@ -54,16 +54,24 @@ class Fixture:
 
 def fetch_fixtures(days_ahead: int = 3) -> list[Fixture]:
     """Fetch fixtures from today through ``days_ahead`` days (UTC), cached 5 min."""
+    today = datetime.now(timezone.utc).date()
+    date_from = today.isoformat()
+    date_to = (today + timedelta(days=max(days_ahead, 0))).isoformat()
+    return fetch_fixtures_for_range(date_from, date_to)
+
+
+def fetch_fixtures_for_range(date_from: str, date_to: str) -> list[Fixture]:
+    """Fetch fixtures for an explicit ``YYYY-MM-DD`` UTC date range, cached 5 min.
+
+    Unlike ``fetch_fixtures`` (always "today + N days forward"), this accepts
+    past dates too — used by track-record backfill to look up finished matches.
+    """
     api_key = os.getenv("FOOTBALL_DATA_API_KEY", "")
     if not api_key:
         log.warning("FOOTBALL_DATA_API_KEY not set; fixtures unavailable")
         return []
 
-    today = datetime.now(timezone.utc).date()
-    date_from = today.isoformat()
-    date_to = (today + timedelta(days=max(days_ahead, 0))).isoformat()
     cache_key = f"fd:{date_from}:{date_to}"
-
     cached = cache.schedule_cache.get(cache_key)
     if cached is not None:
         return cached

@@ -213,3 +213,10 @@ def get_stats(*, conn: sqlite3.Connection | None = None, min_sample: int = 20, r
             for r in recent_rows
         ],
     }
+
+
+if __name__ == "__main__":
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO)
+    result = backfill_due()
+    print(f"recorded={result['recorded']} settled={result['settled']}")

@@ -215,6 +215,24 @@ def get_stats(*, conn: sqlite3.Connection | None = None, min_sample: int = 20, r
     }
 
 
+_BACKFILL_INTERVAL_SECONDS = 60 * 60  # hourly
+
+
+async def backfill_loop() -> None:
+    """Run forever: backfill_due() once per hour."""
+    import asyncio
+
+    while True:
+        try:
+            result = await asyncio.to_thread(backfill_due)
+            log.info("track_record backfill: recorded=%d settled=%d", result["recorded"], result["settled"])
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            log.exception("track_record backfill_loop iteration failed")
+        await asyncio.sleep(_BACKFILL_INTERVAL_SECONDS)
+
+
 if __name__ == "__main__":
     import logging as _logging
     _logging.basicConfig(level=_logging.INFO)

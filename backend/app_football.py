@@ -17,13 +17,15 @@ if _dotenv.exists():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from backend.football_osint import warm_cache
+    from backend.football_osint import track_record, warm_cache
 
-    task = asyncio.create_task(warm_cache.warm_loop())
+    warm_task = asyncio.create_task(warm_cache.warm_loop())
+    backfill_task = asyncio.create_task(track_record.backfill_loop())
     try:
         yield
     finally:
-        task.cancel()
+        warm_task.cancel()
+        backfill_task.cancel()
 
 
 app = FastAPI(title="ShijieQiuhua API", version="1.0.0", lifespan=lifespan)

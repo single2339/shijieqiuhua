@@ -1,6 +1,6 @@
 import {
-  ArrowRight, CaretDown, Check, CheckCircle, Clock, Gauge, Graph, Key,
-  Lightning, MagnifyingGlass, Scales, ShieldCheck, SpinnerGap, Stack,
+  ArrowRight, Check, Clock, Gauge, Graph, Key,
+  Lightning, MagnifyingGlass, Scales, ShieldCheck, Stack, X,
 } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { fetchTrackRecord } from '../api'
@@ -27,42 +27,67 @@ export function formatTrackRecordSummary(stats: TrackRecordStats): string | null
   return `近 ${stats.settled} 场比赛 · 方向命中率 ${leanPct}% · 比分命中率 ${scorePct}%`
 }
 
-function TrackRecordStrip() {
+const LEAN_LABEL: Record<string, string> = { home: '主胜', away: '主负', draw: '平局' }
+
+// Public track-record proof section — promoted from a collapsed hero link to
+// its own full-bleed section so it can carry real conversion weight.
+function TrackRecordProof() {
   const [stats, setStats] = useState<TrackRecordStats | null>(null)
-  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     fetchTrackRecord().then(setStats).catch(() => {})
   }, [])
 
   if (!stats) return null
-  const summary = formatTrackRecordSummary(stats)
-  if (!summary || !stats.recent) return null
+  // formatTrackRecordSummary doubles as the "sample big enough to show" gate.
+  const gate = formatTrackRecordSummary(stats)
+  if (!gate || !stats.recent || stats.lean_accuracy === undefined || stats.scoreline_accuracy === undefined) return null
+
+  const leanPct = Math.round(stats.lean_accuracy * 100)
+  const scorePct = Math.round(stats.scoreline_accuracy * 100)
 
   return (
-    <div className="sqh-land-track-record">
-      <button className="sqh-land-track-record-summary" onClick={() => setExpanded(e => !e)}>
-        {summary}
-        <CaretDown size={14} weight="bold" style={{ transform: expanded ? 'rotate(180deg)' : undefined }} />
-      </button>
-      {expanded && (
-        <table className="sqh-land-track-record-table">
-          <thead>
-            <tr><th>对阵</th><th>预测</th><th>实际比分</th><th>命中</th></tr>
-          </thead>
-          <tbody>
-            {stats.recent.map((r, i) => (
-              <tr key={i}>
-                <td>{r.home_team} vs {r.away_team}</td>
-                <td>{r.predicted_lean}（{r.predicted_scoreline_band.join('/')}）</td>
-                <td>{r.actual_home_score}-{r.actual_away_score}</td>
-                <td>{r.lean_correct ? '✓' : '✗'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+    <section className="sqh-proof" id="record">
+      <div className="sqh-proof-inner">
+        <div className="sqh-proof-head">
+          <div className="sqh-proof-kicker"><ShieldCheck size={14} weight="duotone" />公开战绩 · 非营销话术</div>
+          <h2 className="sqh-proof-title">每一条判断，事后都对得上账</h2>
+          <p className="sqh-proof-sub">
+            我们记录每一场给出明确方向的研判，比赛结束后用第三方数据源核对实际结果。
+            模糊倾向与「信息不足」不计入命中率统计——拒绝靠宽松口径粉饰战绩。
+          </p>
+        </div>
+
+        <div className="sqh-proof-stats">
+          <div className="sqh-proof-stat"><b className="mono">{stats.settled}</b><span>场已结算判断</span></div>
+          <div className="sqh-proof-stat sqh-proof-stat--accent"><b className="mono">{leanPct}%</b><span>方向命中率</span></div>
+          <div className="sqh-proof-stat"><b className="mono">{scorePct}%</b><span>比分区间命中率</span></div>
+        </div>
+
+        <div className="sqh-proof-rule">
+          <Scales size={18} weight="duotone" />
+          <p>只统计 <b>主胜 / 主负 / 平局</b> 这类明确方向的判断；遇到模糊倾向或证据不足时我们直接说「信息不足」——这部分不参与命中率计算，也不会拉低或美化数字。</p>
+        </div>
+
+        <div className="sqh-proof-cards-head"><h3>最近战绩</h3></div>
+        <div className="sqh-proof-cards">
+          {stats.recent.map((r, i) => (
+            <div className="sqh-proof-card" key={i}>
+              <div className="sqh-proof-card-top">
+                <span className="sqh-proof-card-date mono">{r.kickoff_at.slice(0, 5)}</span>
+              </div>
+              <div className="sqh-proof-card-teams">{r.home_team}<span className="vs">vs</span>{r.away_team}</div>
+              <div className="sqh-proof-card-row"><span className="lab">研判</span><span>{LEAN_LABEL[r.predicted_lean] ?? r.predicted_lean} · {r.predicted_scoreline_band.join('/')}</span></div>
+              <div className="sqh-proof-card-row"><span className="lab">实际比分</span><span className="mono sqh-proof-card-score">{r.actual_home_score}-{r.actual_away_score}</span></div>
+              <div className="sqh-proof-card-badge" data-hit={r.lean_correct}>
+                {r.lean_correct ? <Check size={13} weight="bold" /> : <X size={13} weight="bold" />}
+                {r.lean_correct ? '命中' : '未中'}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -129,10 +154,9 @@ export default function LandingPage({ onEnter, onRegister, onLogin }: LandingPag
             </div>
           ))}
         </div>
-        <TrackRecordStrip />
       </header>
 
-      <ShowcaseMock onEnter={onEnter} />
+      <TrackRecordProof />
 
       {/* how it works */}
       <section className="sqh-land-section" id="how">
@@ -217,62 +241,6 @@ export default function LandingPage({ onEnter, onRegister, onLogin }: LandingPag
           </span>
         </div>
       </footer>
-    </div>
-  )
-}
-
-// Static product preview shown in the hero — a glimpse of the 研判台.
-const MOCK_STEPS: { label: string; state: 'done' | 'active' | 'todo' }[] = [
-  { label: '核验', state: 'done' },
-  { label: '采集', state: 'done' },
-  { label: '归一', state: 'done' },
-  { label: '打分', state: 'active' },
-  { label: '研判', state: 'todo' },
-]
-
-const MOCK_PROB: [string, number][] = [['主胜', 48], ['平局', 27], ['客胜', 25]]
-
-function ShowcaseMock({ onEnter }: { onEnter: () => void }) {
-  return (
-    <div className="sqh-showcase" onClick={onEnter} role="button" tabIndex={0}
-      onKeyDown={e => { if (e.key === 'Enter') onEnter() }}>
-      <div className="sqh-showcase-bar">
-        <i /><i /><i />
-        <span className="mono">qiuhua.app / 研判台</span>
-      </div>
-      <div className="sqh-showcase-body">
-        <div className="sqh-showcase-card">
-          <div className="sqh-showcase-league">英超 · 第32轮</div>
-          <div className="sqh-showcase-teams">
-            <span>阿森纳</span><em>VS</em><span>曼城</span>
-          </div>
-          <span className="sqh-cbadge sqh-cbadge--L2" style={{ marginTop: 14 }}>高可信</span>
-          <div className="sqh-showcase-prob">
-            {MOCK_PROB.map(([l, v]) => (
-              <div key={l}>
-                <span>{l}</span>
-                <b className="mono">{v}%</b>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="sqh-showcase-steps">
-          {MOCK_STEPS.map((s, i) => (
-            <div className={`sqh-showcase-step sqh-showcase-step--${s.state}`} key={s.label}>
-              <span className="sqh-showcase-bead">
-                {s.state === 'done' ? <CheckCircle size={13} weight="fill" />
-                  : s.state === 'active' ? <SpinnerGap size={13} weight="bold" className="sqh-phase-spin" />
-                  : <span className="mono">{i + 1}</span>}
-              </span>
-              <span>{s.label}</span>
-              {s.state === 'done' && <span className="sqh-tag sqh-tag--ok">命中</span>}
-            </div>
-          ))}
-          <div className="sqh-showcase-note">
-            <ShieldCheck size={14} weight="duotone" />主队首发完整 · 客队中卫停赛（双源确认）
-          </div>
-        </div>
-      </div>
     </div>
   )
 }

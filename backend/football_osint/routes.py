@@ -14,6 +14,7 @@ from .adapters import dongqiudi_schedule, football_data_schedule
 from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
 from .pipeline import run_prediction_sync
 from . import warm_cache
+from . import track_record
 
 
 def _require_paid(http_request: Request) -> dict:
@@ -135,6 +136,12 @@ async def answer_question(request: FootballOsintJobRequest, http_request: Reques
     _JOBS.set(job.job_id, job)
     # _answer_from_job does blocking LLM calls — keep it off the event loop.
     return await asyncio.to_thread(_answer_from_job, job, request.question)
+
+
+@router.get("/track-record")
+async def get_track_record():
+    """Public hit-rate stats (settled predictions vs actual results) for the landing page."""
+    return await asyncio.to_thread(track_record.get_stats)
 
 
 @router.get("/fixtures")

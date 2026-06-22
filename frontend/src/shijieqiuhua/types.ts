@@ -155,3 +155,22 @@ export interface FootballOsintJob {
   report_markdown: string
   error?: string
 }
+
+export interface TrackRecordEntry {
+  home_team: string
+  away_team: string
+  kickoff_at: string
+  predicted_lean: string
+  predicted_scoreline_band: string[]
+  actual_home_score: number
+  actual_away_score: number
+  lean_correct: boolean
+  scoreline_hit: boolean
+}
+
+export interface TrackRecordStats {
+  settled: number
+  lean_accuracy?: number
+  scoreline_accuracy?: number
+  recent?: TrackRecordEntry[]
+}

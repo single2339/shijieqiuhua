@@ -1,4 +1,4 @@
-import type { FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer } from './types'
+import type { FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, TrackRecordStats } from './types'
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
 
@@ -51,6 +51,11 @@ export async function fetchFootballOsintJob(jobId: string): Promise<FootballOsin
 export async function fetchFixtures(days = 3): Promise<FixtureStatus[]> {
   const res = await fetch(`/api/football/osint/fixtures?days=${days}`)
   return readJson<FixtureStatus[]>(res)
+}
+
+export async function fetchTrackRecord(): Promise<TrackRecordStats> {
+  const res = await fetch('/api/football/osint/track-record')
+  return readJson<TrackRecordStats>(res)
 }
 
 // ── auth ──

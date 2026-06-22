@@ -944,6 +944,43 @@
   gap: 6px;
 }
 
+/* ── report tabs ── */
+.sqh-tabbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.sqh-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #ddd0b8;
+  background: #fffdf8;
+  color: #6d725f;
+  padding: 8px 13px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .14s cubic-bezier(.2, .7, .3, 1);
+}
+.sqh-tab--on {
+  background: #e8f1e3;
+  color: #143c2d;
+  border-color: #dcecd8;
+}
+.sqh-tabpanel { min-height: 220px; }
+.sqh-tabsub-hd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #17221b;
+  margin-bottom: 10px;
+}
+
 /* ── locked veil ── */
 .sqh-report-locked {
   position: relative;
@@ -1577,6 +1614,16 @@
 }
 .sqh-land-stat b { font-size: 22px; font-weight: 700; color: #0f2e22; }
 .sqh-land-stat span { font-size: 12px; color: #6d725f; }
+.sqh-land-track-record { margin-top: 20px; }
+.sqh-land-track-record-summary {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none; cursor: pointer;
+  font-size: 14px; font-weight: 600; padding: 0;
+}
+.sqh-land-track-record-table { width: 100%; margin-top: 12px; border-collapse: collapse; font-size: 13px; }
+.sqh-land-track-record-table th, .sqh-land-track-record-table td {
+  padding: 6px 10px; text-align: left; border-bottom: 1px solid rgba(0,0,0,0.08);
+}
 
 /* sections */
 .sqh-land-section {

@@ -11,7 +11,7 @@ DB_PATH = STORAGE_ROOT / "_auth.db"
 
 _local = threading.local()
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "sql"
-_EXTRA_MIGRATIONS = ("003_billing_and_entitlements.sql",)
+_EXTRA_MIGRATIONS = ("003_billing_and_entitlements.sql", "004_prediction_track_record.sql")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (

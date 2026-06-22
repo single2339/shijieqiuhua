@@ -1,8 +1,11 @@
 import {
-  ArrowRight, Check, CheckCircle, Clock, Gauge, Graph, Key,
+  ArrowRight, CaretDown, Check, CheckCircle, Clock, Gauge, Graph, Key,
   Lightning, MagnifyingGlass, Scales, ShieldCheck, SpinnerGap, Stack,
 } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { fetchTrackRecord } from '../api'
 import { PLANS } from '../plans'
+import type { TrackRecordStats } from '../types'
 
 interface LandingPageProps {
   onEnter: () => void
@@ -12,22 +15,68 @@ interface LandingPageProps {
 
 const TRUST = [
   { val: '7', label: '类独立信源' },
-  { val: 'L1–L4', label: '置信度评级' },
+  { val: '4', label: '档可信度分级' },
   { val: '5', label: '步情报循环' },
   { val: 'T-2h', label: '开赛前复扫' },
 ]
+
+export function formatTrackRecordSummary(stats: TrackRecordStats): string | null {
+  if (stats.lean_accuracy === undefined || stats.scoreline_accuracy === undefined) return null
+  const leanPct = Math.round(stats.lean_accuracy * 100)
+  const scorePct = Math.round(stats.scoreline_accuracy * 100)
+  return `近 ${stats.settled} 场比赛 · 方向命中率 ${leanPct}% · 比分命中率 ${scorePct}%`
+}
+
+function TrackRecordStrip() {
+  const [stats, setStats] = useState<TrackRecordStats | null>(null)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    fetchTrackRecord().then(setStats).catch(() => {})
+  }, [])
+
+  if (!stats) return null
+  const summary = formatTrackRecordSummary(stats)
+  if (!summary || !stats.recent) return null
+
+  return (
+    <div className="sqh-land-track-record">
+      <button className="sqh-land-track-record-summary" onClick={() => setExpanded(e => !e)}>
+        {summary}
+        <CaretDown size={14} weight="bold" style={{ transform: expanded ? 'rotate(180deg)' : undefined }} />
+      </button>
+      {expanded && (
+        <table className="sqh-land-track-record-table">
+          <thead>
+            <tr><th>对阵</th><th>预测</th><th>实际比分</th><th>命中</th></tr>
+          </thead>
+          <tbody>
+            {stats.recent.map((r, i) => (
+              <tr key={i}>
+                <td>{r.home_team} vs {r.away_team}</td>
+                <td>{r.predicted_lean}（{r.predicted_scoreline_band.join('/')}）</td>
+                <td>{r.actual_home_score}-{r.actual_away_score}</td>
+                <td>{r.lean_correct ? '✓' : '✗'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
 
 const STEPS = [
   { ic: <ShieldCheck size={22} weight="duotone" />, t: '核验主体', d: '锁定比赛、时间、场地，排除同名干扰，确定情报需求。' },
   { ic: <MagnifyingGlass size={22} weight="duotone" />, t: '多源采集', d: '官网、权威媒体、统计站、记者动态、气象——逐条命中、去重。' },
   { ic: <Graph size={22} weight="duotone" />, t: '因子加权', d: '翻译结构化后按时效与可信度打分，贝叶斯更新方向概率。' },
-  { ic: <Gauge size={22} weight="duotone" />, t: '出具研判', d: '给出方向、概率区间与 L1–L4 置信度，证据链全程可查。' },
+  { ic: <Gauge size={22} weight="duotone" />, t: '出具研判', d: '给出方向、概率区间与可信度分级，证据链全程可查。' },
 ]
 
 const FEATURES = [
   { ic: <Stack size={22} weight="duotone" />, t: '实时情报循环', d: '研判过程全程可见：信源逐条点亮，各阶段进度透明，而不是一个黑盒结果。' },
   { ic: <Scales size={22} weight="duotone" />, t: '证据链可追溯', d: '每条结论标注来源、时效与可信度；区分「确认事实」与「研判推断」。' },
-  { ic: <ShieldCheck size={22} weight="duotone" />, t: '诚实的不确定性', d: 'L1–L4 置信度分级，关键数据缺失时直接说「信息不足」，不强行给倾向。' },
+  { ic: <ShieldCheck size={22} weight="duotone" />, t: '诚实的不确定性', d: '确认、高可信、中可信、推测四档分级，关键数据缺失时直接说「信息不足」，不强行给倾向。' },
   { ic: <Graph size={22} weight="duotone" />, t: '因子权重透明', d: '阵容、状态、历史、环境等因子的方向与权重一目了然，可看到贝叶斯轨迹。' },
   { ic: <Clock size={22} weight="duotone" />, t: '开赛前自动复扫', d: '首发与伤情常在临场释放——我们在开赛前 2 小时再扫一遍并提醒你。' },
   { ic: <Lightning size={22} weight="duotone" />, t: '结构化问答', d: '比分、角球、红黄牌、球员、风险——针对量化问题给出可核对的数值预测。' },
@@ -80,6 +129,7 @@ export default function LandingPage({ onEnter, onRegister, onLogin }: LandingPag
             </div>
           ))}
         </div>
+        <TrackRecordStrip />
       </header>
 
       <ShowcaseMock onEnter={onEnter} />
@@ -196,7 +246,7 @@ function ShowcaseMock({ onEnter }: { onEnter: () => void }) {
           <div className="sqh-showcase-teams">
             <span>阿森纳</span><em>VS</em><span>曼城</span>
           </div>
-          <span className="sqh-cbadge sqh-cbadge--L2" style={{ marginTop: 14 }}>L2 · 高可信</span>
+          <span className="sqh-cbadge sqh-cbadge--L2" style={{ marginTop: 14 }}>高可信</span>
           <div className="sqh-showcase-prob">
             {MOCK_PROB.map(([l, v]) => (
               <div key={l}>

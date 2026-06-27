@@ -11,7 +11,7 @@ import httpx
 _TIMEOUT = 30.0
 
 
-def answer_question(question: str, evidence_text: str, match_context: str) -> str:
+def answer_question(question: str, evidence_text: str, match_context: str, lean_cn: str = "") -> str:
     """Ask the LLM to answer a specific football question based on collected evidence.
 
     Returns a concise Chinese answer, or empty string on failure.
@@ -39,8 +39,25 @@ def answer_question(question: str, evidence_text: str, match_context: str) -> st
         "不要给出投注建议。"
     )
 
+    lean_constraint = ""
+    if lean_cn and lean_cn != "信息不足":
+        lean_constraint = (
+            f"⚠️ 核心约束：本场的确定性方向判断为「{lean_cn}」。\n"
+            f"你给出的所有预测维度（比分、进球数、半场走势、角球数、红黄牌数、阵容影响等）"
+            f"都必须与此方向保持一致，不允许出现矛盾。\n"
+            f"例如：若方向为「主队占优」，则比分应体现主队获胜，角球/进攻数据也应倾向主队；"
+            f"若方向为「客队不败」，则比分不能出现主队获胜。\n\n"
+        )
+    elif lean_cn == "信息不足":
+        lean_constraint = (
+            "⚠️ 注意：本场基本面数据不足，方向判断为「信息不足」，"
+            "请在所有预测维度（比分、进球数、半场、角球、红黄牌等）中如实标注可靠性较低，"
+            "避免给出过于确定的数值预测。\n\n"
+        )
+
     user = (
         f"比赛信息：{match_context}\n\n"
+        f"{lean_constraint}"
         f"已收集的证据：\n{evidence_text}\n\n"
         f"用户问题：{question}"
     )

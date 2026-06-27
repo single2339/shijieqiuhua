@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   ArrowRight, CheckCircle, Clock, Gauge, Info, ListChecks,
   Lock, MagnifyingGlass, Scales, ShieldCheck, WarningCircle,
@@ -15,16 +16,29 @@ interface ReportViewProps {
   onUpgrade?: () => void
 }
 
+type TabKey = 'cycle' | 'factors' | 'evidence' | 'findings' | 'next'
+
 export default function ReportView({ osintJob, userTier, onUpgrade }: ReportViewProps) {
+  const [activeTab, setActiveTab] = useState<TabKey | null>(null)
+
   if (!osintJob) return null
 
   const {
-    prediction, confidence, sources, intelligence_cycle,
+    prediction, confidence, intelligence_cycle,
     factors, evidence, confirmed_findings, assessments,
     alternative_explanations, next_steps,
   } = osintJob
 
   const canDeep = userTier === 'paid'
+
+  const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = []
+  if (intelligence_cycle.length > 0) tabs.push({ key: 'cycle', label: '情报循环', icon: <ListChecks size={14} weight="duotone" /> })
+  if (factors.length > 0) tabs.push({ key: 'factors', label: '因子权重', icon: <Gauge size={14} weight="duotone" /> })
+  if (evidence.length > 0) tabs.push({ key: 'evidence', label: '证据链', icon: <MagnifyingGlass size={14} weight="duotone" /> })
+  if (confirmed_findings.length > 0 || assessments.length > 0) tabs.push({ key: 'findings', label: '确认 / 推断', icon: <CheckCircle size={14} weight="duotone" /> })
+  if (alternative_explanations.length > 0 || next_steps.length > 0) tabs.push({ key: 'next', label: '替代 / 下一步', icon: <Clock size={14} weight="duotone" /> })
+
+  const activeKey = tabs.some(t => t.key === activeTab) ? (activeTab as TabKey) : tabs[0]?.key
 
   return (
     <motion.div
@@ -36,23 +50,6 @@ export default function ReportView({ osintJob, userTier, onUpgrade }: ReportView
       {/* ── verdict ── */}
       {prediction && (
         <VerdictCard prediction={prediction} confidence={confidence} />
-      )}
-
-      {/* ── intelligence cycle ── */}
-      {intelligence_cycle.length > 0 && (
-        <SectionCard
-          icon={<ListChecks size={16} weight="duotone" />}
-          title="情报循环"
-          right={
-            sources.length > 0 ? (
-              <span className="sqh-tag sqh-tag--mute">
-                {sources.filter(s => s.status === 'ok').length}/{sources.length} 信源命中
-              </span>
-            ) : undefined
-          }
-        >
-          <IntelCycle stages={intelligence_cycle} />
-        </SectionCard>
       )}
 
       {/* ── gated sections ── */}
@@ -73,78 +70,67 @@ export default function ReportView({ osintJob, userTier, onUpgrade }: ReportView
         )}
 
         <div style={{ filter: canDeep ? 'none' : 'blur(3px)', pointerEvents: canDeep ? 'auto' : 'none' }}>
-          {/* ── factors ── */}
-          {factors.length > 0 && (
-            <SectionCard
-              icon={<Gauge size={16} weight="duotone" />}
-              title="因子权重"
-              right={<span className="sqh-tag sqh-tag--mute">← 利主 / 利客 →</span>}
-            >
-              <FactorBars factors={factors} />
-            </SectionCard>
-          )}
+          {tabs.length > 0 && (
+            <>
+              <div className="sqh-tabbar">
+                {tabs.map(t => (
+                  <button
+                    key={t.key}
+                    className={`sqh-tab${activeKey === t.key ? ' sqh-tab--on' : ''}`}
+                    onClick={() => setActiveTab(t.key)}
+                  >
+                    {t.icon}{t.label}
+                  </button>
+                ))}
+              </div>
 
-          {/* ── evidence ── */}
-          {evidence.length > 0 && (
-            <SectionCard
-              icon={<MagnifyingGlass size={16} weight="duotone" />}
-              title="证据链"
-              right={<span className="sqh-tag sqh-tag--ok">{evidence.length} 条</span>}
-            >
-              <EvidenceList items={evidence} />
-            </SectionCard>
-          )}
+              <div className="sqh-rsec sqh-tabpanel">
+                <div className="sqh-rsec-bd">
+                  {activeKey === 'cycle' && <IntelCycle stages={intelligence_cycle} />}
+                  {activeKey === 'factors' && <FactorBars factors={factors} />}
+                  {activeKey === 'evidence' && <EvidenceList items={evidence} />}
 
-          {/* ── findings ── */}
-          {(confirmed_findings.length > 0 || assessments.length > 0) && (
-            <div className="sqh-findings-row">
-              {confirmed_findings.length > 0 && (
-                <SectionCard
-                  icon={<CheckCircle size={16} weight="duotone" />}
-                  title="确认事实"
-                >
-                  <FindingList items={confirmed_findings} />
-                </SectionCard>
-              )}
-              {assessments.length > 0 && (
-                <SectionCard
-                  icon={<Scales size={16} weight="duotone" />}
-                  title="研判推断"
-                >
-                  <FindingList items={assessments} />
-                </SectionCard>
-              )}
-            </div>
-          )}
+                  {activeKey === 'findings' && (
+                    <div className="sqh-findings-row">
+                      {confirmed_findings.length > 0 && (
+                        <div>
+                          <div className="sqh-tabsub-hd"><CheckCircle size={15} weight="duotone" />确认事实</div>
+                          <FindingList items={confirmed_findings} />
+                        </div>
+                      )}
+                      {assessments.length > 0 && (
+                        <div>
+                          <div className="sqh-tabsub-hd"><Scales size={15} weight="duotone" />研判推断</div>
+                          <FindingList items={assessments} />
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-          {/* ── alternatives ── */}
-          {alternative_explanations.length > 0 && (
-            <SectionCard
-              icon={<WarningCircle size={16} weight="duotone" />}
-              title="替代解释"
-            >
-              <ul className="sqh-bullet-list">
-                {alternative_explanations.map((a, i) => <li key={i}>{a}</li>)}
-              </ul>
-            </SectionCard>
-          )}
-
-          {/* ── next steps ── */}
-          {next_steps.length > 0 && (
-            <SectionCard
-              icon={<Clock size={16} weight="duotone" />}
-              title="下一步 / 复扫计划"
-              right={confidence ? <ConfBadge level={confidence.level} /> : undefined}
-            >
-              <ul className="sqh-bullet-list">
-                {next_steps.map((s, i) => <li key={i}>{s}</li>)}
-              </ul>
-              {confidence?.reason && (
-                <p className="sqh-conf-reason">
-                  <Info size={13} weight="duotone" /> 置信度依据：{confidence.reason}
-                </p>
-              )}
-            </SectionCard>
+                  {activeKey === 'next' && (
+                    <>
+                      {alternative_explanations.length > 0 && (
+                        <>
+                          <div className="sqh-tabsub-hd"><WarningCircle size={15} weight="duotone" />替代解释</div>
+                          <ul className="sqh-bullet-list" style={{ marginBottom: 16 }}>
+                            {alternative_explanations.map((a, i) => <li key={i}>{a}</li>)}
+                          </ul>
+                        </>
+                      )}
+                      <div className="sqh-tabsub-hd"><Clock size={15} weight="duotone" />下一步 / 复扫计划</div>
+                      <ul className="sqh-bullet-list">
+                        {next_steps.map((s, i) => <li key={i}>{s}</li>)}
+                      </ul>
+                      {confidence?.reason && (
+                        <p className="sqh-conf-reason">
+                          <Info size={13} weight="duotone" /> 置信度依据：{confidence.reason}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -170,7 +156,7 @@ const LEAN_LABEL: Record<string, string> = {
 function ConfBadge({ level }: { level: string }) {
   return (
     <span className={`sqh-cbadge sqh-cbadge--${level}`}>
-      {level}{' · '}{CONF_LABELS[level] || level}
+      {CONF_LABELS[level] || level}
     </span>
   )
 }
@@ -244,7 +230,9 @@ function ProbabilityBands({ bands, lead }: {
   return (
     <div className="sqh-prob-grid">
       {keys.map(k => {
-        const [lo, hi] = bands[k]
+        // probability_band comes from the backend as fractions (e.g. 0.32–0.40)
+        const lo = Math.round(bands[k][0] * 100)
+        const hi = Math.round(bands[k][1] * 100)
         const mid = Math.round((lo + hi) / 2)
         return (
           <div className={`sqh-prob-cell${lead === k ? ' sqh-prob-cell--lead' : ''}`} key={k}>
@@ -385,26 +373,6 @@ function FindingList({ items }: { items: IntelligenceFinding[] }) {
           </div>
         </div>
       ))}
-    </div>
-  )
-}
-
-// ── SectionCard (wraps each report block) ──
-
-function SectionCard({ icon, title, right, children }: {
-  icon: React.ReactNode
-  title: string
-  right?: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <div className="sqh-rsec">
-      <div className="sqh-rsec-hd">
-        <span className="sqh-rsec-ic">{icon}</span>
-        <h3>{title}</h3>
-        {right && <span className="sqh-rsec-right">{right}</span>}
-      </div>
-      <div className="sqh-rsec-bd">{children}</div>
     </div>
   )
 }

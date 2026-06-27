@@ -144,7 +144,20 @@ def find_fixture(fixtures: list[Fixture], home_team: str, away_team: str) -> Fix
     return None
 
 
+_BRACKETS = str.maketrans({"（": "(", "）": ")", "【": "(", "】": ")"})
+
+
 def _norm(name: str) -> str:
+    """Whitespace/case/bracket-width insensitive match key.
+
+    Full-width vs half-width brackets are the one formatting drift we've
+    actually observed between our translation table and dongqiudi's own
+    naming (e.g. "刚果（金）" vs a hypothetical "刚果(金)"). This does NOT
+    paper over genuinely different names for the same country (e.g.
+    dongqiudi's youth-tournament "民主刚果" vs our "刚果（金）") — those need
+    an explicit alias, not normalization.
+    """
+    name = name.translate(_BRACKETS)
     return re.sub(r"\s+", "", name).strip().lower()
 
 

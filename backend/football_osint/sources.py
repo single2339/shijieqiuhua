@@ -51,20 +51,11 @@ DONGQIUDI_SOURCE_TEMPLATES = (
 SEARCH_SOURCE_TEMPLATES = (
     FootballSourceTemplate(
         adapter="ddg_search",
-        label="DuckDuckGo 搜索",
+        label="网页搜索",
         source_type="search",
-        url_template="https://html.duckduckgo.com/html/?q={query}",
+        url_template="https://www.sogou.com/web?query={query}",
         topic="search.ddg.preview",
-        description='搜索赛前分析报道，query 为 "{home} vs {away} preview"。',
-    ),
-    FootballSourceTemplate(
-        adapter="bing_search",
-        label="Bing 中文搜索",
-        source_type="search",
-        url_template="https://www.bing.com/search?q={query}",
-        topic="search.bing.preview",
-        description='中文赛前前瞻搜索，query 为 "{home} {away} 前瞻"。默认关闭。',
-        default_enabled=False,
+        description='搜索赛前分析报道，query 为 "{home} vs {away} preview"。搜狗优先，DDG 兜底。',
     ),
 )
 

@@ -110,7 +110,7 @@ export default function AccountPanel({
             <div className="sqh-hist-item" key={i}>
               <span className="sqh-hist-q">{h.question}</span>
               <span className="sqh-hist-meta">
-                <span className={`sqh-cbadge sqh-cbadge--${h.level}`}>{h.level} · {CONF_LABELS[h.level] || ''}</span>
+                <span className={`sqh-cbadge sqh-cbadge--${h.level}`}>{CONF_LABELS[h.level] || ''}</span>
                 {h.match} · {h.at}
               </span>
             </div>

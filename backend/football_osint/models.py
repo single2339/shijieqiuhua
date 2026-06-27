@@ -84,7 +84,7 @@ class FactorImpact(BaseModel):
 
 
 class PredictionResult(BaseModel):
-    lean: Literal["home", "away", "draw", "home_or_draw", "away_or_draw"]
+    lean: Literal["home", "away", "draw", "home_or_draw", "away_or_draw", "info_insufficient"]
     summary: str
     probability_band: dict[str, tuple[float, float]]
     scoreline_band: list[str]

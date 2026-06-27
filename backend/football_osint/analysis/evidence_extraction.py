@@ -35,11 +35,29 @@ _SYSTEM = (
     ' "away_form": {"wins": int, "draws": int, "losses": int} 或 null,\n'
     ' "h2h_home_wins": int 或 null, "h2h_draws": int 或 null, "h2h_home_losses": int 或 null,\n'
     ' "home_absences": int 或 null, "away_absences": int 或 null,\n'
-    ' "home_rank": int 或 null, "away_rank": int 或 null}\n'
+    ' "home_rank": int 或 null, "away_rank": int 或 null,\n'
+    ' "_qualitative_inference": true 或 false}\n'
     "home_form/away_form 是该队近期比赛的胜/平/负场次。h2h_* 是双方历史交锋中主队的胜/平/负场次。"
-    "home_absences/away_absences 是因伤/停赛缺席的人数。home_rank/away_rank 是当前联赛或赛事积分榜排名。\n"
-    "严格规则：只抽取证据文本中明确出现的数字，绝不推测或编造。某个字段在任何一条证据里都没有明确数字，"
-    "就填 null。"
+    "home_absences/away_absences 是因伤/停赛缺席的人数。home_rank/away_rank 是当前联赛或赛事积分榜排名。\n\n"
+    "抽取策略（按优先级）：\n"
+    "1. 如果证据中有\"X胜Y平Z负\"等明确数字，直接抽取，_qualitative_inference 设为 false。\n"
+    "2. 如果某个字段没有明确数字，但证据中有任何关于球队近期表现、实力、状态的描述\n"
+    "   （包括但不限于：首轮结果、攻防表现、排名对比、实力优劣、球队士气等），\n"
+    "   请根据上下文推断最合理的数字，并将 _qualitative_inference 设为 true。\n"
+    "   推断参考：\n"
+    "   - 表现强/优势明显/大胜/实力碾压 → 近期约 4胜1平0负\n"
+    "   - 表现不错/占优/状态良好 → 近期约 3胜1平1负\n"
+    "   - 表现一般/互有优劣 → 近期约 2胜2平1负\n"
+    "   - 首轮惨败/表现不佳/实力不济/防线漏洞 → 近期约 1胜1平3负\n"
+    "   - 有伤病/缺席报道但未明确人数 → 约 2 人缺席\n"
+    "   - 排名靠前/FIFA排名明显优于对手 → 排名约 2-4 位或低于对手30位以上\n"
+    "   - 排名靠后/FIFA排名明显低于对手 → 排名约 15-18 位或高于对手30位以上\n"
+    "⚠️ 重要：home_form 和 away_form 是必须字段，即使证据只提到其中一队，两队都要给出估计：\n"
+    "   - 证据充分的一方给出精确推断，证据稀疏的一方根据实力定位推断\n"
+    "   - \"世界杯新军/实力一般/亚洲球队\" → 近期约 2胜1平2负 或更差\n"
+    "   - \"欧洲劲旅/夺冠热门/强队\" → 近期约 4胜1平0负 或 3胜2平0负\n"
+    "   - 只要有最基本的球队定位描述（强队/弱队/新军/劲旅），就必须给出估计值\n"
+    "3. 如果所有证据中完全没有任何关于两队的信息，对应字段才填 null。"
 )
 
 
@@ -54,6 +72,7 @@ class ExtractedFacts:
     away_absences: int | None
     home_rank: int | None
     away_rank: int | None
+    qualitative_inference: bool = False
 
 
 def extract(
@@ -138,4 +157,5 @@ def _parse(data: dict) -> ExtractedFacts:
         away_absences=_int("away_absences"),
         home_rank=_int("home_rank"),
         away_rank=_int("away_rank"),
+        qualitative_inference=bool(data.get("_qualitative_inference", False)),
     )

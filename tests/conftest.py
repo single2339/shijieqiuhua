@@ -9,17 +9,34 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 def _isolate_caches():
-    """Clear shared module-level TTL caches between tests.
+    """Clear shared module-level caches between tests.
 
     search_cache/schedule_cache are process-global; without this, deterministic
     query keys (same teams) leak cached results across tests.
     """
-    from backend.football_osint import cache
+    from backend.football_osint import cache, warm_cache
 
     for c in (cache.search_cache, cache.schedule_cache, cache.analysis_cache, cache.weather_cache):
         with c._lock:
             c._store.clear()
+
+    # Clear warm_cache unified cache + state between tests.
+    # Direct clearing is safe here — no concurrent async tasks in fixture setup.
+    warm_cache._cache.clear()
+    warm_cache._by_job_id.clear()
+    warm_cache._inflight.clear()
+    warm_cache._completed_windows.clear()
+
     yield
+
+    for c in (cache.search_cache, cache.schedule_cache, cache.analysis_cache, cache.weather_cache):
+        with c._lock:
+            c._store.clear()
+
+    warm_cache._cache.clear()
+    warm_cache._by_job_id.clear()
+    warm_cache._inflight.clear()
+    warm_cache._completed_windows.clear()
 
 
 @pytest.fixture(autouse=True)

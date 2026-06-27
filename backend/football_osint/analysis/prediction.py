@@ -13,11 +13,36 @@ PRD §4.1 contract; do not break PredictionResult shape.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from ..models import (
     FactorImpact,
     FootballOsintJobRequest,
     PredictionResult,
 )
+
+# kickoff_at is a free-form string from different callers — frontend fixture
+# clicks send "%Y-%m-%d %H:%M", warm_cache's synthetic requests send "%m-%d %H:%M"
+# (no year). Both are Beijing time by convention elsewhere in this package.
+_CST = timezone(timedelta(hours=8))
+_KICKOFF_FORMATS = ("%Y-%m-%d %H:%M", "%m-%d %H:%M")
+
+
+def _hours_until_kickoff(kickoff_at: str) -> float | None:
+    """Best-effort parse; returns None rather than raising on unknown formats."""
+    kickoff_at = kickoff_at.strip()
+    if not kickoff_at:
+        return None
+    for fmt in _KICKOFF_FORMATS:
+        try:
+            parsed = datetime.strptime(kickoff_at, fmt)
+        except ValueError:
+            continue
+        if fmt == "%m-%d %H:%M":
+            parsed = parsed.replace(year=datetime.now(_CST).year)
+        parsed = parsed.replace(tzinfo=_CST)
+        return (parsed - datetime.now(_CST)).total_seconds() / 3600
+    return None
 
 
 _LEAN_CN: dict[str, str] = {
@@ -31,12 +56,20 @@ _LEAN_CN: dict[str, str] = {
 
 
 def predict(request: FootballOsintJobRequest, factors: list[FactorImpact]) -> PredictionResult:
+    # A factor is "active" when it's enabled — evidence was found and scored.
+    # impact=0 with enabled=True means the teams are evenly matched on that
+    # dimension, which IS a real signal (not a data gap).
+    active_factors = [f for f in factors if f.group in ("form", "h2h", "squad") and f.enabled]
+    has_fundamental_signal = len(active_factors) > 0
+
     home_impact = sum(f.impact * f.weight for f in factors if f.enabled and f.direction == "home")
     away_impact = sum(abs(f.impact) * f.weight for f in factors if f.enabled and f.direction == "away")
     uncertainty = sum(abs(f.impact) * f.weight for f in factors if f.group == "uncertainty")
     edge = home_impact - away_impact
 
-    if abs(edge) < 0.015 or uncertainty > 0.015:
+    if not has_fundamental_signal:
+        lean = "info_insufficient"
+    elif abs(edge) < 0.015 or uncertainty > 0.015:
         lean = "home_or_draw" if edge >= 0 else "away_or_draw"
     else:
         lean = "home" if edge > 0 else "away"
@@ -45,28 +78,48 @@ def predict(request: FootballOsintJobRequest, factors: list[FactorImpact]) -> Pr
     away_mid = max(0.20, min(0.50, 0.32 - edge))
     draw_mid = max(0.20, min(0.34, 1.0 - home_mid - away_mid))
 
-    # drivers use Chinese factor labels, not internal factor_ids
-    drivers = [
-        f.label
-        for f in sorted(factors, key=lambda item: abs(item.impact) * item.weight, reverse=True)
-        if f.enabled and abs(f.impact) > 0.005
-    ][:4]
-    if not drivers:
-        drivers = [f.label for f in factors if f.enabled and f.factor_id == "fixture.existence"][:1]
+    if lean == "info_insufficient":
+        drivers: list[str] = []
+        hours_to_kickoff = _hours_until_kickoff(request.kickoff_at)
+        if hours_to_kickoff is None or hours_to_kickoff > 48:
+            # Far from kickoff: dongqiudi/国内媒体 typically only publish
+            # match-specific analysis in the final 1-2 days, so a miss here
+            # usually just means "too early", not "this match has no coverage".
+            summary = (
+                f"{request.home_team} vs {request.away_team}：赛前分析暂未发布，现有证据不足以支撑方向判断，"
+                "如实标记为信息不足。这类大赛通常临开赛前 1-2 天才会放出近期状态、历史交锋、阵容等数据，"
+                "建议开赛前 1-2 天再来看。"
+            )
+        else:
+            summary = (
+                f"{request.home_team} vs {request.away_team}：未取得近期状态、历史交锋或阵容等结构化基本面数据"
+                "（懂球帝赛前分析未命中该场比赛），现有证据不足以支撑方向判断，如实标记为信息不足，"
+                "建议临近开赛前复扫。"
+            )
+    else:
+        # drivers use Chinese factor labels, not internal factor_ids
+        drivers = [
+            f.label
+            for f in sorted(factors, key=lambda item: abs(item.impact) * item.weight, reverse=True)
+            if f.enabled and abs(f.impact) > 0.005
+        ][:4]
+        if not drivers:
+            drivers = [f.label for f in factors if f.enabled and f.factor_id == "fixture.existence"][:1]
+        lean_cn = _LEAN_CN.get(lean, lean)
+        summary = f"{request.home_team} vs {request.away_team}，判断为「{lean_cn}」，置信度受数据覆盖度约束。"
 
     uncertainties = [f.label for f in factors if f.group == "uncertainty" and f.enabled]
     uncertainties.extend(f.missing_reason for f in factors if f.missing_reason)
 
-    lean_cn = _LEAN_CN.get(lean, lean)
     return PredictionResult(
         lean=lean,  # type: ignore[arg-type]
-        summary=f"{request.home_team} vs {request.away_team}，判断为「{lean_cn}」，置信度受数据覆盖度约束。",
+        summary=summary,
         probability_band={
             "home_win": band(home_mid),
             "draw": band(draw_mid),
             "away_win": band(away_mid),
         },
-        scoreline_band=["1-1", "1-0", "2-1"] if edge >= 0 else ["1-1", "0-1", "1-2"],
+        scoreline_band=[] if lean == "info_insufficient" else (["1-1", "1-0", "2-1"] if edge >= 0 else ["1-1", "0-1", "1-2"]),
         drivers=drivers,
         uncertainties=uncertainties[:4],
     )

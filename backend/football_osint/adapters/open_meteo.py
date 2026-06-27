@@ -81,13 +81,19 @@ def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> 
         return "", "无法确定场馆坐标，请在 venue 或 notes 中指定 lat:N lon:M"
 
     lat, lon = coords
-    kickoff = (request.kickoff_at or "")[:10]
+    kickoff = (request.kickoff_at or "").strip()
     if not kickoff:
         from datetime import datetime, timedelta, timezone
         kickoff = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    # kickoff_at may contain a time part ("06-22 09:00" or "2026-06-22 09:00") —
+    # Open-Meteo needs just the date. Strip everything after the first space.
+    kickoff_date = kickoff.split(" ")[0].strip()
+    if not kickoff_date:
+        from datetime import datetime, timedelta, timezone
+        kickoff_date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
 
     # Try shared weather cache first
-    wk = cache.weather_key(lat, lon, kickoff)
+    wk = cache.weather_key(lat, lon, kickoff_date)
     cached = cache.weather_cache.get(wk)
     if cached is not None:
         eid = append_evidence(evidence, source=f"Open-Meteo ({lat},{lon})", source_type="weather",
@@ -98,7 +104,7 @@ def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> 
     params = (
         f"latitude={lat}&longitude={lon}"
         f"&daily=precipitation_probability_max,temperature_2m_max,temperature_2m_min,wind_speed_10m_max,weather_code"
-        f"&start_date={kickoff}&end_date={kickoff}&timezone=auto"
+        f"&start_date={kickoff_date}&end_date={kickoff_date}&timezone=auto"
     )
     api_url = f"{URL}?{params}"
 

@@ -63,9 +63,37 @@ def synthesize(job: FootballOsintJob, question: str = "") -> str:
         f"{job.match.home_team} vs {job.match.away_team}，"
         f"{job.match.competition or '赛事未指定'}，开球：{job.match.kickoff_at or '未知'}"
     )
+
+    # ── pipeline direction constraint: ensure ALL LLM predictions are consistent ──
+    _LEAN_LABELS: dict[str, str] = {
+        "home": "主队占优",
+        "away": "客队占优",
+        "draw": "平局倾向",
+        "home_or_draw": "主队不败",
+        "away_or_draw": "客队不败",
+        "info_insufficient": "信息不足",
+    }
+    lean_constraint = ""
+    if job.prediction and job.prediction.lean != "info_insufficient":
+        lean_cn = _LEAN_LABELS.get(job.prediction.lean, "")
+        lean_constraint = (
+            f"⚠️ 核心约束：本场的确定性方向判断为「{lean_cn}」。\n"
+            f"你给出的所有预测维度（比分、进球数、半场走势、角球数、红黄牌数、阵容影响等）"
+            f"都必须与此方向保持一致，不允许出现矛盾。\n"
+            f"例如：若方向为「主队占优」，则比分应体现主队获胜，角球/进攻数据也应倾向主队；"
+            f"若方向为「客队不败」，则比分不能出现主队获胜。\n\n"
+        )
+    elif job.prediction and job.prediction.lean == "info_insufficient":
+        lean_constraint = (
+            "⚠️ 注意：本场基本面数据不足，方向判断为「信息不足」，"
+            "请在所有预测维度（比分、进球数、半场、角球、红黄牌等）中如实标注可靠性较低，"
+            "避免给出过于确定的数值预测。\n\n"
+        )
+
     user = (
         f"比赛：{match_ctx}\n"
         f"用户关注的问题：{question or '总体研判'}\n\n"
+        f"{lean_constraint}"
         f"多源赛前情报（每条：[来源] 正文）：\n{evidence_lines}"
     )
 

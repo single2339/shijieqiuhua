@@ -141,7 +141,12 @@ def cmd_payment_codes(args: argparse.Namespace) -> int:
         log.error("billing error: %s — %s", exc.error_code, exc)
         return 4
     _emit_codes(codes, args.output, kind="payment")
-    log.info("created %d payment codes (validity=%dd)", len(codes), args.validity_days)
+    log.info(
+        "created %d payment codes (validity=%dd, entitlement=%dd)",
+        len(codes),
+        args.validity_days,
+        args.validity_after_redeem,
+    )
     return 0
 
 
@@ -286,8 +291,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pay.add_argument(
         "--validity-after-redeem",
         type=int,
-        default=None,
-        help="entitlement validity after redeem in days; omit for permanent",
+        default=30,
+        help="entitlement validity after redeem in days",
     )
     pay.add_argument("--note", type=str, default="")
     pay.add_argument("--output", type=str, default=None)

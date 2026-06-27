@@ -8,6 +8,7 @@ backend.auth.db so the module-level singleton uses the throwaway DB.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -53,19 +54,32 @@ def _make_code(conn, *, code="ABCD2345EFGH6789", status="unused", expires_in_day
 
 # ── happy path ──
 
-def test_redeem_creates_entitlement_and_marks_code_used(tmp_db):
+def test_redeem_permanent_code_creates_entitlement_and_marks_code_used(tmp_db):
     code = _make_code(tmp_db)
     ent = billing.redeem_code(code=code, user_id=1)
     assert ent.user_id == 1
     assert ent.type == "full_analysis"
-    assert ent.expires_at is None  # permanent (validity_days_after_redeem=None)
+    assert ent.expires_at is None  # legacy/permanent code: validity_days_after_redeem=NULL
 
     row = tmp_db.execute("SELECT status, granted_to_user_id FROM activation_code WHERE code=?", (code,)).fetchone()
     assert row["status"] == "used"
     assert row["granted_to_user_id"] == 1
 
 
-def test_redeem_with_validity_window_sets_expires_at(tmp_db):
+def test_generated_default_code_redeems_to_30_day_entitlement(tmp_db):
+    code = billing.generate_codes(count=1)[0]
+    row = tmp_db.execute(
+        "SELECT validity_days_after_redeem FROM activation_code WHERE code=?",
+        (code,),
+    ).fetchone()
+    assert row["validity_days_after_redeem"] == billing_service.DEFAULT_VALIDITY_DAYS_AFTER_REDEEM
+
+    ent = billing.redeem_code(code=code, user_id=1)
+    assert ent.expires_at is not None
+    assert ent.expires_at > datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def test_redeem_with_custom_validity_window_sets_expires_at(tmp_db):
     code = _make_code(tmp_db, validity_days_after_redeem=30)
     ent = billing.redeem_code(code=code, user_id=1)
     assert ent.expires_at is not None
@@ -168,6 +182,8 @@ def test_generate_codes_writes_audit(tmp_db):
     billing.generate_codes(count=3, note="W1 smoke")
     rows = audit.recent(event="admin.bulk_create_payment", conn=tmp_db)
     assert len(rows) == 1
+    payload = json.loads(rows[0]["payload_json"])
+    assert payload["validity_days_after_redeem"] == billing_service.DEFAULT_VALIDITY_DAYS_AFTER_REDEEM
 
 
 def test_generate_codes_rejects_count_above_1000(tmp_db):

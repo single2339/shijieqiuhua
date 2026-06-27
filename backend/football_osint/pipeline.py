@@ -27,6 +27,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+from bs4 import BeautifulSoup
+
 log = logging.getLogger(__name__)
 
 from .adapters import lightpanda as lightpanda_adapter
@@ -164,12 +167,13 @@ def _collect_zero_config_sources(
     )
     _collect_farich_foot_sources(request, evidence, sources)
 
-    # ── weather / search / RSS — run in parallel (independent I/O) ──
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    # ── weather / search / RSS / football-data — run in parallel (independent I/O) ──
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             pool.submit(_collect_one_weather, request, evidence): "weather",
             pool.submit(_collect_search_sources, request, evidence, sources): "search",
             pool.submit(rss_adapter.collect_all, request, evidence): "rss",
+            pool.submit(_collect_football_data_stats, request, evidence, sources): "football_data",
         }
         for future in as_completed(futures):
             label = futures[future]
@@ -190,7 +194,7 @@ def _collect_zero_config_sources(
                             status=status,
                             reason="" if status == "ok" else "未匹配到相关新闻",
                         ))
-                # search appends to evidence + sources internally
+                # search / football_data append to evidence + sources internally
             except Exception:
                 log.warning("%s phase failed or timed out", label)
 
@@ -317,6 +321,85 @@ def _collect_search_sources(
     _collect_chinese_search(request, evidence, sources)
 
 
+def _contains_chinese(text: str) -> bool:
+    """Return True if the text contains any CJK Unified Ideograph."""
+    return any('一' <= c <= '鿿' for c in text)
+
+
+def _fetch_page_text(url: str, timeout: float = 8.0) -> str:
+    """Fetch a URL and extract readable text content. Returns '' on any failure."""
+    if not url:
+        return ""
+    try:
+        resp = httpx.get(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/125.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            },
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+    except Exception:
+        return ""
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        tag.decompose()
+
+    for selector in ("article", "main", '[class*="content"]', '[class*="article"]'):
+        container = soup.select_one(selector)
+        if container:
+            text = container.get_text(separator="\n", strip=True)
+            break
+    else:
+        text = soup.body.get_text(separator="\n", strip=True) if soup.body else ""
+
+    if len(text) > 2000:
+        text = text[:2000] + "..."
+    return text
+
+
+def _fetch_top_pages(
+    search_results: list[dict[str, str]],
+    evidence: list[OsintEvidence],
+    source_label: str,
+    base_topic: str,
+) -> list[str]:
+    """Fetch full content of top 2 search result pages in parallel."""
+    urls = [r["url"] for r in search_results[:2] if r.get("url")]
+    if not urls:
+        return []
+
+    evidence_ids: list[str] = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {pool.submit(_fetch_page_text, url): url for url in urls}
+        for future in as_completed(futures):
+            try:
+                text = future.result(timeout=10)
+            except Exception:
+                continue
+            if text and len(text) > 50:
+                url = futures[future]
+                evidence_ids.append(evidence_module.append_evidence(
+                    evidence,
+                    source=source_label,
+                    source_type="web_page",
+                    claim=f"Full page content from {url}",
+                    topic=f"{base_topic}.fullpage",
+                    side="neutral",
+                    confidence=0.22,
+                    raw_excerpt=text,
+                    url=url,
+                ))
+    return evidence_ids
+
+
 def _collect_ddg_search(
     source,
     home: str,
@@ -332,23 +415,49 @@ def _collect_ddg_search(
     home_en = name_translation.to_english(home)
     away_en = name_translation.to_english(away)
 
+    # Only build English queries when we have actual English names. If
+    # to_english falls back to Chinese (uncached name), skip English search
+    # — Chinese search will handle it.
+    if _contains_chinese(home_en) or _contains_chinese(away_en):
+        sources.append(OsintSourceStatus(
+            adapter=source.adapter, label=source.label,
+            status="skipped",
+            reason="队名未翻译为英文（name_translation 缓存缺失），跳过英文搜索",
+        ))
+        return
+
     question = (request.question or "").strip()
-    # Primary query targets pre-match previews (injuries/lineups/predictions);
-    # then a question-specific query, then dimension-targeted ones.
-    queries = [f"{home_en} vs {away_en} World Cup 2026 preview team news injuries prediction"]
+    # Simple, focused queries. Disambiguate single-word names (e.g. "Jordan"
+    # → Nike shoes) by appending "national football team".
+    h = f"{home_en} national football team" if " " not in home_en else home_en
+    a = f"{away_en} national football team" if " " not in away_en else away_en
+    queries = [f"{h} {a} World Cup preview"]
     if question and len(question) > 2:
-        queries.append(f"{home_en} vs {away_en} {question}")
+        queries.append(f"{home_en} {away_en} {question}")
     queries.extend(_targeted_queries(question, home_en, away_en))
 
     evidence_ids = []
-    for i, query in enumerate(queries[:4]):  # max 4 queries to stay fast
+    primary_results: list[dict[str, str]] = []
+    for i, query in enumerate(queries[:4]):
         sk = cache.search_key(query)
         results = cache.search_cache.get(sk)
         if results is None:
-            # Bias the primary preview query toward high-signal football domains.
-            domains = web_search_adapter.PREVIEW_DOMAINS if i == 0 else None
-            results = web_search_adapter.search(query, include_domains=domains)
+            # Primary query (i=0): with high-signal football domains.
+            # Bing is the primary backend (Sogou anti-spider blocks the
+            # server IP). Site: filter works on Bing for single domains
+            # but the OR syntax is unreliable — apply only the first domain.
+            if i == 0:
+                results = web_search_adapter.search(
+                    query, include_domains=web_search_adapter.PREVIEW_DOMAINS,
+                )
+                # If site: filter produced nothing, retry without it
+                if not results:
+                    results = web_search_adapter.search(query)
+            else:
+                results = web_search_adapter.search(query)
             cache.search_cache.set(sk, results)
+        if i == 0:
+            primary_results = results
         topic = source.topic if i == 0 else f"{source.topic}.q{i}"
         for result in results:
             evidence_ids.append(evidence_module.append_evidence(
@@ -362,6 +471,10 @@ def _collect_ddg_search(
                 raw_excerpt=result["snippet"],
                 url=result["url"],
             ))
+
+    # Fetch full content of top 2 result pages for richer extraction
+    full_page_ids = _fetch_top_pages(primary_results, evidence, source.label, source.topic)
+    evidence_ids.extend(full_page_ids)
 
     sources.append(OsintSourceStatus(
         adapter=source.adapter, label=source.label,
@@ -403,7 +516,7 @@ def _targeted_queries(question: str, home: str, away: str) -> list[str]:
 
 # ── Chinese domestic media search ──
 
-# High-signal Chinese sports media domains for Tavily include_domains.
+# High-signal Chinese sports media domains, applied as a Sogou site: filter.
 CN_DOMAINS = [
     "sports.sina.com.cn",
     "sports.qq.com",
@@ -449,21 +562,27 @@ def _collect_chinese_search(
 
     # Primary: preview + team news; then question-specific; then dimension-targeted.
     queries = [f"{home} {away} 前瞻 分析 预测"]
+    # Short fallback for when Sogou doesn't index long queries well
+    queries.append(f"{home} {away}")
     question = (request.question or "").strip()
     if question and len(question) > 2:
         queries.append(f"{home} {away} {question}")
     queries.extend(_targeted_cn_queries(question, home, away))
 
     evidence_ids = []
-    # Primary query via Tavily (1 call per job — DDG doesn't index Chinese well).
-    # Dimension-specific queries are skipped; RSSHub feeds (hupu/dongqiudi/weibo)
-    # provide ample Chinese coverage without API cost.
-    for i, query in enumerate(queries[:1]):
+    cn_results: list[dict[str, str]] = []
+    for i, query in enumerate(queries[:2]):
         sk = cache.search_key(f"cn:{query}")
         results = cache.search_cache.get(sk)
         if results is None:
-            results = web_search_adapter.search(query, include_domains=CN_DOMAINS)
+            # Try without domain filter first. Only add CN domain filter
+            # as fallback if the broad query returns nothing useful.
+            results = web_search_adapter.search(query)
+            if not results:
+                results = web_search_adapter.search(query, include_domains=CN_DOMAINS)
             cache.search_cache.set(sk, results)
+        if i == 0:
+            cn_results = results
         topic = "search.cn.preview" if i == 0 else f"search.cn.q{i}"
         for result in results:
             evidence_ids.append(evidence_module.append_evidence(
@@ -478,6 +597,10 @@ def _collect_chinese_search(
                 url=result["url"],
             ))
 
+    # Fetch full content of top 2 Chinese result pages for richer extraction
+    full_page_ids = _fetch_top_pages(cn_results, evidence, "国内媒体搜索", "search.cn.preview")
+    evidence_ids.extend(full_page_ids)
+
     sources.append(OsintSourceStatus(
         adapter="cn_search",
         label="国内媒体搜索",
@@ -485,3 +608,87 @@ def _collect_chinese_search(
         evidence_ids=evidence_ids,
         reason="" if evidence_ids else "无中文搜索结果",
     ))
+
+
+def _collect_football_data_stats(
+    request: FootballOsintJobRequest,
+    evidence: list[OsintEvidence],
+    sources: list[OsintSourceStatus],
+) -> None:
+    """Fetch structured form/H2H from football-data.org, add as fundamental evidence.
+
+    Evidence text is formatted in the same Chinese pattern as dongqiudi's output
+    so the existing regexes in factor_registry.py (_FORM_RE, _H2H_RE) parse it
+    without any changes.
+    """
+    from .adapters import football_data_stats
+
+    home = request.home_team
+    away = request.away_team
+
+    # Fetch form for both teams in parallel
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        home_future = pool.submit(football_data_stats.fetch_team_form, home)
+        away_future = pool.submit(football_data_stats.fetch_team_form, away)
+        try:
+            home_form = home_future.result(timeout=15)
+        except Exception:
+            home_form = None
+        try:
+            away_form = away_future.result(timeout=15)
+        except Exception:
+            away_form = None
+
+    evidence_ids: list[str] = []
+    if home_form is not None and away_form is not None:
+        excerpt = (
+            f"{home}近期战绩：{home_form.wins}胜{home_form.draws}平{home_form.losses}负"
+            f"（近{home_form.recent_count}场）\n"
+            f"{away}近期战绩：{away_form.wins}胜{away_form.draws}平{away_form.losses}负"
+            f"（近{away_form.recent_count}场）"
+        )
+        evidence_ids.append(evidence_module.append_evidence(
+            evidence,
+            source="football-data.org",
+            source_type="fundamental",
+            claim=f"{home} {home_form.wins}W{home_form.draws}D{home_form.losses}L, "
+                  f"{away} {away_form.wins}W{away_form.draws}D{away_form.losses}L",
+            topic="fundamental.football_data.form",
+            side="neutral",
+            confidence=0.48,
+            raw_excerpt=excerpt,
+        ))
+
+    # Fetch H2H
+    h2h = football_data_stats.fetch_h2h(home, away)
+    if h2h is not None and h2h.total_matches > 0:
+        # Format: "历史交锋：A X胜Y平Z负，B Z胜Y平X负"
+        excerpt = (
+            f"历史交锋：{h2h.home_team} {h2h.home_wins}胜{h2h.draws}平{h2h.away_wins}负，"
+            f"{h2h.away_team} {h2h.away_wins}胜{h2h.draws}平{h2h.home_wins}负"
+        )
+        evidence_ids.append(evidence_module.append_evidence(
+            evidence,
+            source="football-data.org",
+            source_type="fundamental",
+            claim=f"H2H: {h2h.home_wins}W-{h2h.draws}D-{h2h.away_wins}L over {h2h.total_matches}",
+            topic="fundamental.football_data.h2h",
+            side="neutral",
+            confidence=0.48,
+            raw_excerpt=excerpt,
+        ))
+
+    if evidence_ids:
+        sources.append(OsintSourceStatus(
+            adapter="football_data_stats",
+            label="football-data.org 结构化数据",
+            status="ok",
+            evidence_ids=evidence_ids,
+        ))
+    else:
+        sources.append(OsintSourceStatus(
+            adapter="football_data_stats",
+            label="football-data.org 结构化数据",
+            status="skipped",
+            reason="未找到两队结构化数据（队名未匹配或无近期比赛记录）",
+        ))

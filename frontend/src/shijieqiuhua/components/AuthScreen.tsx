@@ -19,7 +19,7 @@ interface AuthScreenProps {
 const ASIDE_FEATURES = [
   { ic: <Stack size={17} weight="duotone" />, t: '实时情报循环', d: '信源逐条点亮，研判过程全透明。' },
   { ic: <ShieldCheck size={17} weight="duotone" />, t: '诚实的不确定性', d: '缺数据时如实说「信息不足」。' },
-  { ic: <Gauge size={17} weight="duotone" />, t: 'L1–L4 置信度', d: '每个结论都带可靠性评级。' },
+  { ic: <Gauge size={17} weight="duotone" />, t: '可信度分级', d: '每个结论都带可靠性评级。' },
 ]
 
 export default function AuthScreen({ mode, onModeChange, onSubmit, onBack }: AuthScreenProps) {

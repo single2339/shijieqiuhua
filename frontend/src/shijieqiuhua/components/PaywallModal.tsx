@@ -94,7 +94,7 @@ export default function PaywallModal({ user, onClose, onPaid }: PaywallModalProp
           {err && <div className="sqh-auth-err" style={{ marginTop: 10 }}>{err}</div>}
 
           <p className="sqh-paywall-footnote">
-            支付仅解锁分析能力，不构成任何投注建议。会员可随时取消，按自然月计费。
+            支付仅解锁分析能力，不构成任何投注建议。兑换后权益默认 30 天。
           </p>
         </div>
       </motion.div>

@@ -66,17 +66,24 @@ class OsintAnalysis:
     answer: str = ""
 
 
-def analyze(job: FootballOsintJob, question: str) -> OsintAnalysis:
+def analyze(job: FootballOsintJob, question: str, lean: str = "") -> OsintAnalysis:
     """Main entry point: osint-core analysis for a specific question."""
     dim = _match_dimension(question)
     spec = _DIMENSION_SPECS.get(dim, {})
 
+    _LEAN_CN: dict[str, str] = {
+        "home": "主队占优", "away": "客队占优", "draw": "平局倾向",
+        "home_or_draw": "主队不败", "away_or_draw": "客队不败",
+        "info_insufficient": "信息不足",
+    }
+    lean_cn = _LEAN_CN.get(lean, "")
+
     confirmed = _extract_confirmed_facts(job, dim, spec)
-    assessments = _make_assessments(job, dim, confirmed)
+    assessments = _make_assessments(job, dim, confirmed, lean, lean_cn)
     alternatives = _find_alternatives(job, dim)
     gaps = _find_data_gaps(job, dim, spec)
     level, reason = _grade_dimension(job, dim, confirmed, gaps, spec)
-    answer_text = _format_report(job, dim, confirmed, assessments, alternatives, gaps, level, reason)
+    answer_text = _format_report(job, dim, confirmed, assessments, alternatives, gaps, level, reason, lean_cn)
 
     return OsintAnalysis(
         dimension=dim,
@@ -168,7 +175,7 @@ def _extract_confirmed_facts(job: FootballOsintJob, dim: str, spec: dict) -> lis
     return facts
 
 
-def _make_assessments(job: FootballOsintJob, dim: str, confirmed: list[str]) -> list[str]:
+def _make_assessments(job: FootballOsintJob, dim: str, confirmed: list[str], lean: str = "", lean_cn: str = "") -> list[str]:
     """Make assessments based on confirmed facts."""
     assessments: list[str] = []
     home_name = job.match.home_team
@@ -184,7 +191,17 @@ def _make_assessments(job: FootballOsintJob, dim: str, confirmed: list[str]) -> 
         if m:
             away_ppg = float(m.group(1))
 
-    better = home_name if home_ppg > away_ppg else away_name
+    # ── lean-aware "better" determination ──
+    # Pipeline direction overrides raw PPG when the two disagree, so all
+    # dimension predictions (goals, corners, cards, half) stay consistent.
+    if lean in ("home", "home_or_draw"):
+        better = home_name
+    elif lean in ("away", "away_or_draw"):
+        better = away_name
+    elif lean == "draw":
+        better = ""  # balanced — neither side favored
+    else:
+        better = home_name if home_ppg > away_ppg else away_name
     ppg_diff = abs(home_ppg - away_ppg)
 
     if dim == "half":
@@ -207,7 +224,13 @@ def _make_assessments(job: FootballOsintJob, dim: str, confirmed: list[str]) -> 
             away_g = round((away_ppg / 3.0) * 2.5, 1)
             t_lo = max(1, int(home_g + away_g - 0.5))
             t_hi = min(6, int(home_g + away_g + 0.5))
-            hc, ac = ("5-7", "3-4") if home_ppg > away_ppg else (("3-4", "5-7") if away_ppg > home_ppg else ("4-5", "4-5"))
+            # lean-aware corner split (better is already lean-adjusted above)
+            if better == home_name:
+                hc, ac = ("5-7", "3-4")
+            elif better == away_name:
+                hc, ac = ("3-4", "5-7")
+            else:
+                hc, ac = ("4-5", "4-5")
             total_c = f"{int(hc.split('-')[0]) + int(ac.split('-')[0])}-{int(hc.split('-')[1]) + int(ac.split('-')[1])}"
             assessments.append(
                 f"推测：基于近期状态，总进球预估 {t_lo}-{t_hi} 球（{home_name}约{home_g}球, {away_name}约{away_g}球），"
@@ -337,17 +360,23 @@ def _format_report(
     confirmed: list[str], assessments: list[str],
     alternatives: list[str], gaps: list[str],
     level: str, reason: str,
+    lean_cn: str = "",
 ) -> str:
     """Format as osint-core report."""
+    direction_line = f"方向研判: {lean_cn}" if lean_cn else ""
     lines = [
         f"情报摘要 — {_DIM_NAMES.get(dim, '综合')}",
         "━" * 32,
         f"目标: {job.match.home_team} vs {job.match.away_team}",
         f"赛事: {job.match.competition or '未指定'}",
         f"情报等级: {level} — {reason}",
+    ]
+    if direction_line:
+        lines.append(direction_line)
+    lines.extend([
         "",
         "确认事实:",
-    ]
+    ])
     for fact in confirmed[-6:]:
         lines.append(f"  • {fact}")
     lines.append("")

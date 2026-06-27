@@ -61,35 +61,66 @@ def build_factors(
         has_form_signal = extracted.home_form is not None and extracted.away_form is not None
         has_h2h = extracted.h2h_home_wins is not None and extracted.h2h_home_losses is not None
         form_evidence_ids = fundamental_evidence + [ev.id for ev in cn_evidence]
-        form_weight = (0.12 if youth else 0.16) if has_form_signal else 0.0
-        form_confidence = 0.42 if has_form_signal else 0.0
-        form_missing_reason = "" if has_form_signal else "LLM 未能从多源证据中抽取近期战绩，无法形成近期状态信号"
-        h2h_enabled = has_h2h
-        h2h_weight = ((0.05 if youth else 0.10) if has_h2h else 0.0)
-        h2h_confidence = 0.25 if has_h2h else 0.0
-        h2h_missing_reason = "" if has_h2h else "LLM 未能从多源证据中抽取历史交锋数据，h2h 因子不启用"
-        squad_enabled = has_sideline
-        squad_weight = 0.10 if has_sideline else 0.0
-        squad_confidence = 0.35 if has_sideline else 0.0
-        squad_missing_reason = "" if has_sideline else "LLM 未能从多源证据中抽取伤停/缺席数据，阵容因子不启用"
+        if extracted.qualitative_inference:
+            form_weight = 0.06 if has_form_signal else 0.0
+            form_confidence = 0.25 if has_form_signal else 0.0
+            form_missing_reason = "" if has_form_signal else "LLM 定性推断仍无法形成近期状态信号"
+            h2h_enabled = has_h2h
+            h2h_weight = 0.04 if has_h2h else 0.0
+            h2h_confidence = 0.15 if has_h2h else 0.0
+            h2h_missing_reason = "" if has_h2h else "LLM 定性推断仍无法形成 h2h 数据"
+            squad_enabled = has_sideline
+            squad_weight = 0.06 if has_sideline else 0.0
+            squad_confidence = 0.20 if has_sideline else 0.0
+            squad_missing_reason = "" if has_sideline else "LLM 定性推断仍无法形成伤停数据"
+        else:
+            form_weight = (0.12 if youth else 0.16) if has_form_signal else 0.0
+            form_confidence = 0.42 if has_form_signal else 0.0
+            form_missing_reason = "" if has_form_signal else "LLM 未能从多源证据中抽取近期战绩，无法形成近期状态信号"
+            h2h_enabled = has_h2h
+            h2h_weight = ((0.05 if youth else 0.10) if has_h2h else 0.0)
+            h2h_confidence = 0.25 if has_h2h else 0.0
+            h2h_missing_reason = "" if has_h2h else "LLM 未能从多源证据中抽取历史交锋数据，h2h 因子不启用"
+            squad_enabled = has_sideline
+            squad_weight = 0.10 if has_sideline else 0.0
+            squad_confidence = 0.35 if has_sideline else 0.0
+            squad_missing_reason = "" if has_sideline else "LLM 未能从多源证据中抽取伤停/缺席数据，阵容因子不启用"
         squad_evidence_ids = form_evidence_ids
         h2h_evidence_ids = form_evidence_ids
     else:
         cn_text = "\n".join(ev.raw_excerpt for ev in cn_evidence)
         cn_form_score = _score_cn_form(cn_text, request)
 
+        # Collect ALL evidence text for English pattern matching (search + RSS + dongqiudi)
+        all_text = "\n".join(ev.raw_excerpt for ev in evidence if ev.raw_excerpt)
+        en_form_score = _score_en_form(all_text, request)
+
         form_score = _score_recent_form(fundamental_text, request)
         h2h_score = _score_h2h(fundamental_text, request)
         squad_score, has_sideline = _score_squad(fundamental_text, request)
         standings_score = _score_standings(fundamental_text, request)
-        combined_form = max(-0.18, min(0.18, form_score + standings_score + cn_form_score))
+        combined_form = max(-0.18, min(0.18, form_score + standings_score + cn_form_score + en_form_score))
 
         has_cn_form = cn_form_score != 0.0
-        has_form_signal = has_fundamental or has_cn_form
+        has_en_form = en_form_score != 0.0
+        has_form_signal = has_fundamental or has_cn_form or has_en_form
         form_evidence_ids = fundamental_evidence + ([ev.id for ev in cn_evidence] if cn_evidence else [])
-        form_weight = (0.12 if youth else 0.16) if has_fundamental else (0.08 if has_cn_form else 0.0)
-        form_confidence = 0.42 if has_fundamental else (0.22 if has_cn_form else 0.0)
-        form_missing_reason = "" if has_form_signal else "未抓取到懂球帝赛前分析或国内媒体近期战绩，无法形成近期状态信号"
+        # Weight: dongqiudi > cn regex > en regex
+        if has_fundamental:
+            form_weight = (0.12 if youth else 0.16)
+            form_confidence = 0.42
+        elif has_cn_form:
+            form_weight = 0.08
+            form_confidence = 0.22
+        elif has_en_form:
+            form_weight = 0.06
+            form_confidence = 0.18
+        else:
+            form_weight = 0.0
+            form_confidence = 0.0
+        form_missing_reason = ""
+        if not has_form_signal:
+            form_missing_reason = "未抓取到懂球帝赛前分析或国内外媒体近期战绩，无法形成近期状态信号"
         h2h_enabled = has_fundamental
         h2h_weight = (0.05 if youth else 0.10) if has_fundamental else 0.0
         h2h_confidence = 0.25 if has_fundamental else 0.0
@@ -199,6 +230,37 @@ _STANDINGS_RE = re.compile(r"积分榜[：:]\s*(.+?)(?:，|；|$)")
 
 # Chinese media form patterns — matches snippets like "巴西近5场3胜1平1负"
 _CN_FORM_RE = re.compile(r"([一-鿿\w]+?)(?:近期|最近|近)\d*场[：:\s]*(\d+)胜(\d+)平(\d+)负")
+
+# English form patterns — matches snippets like "3 wins, 1 draw, 1 loss in last 5"
+_EN_FORM_RECORD_RE = re.compile(
+    r"(?P<name>[\w\s]+?)\b(?:recent\s+)?(?:form|record)[:\s]*"
+    r"(?P<w>\d+)\s*(?:wins?|W)\s*(?:,?\s*)?"
+    r"(?P<d>\d+)\s*(?:draws?|D)\s*(?:,?\s*)?"
+    r"(?P<l>\d+)\s*(?:losses?|loss|L)",
+    re.IGNORECASE,
+)
+_EN_FORM_COMPACT_RE = re.compile(
+    r"(?P<name>[\w\s]+?)\b(?:last\s+\d+\s*(?:games?|matches?)[:\s]*)"
+    r"(?P<w>\d+)\s*W\s*(?P<d>\d+)\s*D\s*(?P<l>\d+)\s*L",
+    re.IGNORECASE,
+)
+_EN_FORM_WDL_RE = re.compile(
+    r"(?P<w>\d+)W\s*[-–]\s*(?P<d>\d+)D\s*[-–]\s*(?P<l>\d+)L",
+    re.IGNORECASE,
+)
+# English H2H — "head to head: 3 wins, 1 draw, 2 losses"
+_EN_H2H_WDL_RE = re.compile(
+    r"(?:head\s*(?:to|2)\s*head|h2h)[:\s]*"
+    r"(?P<home_wins>\d+)\s*(?:wins?|W)?\s*[-–,]\s*"
+    r"(?P<draws>\d+)\s*(?:draws?|D)?\s*[-–,]\s*"
+    r"(?P<away_wins>\d+)\s*(?:wins?|W|losses?|L)?",
+    re.IGNORECASE,
+)
+# English absences — "2 players out" or "3 injuries"
+_EN_ABSENCES_RE = re.compile(
+    r"(?P<team>[\w\s]+?)\b(?:have\s+)?(?P<n>\d+)\s*(?:players?\s*)?(?:out|absent|injured|suspended|missing)",
+    re.IGNORECASE,
+)
 
 
 def _form_score_from_records(
@@ -341,6 +403,79 @@ def _score_cn_form(text: str, request: FootballOsintJobRequest) -> float:
 
     raw = (home_ppg - away_ppg) * 0.06
     return max(-0.06, min(0.06, round(raw, 3)))
+
+
+def _score_en_form(text: str, request: FootballOsintJobRequest) -> float:
+    """Extract form signal from English-language search snippets.
+
+    Matches patterns like "3 wins, 1 draw, 1 loss" or "3W-1D-1L"
+    anywhere in the text. Even weaker than _score_cn_form (±0.04 cap)
+    because English search snippets are less structured.
+    """
+    home_name = request.home_team
+    away_name = request.away_team
+    # Use name_translation to get English names for matching
+    from .adapters import name_translation
+    home_en = name_translation.to_english(home_name)
+    away_en = name_translation.to_english(away_name)
+
+    records: dict[str, tuple[int, int, int]] = {}
+
+    # Try per-team patterns: "New Zealand recent form: 3 wins, 1 draw, 1 loss"
+    for m in _EN_FORM_RECORD_RE.finditer(text):
+        name = (m.group("name") or "").strip()
+        w, d, l = int(m.group("w")), int(m.group("d")), int(m.group("l"))
+        if name and (w or d or l):
+            records[name] = (w, d, l)
+
+    # Try compact patterns: "New Zealand last 5 games: 3W 1D 1L"
+    for m in _EN_FORM_COMPACT_RE.finditer(text):
+        name = (m.group("name") or "").strip()
+        w, d, l = int(m.group("w")), int(m.group("d")), int(m.group("l"))
+        if name and (w or d or l) and name not in records:
+            records[name] = (w, d, l)
+
+    # Try name-agnostic WDL patterns — use context to guess which team
+    # "3W-1D-1L" without a clear team name
+    wdl_matches = list(_EN_FORM_WDL_RE.finditer(text))
+    if wdl_matches and not records:
+        # Can't determine which team, skip for now
+        pass
+
+    # Match records to home/away by fuzzy name
+    home_rec = _fuzzy_match_record(records, home_name, home_en)
+    away_rec = _fuzzy_match_record(records, away_name, away_en)
+
+    if not home_rec or not away_rec:
+        return 0.0
+    games = sum(home_rec)
+    if games == 0:
+        return 0.0
+    home_ppg = (home_rec[0] * 3 + home_rec[1]) / games
+    away_games = sum(away_rec)
+    away_ppg = (away_rec[0] * 3 + away_rec[1]) / away_games if away_games else 0.0
+
+    raw = (home_ppg - away_ppg) * 0.04
+    return max(-0.04, min(0.04, round(raw, 3)))
+
+
+def _fuzzy_match_record(
+    records: dict[str, tuple[int, int, int]],
+    cn_name: str,
+    en_name: str,
+) -> tuple[int, int, int] | None:
+    """Match a team name against record keys, trying Chinese, English, and substring."""
+    # Exact match
+    for name in (cn_name, en_name):
+        if name in records:
+            return records[name]
+    # Substring match (e.g., "New Zealand" matches "New Zealand football team")
+    for key, rec in records.items():
+        if cn_name and (cn_name in key or key in cn_name):
+            return rec
+        if en_name and (en_name.lower() in key.lower() or key.lower() in en_name.lower()):
+            return rec
+    return None
 
 
 def _weather_score_from_raw_excerpt(raw_excerpt: str) -> float:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.football_osint.models import FootballOsintJobStatus
@@ -361,61 +362,302 @@ def test_osint_answer_handles_twelve_concurrent_related_requests(monkeypatch, tm
     assert all(len(result.reasons) <= 3 for result in results)
 
 
-def test_job_cache_evicts_old_entries_under_capacity():
-    from backend.football_osint.routes import _JobCache
-    from backend.football_osint.models import (
-        FootballOsintJob,
-        FootballOsintJobStatus,
-        OsintMatch,
-    )
-
-    cache = _JobCache(max_size=3, ttl_seconds=3600)
-
-    def _job(job_id: str) -> FootballOsintJob:
-        return FootballOsintJob(
-            job_id=job_id,
-            status=FootballOsintJobStatus.COMPLETED,
-            phase="done",
-            progress=100,
-            match=OsintMatch(home_team="A", away_team="B"),
-        )
-
-    for i in range(10):
-        cache.set(f"fo_{i}", _job(f"fo_{i}"))
-
-    assert len(cache) == 3
-    assert cache.get("fo_0") is None
-    assert cache.get("fo_6") is None
-    assert cache.get("fo_9") is not None
-
-
-def test_job_cache_drops_expired_entries():
+def test_warm_cache_lru_eviction(monkeypatch):
+    """Unified warm_cache evicts oldest entries when over _CACHE_MAX."""
     import time
 
-    from backend.football_osint.routes import _JobCache
+    from backend.football_osint import warm_cache
     from backend.football_osint.models import (
+        FootballOsintAnswer,
         FootballOsintJob,
         FootballOsintJobStatus,
         OsintMatch,
     )
 
-    cache = _JobCache(max_size=8, ttl_seconds=1)
-    cache.set(
-        "fo_short",
-        FootballOsintJob(
-            job_id="fo_short",
-            status=FootballOsintJobStatus.COMPLETED,
-            phase="done",
-            progress=100,
+    monkeypatch.setattr(warm_cache, "_CACHE_MAX", 3)
+
+    def _entry(jid: str) -> warm_cache.CacheEntry:
+        job = FootballOsintJob(
+            job_id=jid, status=FootballOsintJobStatus.COMPLETED,
+            phase="done", progress=100,
             match=OsintMatch(home_team="A", away_team="B"),
-        ),
+        )
+        answer = FootballOsintAnswer(related=True, analysis_started=True, answer=f"A {jid}")
+        return warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source="on-demand")
+
+    for i in range(10):
+        warm_cache._store_entry(f"key_{i}", _entry(f"job_{i}"))
+
+    assert len(warm_cache._cache) == 3
+    assert "key_0" not in warm_cache._cache
+    assert "key_6" not in warm_cache._cache
+    assert "key_9" in warm_cache._cache
+    # Secondary index works for retained entries
+    assert warm_cache.get_cached_by_job_id("job_9") is not None
+    # Evicted entries are removed from secondary index
+    assert warm_cache.get_cached_by_job_id("job_0") is None
+
+
+def test_warm_cache_job_id_lookup(monkeypatch):
+    """get_cached_by_job_id finds a cached job via the secondary index."""
+    import time
+
+    from backend.football_osint import warm_cache
+    from backend.football_osint.models import (
+        FootballOsintAnswer,
+        FootballOsintJob,
+        FootballOsintJobStatus,
+        OsintMatch,
     )
-    assert cache.get("fo_short") is not None
-    time.sleep(1.1)
-    assert cache.get("fo_short") is None
+
+    monkeypatch.setattr(warm_cache, "_CACHE_MAX", 64)
+
+    job = FootballOsintJob(
+        job_id="fo_lookup_test",
+        status=FootballOsintJobStatus.COMPLETED,
+        phase="done", progress=100,
+        match=OsintMatch(home_team="X", away_team="Y"),
+    )
+    answer = FootballOsintAnswer(related=True, analysis_started=True, answer="lookup answer")
+    entry = warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source="on-demand")
+    warm_cache._store_entry("lookup_key", entry)
+
+    found = warm_cache.get_cached_by_job_id("fo_lookup_test")
+    assert found is not None
+    assert found.job_id == "fo_lookup_test"
+
+    assert warm_cache.get_cached_by_job_id("nonexistent") is None
 
 
-def test_football_data_parse_and_upcoming_filter(monkeypatch):
+# ── warm_cache module tests ──
+
+def test_cache_key_preset_question():
+    """Preset questions produce stable, readable keys."""
+    from backend.football_osint import warm_cache
+
+    key1 = warm_cache.cache_key("皇马", "巴萨", "06-22 22:00", "全场比分预测是多少？")
+    key2 = warm_cache.cache_key("皇马", "巴萨", "06-22 22:00", "全场比分预测是多少？")
+    assert key1 == key2
+    assert "全场比分预测是多少？" in key1
+    assert "free:" not in key1
+
+
+def test_cache_key_free_text():
+    """Free-text questions are hashed; identical text gives the same key."""
+    from backend.football_osint import warm_cache
+
+    key1 = warm_cache.cache_key("皇马", "巴萨", "06-22 22:00", "梅西会进球吗")
+    key2 = warm_cache.cache_key("皇马", "巴萨", "06-22 22:00", "梅西会进球吗")
+    assert key1 == key2
+    assert "free:" in key1
+
+    # Different questions give different keys
+    key3 = warm_cache.cache_key("皇马", "巴萨", "06-22 22:00", "C罗会进球吗")
+    assert key1 != key3
+
+
+def test_is_preset_question():
+    from backend.football_osint import warm_cache
+
+    assert warm_cache.is_preset_question("全场比分预测是多少？") is True
+    assert warm_cache.is_preset_question("  全场比分预测是多少？  ") is True
+    assert warm_cache.is_preset_question("梅西会进球吗") is False
+    assert warm_cache.is_preset_question("") is False
+
+
+@pytest.mark.asyncio
+async def test_cache_or_compute_caches_and_returns_consistent(monkeypatch):
+    """First call computes, second call returns cached — same answer for both."""
+    import time
+
+    from backend.football_osint import warm_cache
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    # Avoid real pipeline runs
+    async def fake_compute(request, *, source="on-demand"):
+        from backend.football_osint.models import (
+            FootballOsintAnswer, FootballOsintJob, FootballOsintJobStatus,
+            OsintMatch,
+        )
+        job = FootballOsintJob(
+            job_id=f"test_{source}_job",
+            status=FootballOsintJobStatus.COMPLETED,
+            phase="done", progress=100,
+            match=OsintMatch(home_team=request.home_team, away_team=request.away_team),
+        )
+        answer = FootballOsintAnswer(
+            related=True, analysis_started=True,
+            answer=f"Cached answer for {request.question}",
+        )
+        entry = warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source=source)
+        key = warm_cache.cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
+        async with warm_cache._lock:
+            warm_cache._store_entry(key, entry)
+        return entry
+
+    monkeypatch.setattr(warm_cache, "_compute_and_cache", fake_compute)
+
+    request = FootballOsintJobRequest(
+        home_team="皇马", away_team="巴萨",
+        kickoff_at="06-22 22:00", competition="西甲",
+        question="全场比分预测是多少？",
+    )
+
+    # First call — should compute
+    entry1 = await warm_cache.cache_or_compute(request)
+    assert entry1 is not None
+    assert "Cached answer" in entry1.answer.answer
+
+    # Second call — should return cached (same job_id)
+    entry2 = await warm_cache.cache_or_compute(request)
+    assert entry2 is not None
+    assert entry2.job.job_id == entry1.job.job_id
+
+
+@pytest.mark.asyncio
+async def test_cache_or_compute_dedup_inflight(monkeypatch):
+    """Concurrent requests for the same key only run one pipeline."""
+    import asyncio
+    import time
+
+    from backend.football_osint import warm_cache
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    call_count = 0
+
+    async def fake_compute(request, *, source="on-demand"):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.05)  # simulate work
+        from backend.football_osint.models import (
+            FootballOsintAnswer, FootballOsintJob, FootballOsintJobStatus,
+            OsintMatch,
+        )
+        job = FootballOsintJob(
+            job_id="dedup_test_job",
+            status=FootballOsintJobStatus.COMPLETED,
+            phase="done", progress=100,
+            match=OsintMatch(home_team=request.home_team, away_team=request.away_team),
+        )
+        answer = FootballOsintAnswer(related=True, analysis_started=True, answer="dedup answer")
+        entry = warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source=source)
+
+        key = warm_cache.cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
+        async with warm_cache._lock:
+            warm_cache._store_entry(key, entry)
+        return entry
+
+    monkeypatch.setattr(warm_cache, "_compute_and_cache", fake_compute)
+
+    request = FootballOsintJobRequest(
+        home_team="皇马", away_team="巴萨",
+        kickoff_at="06-22 22:00", competition="西甲",
+        question="全场比分预测是多少？",
+    )
+
+    # Fire 5 concurrent requests — should only compute once
+    results = await asyncio.gather(*[
+        warm_cache.cache_or_compute(request) for _ in range(5)
+    ])
+
+    assert call_count == 1
+    assert len(results) == 5
+    for r in results:
+        assert r.answer.answer == "dedup answer"
+
+
+# ── endpoint tests: no 503 + consistency ──
+
+def test_preset_question_no_longer_503(monkeypatch):
+    """Preset question returns 200 even when cache is empty (no 503)."""
+    import asyncio
+    import time
+
+    from backend.football_osint import warm_cache
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    # Pre-populate the cache with a fake entry so the endpoint returns immediately
+    async def fake_compute(request, *, source="on-demand"):
+        from backend.football_osint.models import (
+            FootballOsintAnswer, FootballOsintJob, FootballOsintJobStatus,
+            OsintMatch,
+        )
+        job = FootballOsintJob(
+            job_id="no_503_job",
+            status=FootballOsintJobStatus.COMPLETED,
+            phase="done", progress=100,
+            match=OsintMatch(home_team=request.home_team, away_team=request.away_team),
+            prediction=None, confidence=None,
+        )
+        answer = FootballOsintAnswer(
+            related=True, analysis_started=True,
+            answer="预设问题即时回答",
+        )
+        return warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source=source)
+
+    monkeypatch.setattr(warm_cache, "_compute_and_cache", fake_compute)
+
+    request = FootballOsintJobRequest(
+        home_team="皇马", away_team="巴萨",
+        kickoff_at="06-22 22:00", competition="西甲",
+        question="全场比分预测是多少？",
+    )
+
+    # This should return a job without raising 503
+    import asyncio
+    entry = asyncio.run(warm_cache.cache_or_compute(request))
+    assert entry is not None
+    assert entry.job is not None
+
+
+def test_free_text_cached_and_consistent(monkeypatch):
+    """Same free-text question returns the same cached answer."""
+    import asyncio
+    import time
+
+    from backend.football_osint import warm_cache
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    compute_count = [0]
+
+    async def fake_compute(request, *, source="on-demand"):
+        compute_count[0] += 1
+        from backend.football_osint.models import (
+            FootballOsintAnswer, FootballOsintJob, FootballOsintJobStatus,
+            OsintMatch,
+        )
+        job = FootballOsintJob(
+            job_id=f"ft_{compute_count[0]}_job",
+            status=FootballOsintJobStatus.COMPLETED,
+            phase="done", progress=100,
+            match=OsintMatch(home_team=request.home_team, away_team=request.away_team),
+        )
+        answer = FootballOsintAnswer(
+            related=True, analysis_started=True,
+            answer=f"自由提问回答 #{compute_count[0]}",
+        )
+        entry = warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source=source)
+        key = warm_cache.cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
+        async with warm_cache._lock:
+            warm_cache._store_entry(key, entry)
+        return entry
+
+    monkeypatch.setattr(warm_cache, "_compute_and_cache", fake_compute)
+
+    request = FootballOsintJobRequest(
+        home_team="皇马", away_team="巴萨",
+        kickoff_at="06-22 22:00", competition="西甲",
+        question="梅西这场比赛状态如何？",
+    )
+
+    # First call computes
+    entry1 = asyncio.run(warm_cache.cache_or_compute(request))
+    assert compute_count[0] == 1
+
+    # Second call returns cached (consistent!)
+    entry2 = asyncio.run(warm_cache.cache_or_compute(request))
+    assert compute_count[0] == 1  # NOT incremented
+    assert entry1.answer.answer == entry2.answer.answer
     """football-data payload parses, translates via cache, and drops finished/past."""
     from datetime import datetime, timedelta, timezone
 

@@ -174,3 +174,47 @@ export interface TrackRecordStats {
   scoreline_accuracy?: number
   recent?: TrackRecordEntry[]
 }
+
+// ── v2: 赛后回看 & 多场对比 ───────────────────────────────────────────────────
+
+export interface HistoryRecord {
+  job_id: string
+  home_team: string
+  away_team: string
+  kickoff_at: string
+  competition: string
+  predicted_lean: string
+  actual_home_score: number
+  actual_away_score: number
+  actual_outcome: string
+  lean_correct: boolean
+  scoreline_hit: boolean
+  settled_at: string
+}
+
+export interface Retrospective {
+  hit_factors: string[]
+  miss_factors: string[]
+  note: string
+}
+
+export interface HistoryDetail {
+  record: HistoryRecord
+  factors?: FactorImpact[]
+  retrospective?: Retrospective
+  factors_expired?: boolean
+}
+
+export interface CompareItem {
+  job_id: string
+  home_team?: string
+  away_team?: string
+  kickoff_at?: string
+  competition?: string
+  predicted_lean?: string | null
+  confidence_level?: string | null
+  evidence_summary?: { strong: number; weak: number; insufficient: number }
+  top_uncertainties?: string[]
+  factor_completeness?: string
+  error?: string
+}

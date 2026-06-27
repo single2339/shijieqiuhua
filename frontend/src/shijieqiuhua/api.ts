@@ -1,4 +1,4 @@
-import type { FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, TrackRecordStats } from './types'
+import type { CompareItem, FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord, TrackRecordStats } from './types'
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
 
@@ -56,6 +56,27 @@ export async function fetchFixtures(days = 3): Promise<FixtureStatus[]> {
 export async function fetchTrackRecord(): Promise<TrackRecordStats> {
   const res = await fetch('/api/football/osint/track-record')
   return readJson<TrackRecordStats>(res)
+}
+
+// ── v2: history & compare ──
+
+export async function fetchHistory(days = 30): Promise<HistoryRecord[]> {
+  const res = await fetch(`/api/football/osint/history?days=${days}`)
+  return readJson<HistoryRecord[]>(res)
+}
+
+export async function fetchHistoryDetail(jobId: string): Promise<HistoryDetail> {
+  const res = await fetch(`/api/football/osint/history/${encodeURIComponent(jobId)}`)
+  return readJson<HistoryDetail>(res)
+}
+
+export async function compareMatches(jobIds: string[]): Promise<CompareItem[]> {
+  const res = await fetch('/api/football/osint/compare', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify({ job_ids: jobIds }),
+  })
+  return readJson<CompareItem[]>(res)
 }
 
 // ── auth ──

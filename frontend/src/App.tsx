@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Clock, Eye, House, Question } from '@phosphor-icons/react'
 import { motion } from 'framer-motion'
 import {
-  askFootballQuestion, createFootballOsintJob, fetchFixtures, fetchFootballOsintJob,
+  askFootballQuestion, compareMatches, createFootballOsintJob, fetchFixtures,
+  fetchFootballOsintJob, fetchHistory, fetchHistoryDetail,
   getMe, loginUser, logoutUser, registerUser,
 } from './shijieqiuhua/api'
 import type { AuthUser } from './shijieqiuhua/api'
 import { fixtureToMatch } from './shijieqiuhua/mockData'
-import type { FootballMatch, FootballOsintJob, FootballQuestionAnswer } from './shijieqiuhua/types'
+import type { CompareItem, FootballMatch, FootballOsintJob, FootballQuestionAnswer, HistoryDetail, HistoryRecord } from './shijieqiuhua/types'
 import AuthGate from './shijieqiuhua/components/AuthGate'
 import type { UserTier } from './shijieqiuhua/components/AuthGate'
 import AdminPanel from './shijieqiuhua/components/AdminPanel'
@@ -19,6 +20,8 @@ import AuthScreen from './shijieqiuhua/components/AuthScreen'
 import type { AuthCredentials } from './shijieqiuhua/components/AuthScreen'
 import AccountPanel from './shijieqiuhua/components/AccountPanel'
 import type { HistoryItem } from './shijieqiuhua/components/AccountPanel'
+import PostMatchReview from './shijieqiuhua/components/PostMatchReview'
+import ComparePanel from './shijieqiuhua/components/ComparePanel'
 import IdleHint from './shijieqiuhua/components/IdleHint'
 import { useStagedProgress } from './shijieqiuhua/useStagedProgress'
 import './shijieqiuhua.css'
@@ -52,6 +55,17 @@ export default function App() {
   const [fixtureFilter, setFixtureFilter] = useState('全部')
   const [view, setView] = useState<'landing' | 'auth' | 'app'>('landing')
   const [history, setHistory] = useState<HistoryItem[]>([])
+  // v2 history mode
+  const [historyMode, setHistoryMode] = useState(false)
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [selectedHistoryJobId, setSelectedHistoryJobId] = useState<string | null>(null)
+  const [historyDetail, setHistoryDetail] = useState<HistoryDetail | null>(null)
+  const [historyDetailLoading, setHistoryDetailLoading] = useState(false)
+  const [compareIds, setCompareIds] = useState<string[]>([])
+  const [compareResult, setCompareResult] = useState<CompareItem[] | null>(null)
+  const [showCompare, setShowCompare] = useState(false)
+  const [compareLoading, setCompareLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const { staged, start: startStaged, finish: finishStaged, reset: resetStaged } = useStagedProgress()
 
@@ -126,6 +140,46 @@ export default function App() {
   )
 
   function stopPoll() { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
+
+  async function enterHistoryMode() {
+    setHistoryMode(true)
+    setHistoryLoading(true)
+    setSelectedHistoryJobId(null)
+    setHistoryDetail(null)
+    setCompareIds([])
+    try { setHistoryRecords(await fetchHistory(30)) } catch { setHistoryRecords([]) }
+    finally { setHistoryLoading(false) }
+  }
+
+  function exitHistoryMode() {
+    setHistoryMode(false)
+    setSelectedHistoryJobId(null)
+    setHistoryDetail(null)
+    setCompareIds([])
+    setShowCompare(false)
+  }
+
+  async function selectHistoryJob(jobId: string) {
+    setSelectedHistoryJobId(jobId)
+    setHistoryDetail(null)
+    setHistoryDetailLoading(true)
+    try { setHistoryDetail(await fetchHistoryDetail(jobId)) } catch { setHistoryDetail(null) }
+    finally { setHistoryDetailLoading(false) }
+  }
+
+  function toggleCompareId(jobId: string) {
+    setCompareIds(prev =>
+      prev.includes(jobId) ? prev.filter(id => id !== jobId) : prev.length < 3 ? [...prev, jobId] : prev
+    )
+  }
+
+  async function handleCompare() {
+    if (compareIds.length < 2) return
+    setCompareLoading(true)
+    setShowCompare(true)
+    try { setCompareResult(await compareMatches(compareIds)) } catch { setCompareResult([]) }
+    finally { setCompareLoading(false) }
+  }
 
   async function ask(next = question) {
     if (!selectedMatch) return
@@ -228,52 +282,122 @@ export default function App() {
         {/* left */}
         <aside className="sqh-panel sqh-match-rail" aria-label="赛事列表">
           <div className="sqh-rail-hd">
-            <div className="sqh-section-title"><Clock size={16} weight="duotone" /><span>赛程</span></div>
-            <div className="sqh-rail-count mono">{matches.length} 场</div>
+            <div className="sqh-section-title"><Clock size={16} weight="duotone" /><span>{historyMode ? '历史回顾' : '赛程'}</span></div>
+            <div className="sqh-rail-count mono">{historyMode ? `${historyRecords.length} 场` : `${matches.length} 场`}</div>
           </div>
-          <div className="sqh-rail-filters">
-            {['全部', '今日', '进行中', ...fixtureLeagues].map(f => (
-              <button key={f} className={`sqh-filter-chip${fixtureFilter === f ? ' sqh-filter-chip--on' : ''}`}
-                onClick={() => setFixtureFilter(f)}>{f}</button>
-            ))}
-          </div>
-          <div className="sqh-rail-list">
-            {fixturesLoading ? (
-              <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>加载中…</span>
-            ) : filteredMatches.length === 0 ? (
-              <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>暂无赛事</span>
-            ) : (
-              filteredMatches.map(m => {
-                const isLive = m.publicLean.startsWith('进行中')
-                return (
-                  <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
-                    onClick={() => { stopPoll(); resetStaged(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false) }}>
-                    <div className="sqh-fixture-top">
-                      <span className="sqh-fixture-league">{m.league}</span>
-                      {isLive && <span className="sqh-fixture-live">LIVE</span>}
-                    </div>
-                    <div className="sqh-fixture-teams">
-                      <span>{m.homeTeam}</span>
-                      <span className="sqh-fixture-vs">VS</span>
-                      <span>{m.awayTeam}</span>
-                    </div>
-                    <div className="sqh-fixture-foot">
-                      <span className={`sqh-status-dot${isLive ? ' sqh-status-dot--live' : ''}`} />
-                      <span>{m.kickoffAt} · {m.publicLean}</span>
-                    </div>
+          {user && (
+            <div className="sqh-rail-mode">
+              <button className={`sqh-rail-mode-btn${!historyMode ? ' sqh-rail-mode-btn--on' : ''}`}
+                onClick={exitHistoryMode}>赛程</button>
+              <button className={`sqh-rail-mode-btn${historyMode ? ' sqh-rail-mode-btn--on' : ''}`}
+                onClick={enterHistoryMode}>历史</button>
+            </div>
+          )}
+
+          {historyMode ? (
+            <div className="sqh-rail-list">
+              {historyLoading ? (
+                <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>加载中…</span>
+              ) : historyRecords.length === 0 ? (
+                <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>暂无已结算记录</span>
+              ) : (
+                historyRecords.map(r => (
+                  <div key={r.job_id} className="sqh-hist-check-row">
+                    <input type="checkbox" className="sqh-hist-checkbox"
+                      checked={compareIds.includes(r.job_id)}
+                      onChange={() => toggleCompareId(r.job_id)} />
+                    <button className="sqh-hist-record" data-active={r.job_id === selectedHistoryJobId}
+                      onClick={() => selectHistoryJob(r.job_id)}>
+                      <div className="sqh-hist-record-teams">{r.home_team} vs {r.away_team}</div>
+                      <div className="sqh-hist-record-meta">
+                        <span>{r.kickoff_at}</span>
+                        <span>{r.competition}</span>
+                      </div>
+                      <div className="sqh-hist-record-badges">
+                        <span className={`sqh-hist-badge ${r.lean_correct ? 'sqh-hist-badge--hit' : 'sqh-hist-badge--miss'}`}>
+                          {r.lean_correct ? '方向✓' : '方向✗'}
+                        </span>
+                        <span className={`sqh-hist-badge ${r.scoreline_hit ? 'sqh-hist-badge--hit' : 'sqh-hist-badge--miss'}`}>
+                          {r.actual_home_score}-{r.actual_away_score}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                ))
+              )}
+              {compareIds.length >= 2 && (
+                <div className="sqh-hist-compare-bar">
+                  <button className="sqh-hist-compare-btn" onClick={handleCompare}>
+                    对比 {compareIds.length} 场
                   </button>
-                )
-              })
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="sqh-rail-filters">
+                {['全部', '今日', '进行中', ...fixtureLeagues].map(f => (
+                  <button key={f} className={`sqh-filter-chip${fixtureFilter === f ? ' sqh-filter-chip--on' : ''}`}
+                    onClick={() => setFixtureFilter(f)}>{f}</button>
+                ))}
+              </div>
+              <div className="sqh-rail-list">
+                {fixturesLoading ? (
+                  <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>加载中…</span>
+                ) : filteredMatches.length === 0 ? (
+                  <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>暂无赛事</span>
+                ) : (
+                  filteredMatches.map(m => {
+                    const isLive = m.publicLean.startsWith('进行中')
+                    return (
+                      <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
+                        onClick={() => { stopPoll(); resetStaged(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false) }}>
+                        <div className="sqh-fixture-top">
+                          <span className="sqh-fixture-league">{m.league}</span>
+                          {isLive && <span className="sqh-fixture-live">LIVE</span>}
+                        </div>
+                        <div className="sqh-fixture-teams">
+                          <span>{m.homeTeam}</span>
+                          <span className="sqh-fixture-vs">VS</span>
+                          <span>{m.awayTeam}</span>
+                        </div>
+                        <div className="sqh-fixture-foot">
+                          <span className={`sqh-status-dot${isLive ? ' sqh-status-dot--live' : ''}`} />
+                          <span>{m.kickoffAt} · {m.publicLean}</span>
+                        </div>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </>
+          )}
         </aside>
 
         {/* center */}
-        <MatchCard match={selectedMatch} question={question} answer={answer}
-          osintJob={osintJob} loading={loading} error={error} userTier={userTier}
-          staged={staged}
-          onChange={setQuestion} onAsk={() => ask()} onPreset={ask}
-          onUpgrade={() => setShowPaywall(true)} />
+        {historyMode ? (
+          <section className="sqh-panel" style={{ flex: 1, overflowY: 'auto' }}>
+            <PostMatchReview
+              detail={historyDetail}
+              loading={historyDetailLoading}
+              userTier={userTier}
+              onUpgrade={() => setShowPaywall(true)}
+            />
+            {!historyDetailLoading && !historyDetail && (
+              <div className="sqh-idle">
+                <div className="sqh-idle-ic"><Eye size={24} weight="duotone" /></div>
+                <p className="sqh-idle-title">选择左侧比赛查看回顾</p>
+                <p className="sqh-idle-text">勾选 2–3 场可横向对比研判摘要。</p>
+              </div>
+            )}
+          </section>
+        ) : (
+          <MatchCard match={selectedMatch} question={question} answer={answer}
+            osintJob={osintJob} loading={loading} error={error} userTier={userTier}
+            staged={staged}
+            onChange={setQuestion} onAsk={() => ask()} onPreset={ask}
+            onUpgrade={() => setShowPaywall(true)} />
+        )}
 
         {/* right */}
         <aside className="sqh-panel sqh-ask-panel">
@@ -298,6 +422,13 @@ export default function App() {
 
       {showPaywall && (
         <PaywallModal user={user} onClose={() => setShowPaywall(false)} onPaid={handlePaid} />
+      )}
+      {showCompare && compareResult && (
+        <ComparePanel
+          results={compareResult}
+          loading={compareLoading}
+          onClose={() => setShowCompare(false)}
+        />
       )}
     </main>
   )

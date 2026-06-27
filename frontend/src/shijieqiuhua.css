@@ -2009,3 +2009,144 @@
   .sqh-auth-screen { grid-template-columns: 1fr; }
   .sqh-auth-aside { display: none; }
 }
+
+/* ── v2: 历史列表 (left rail) ────────────────────────────────────────────── */
+.sqh-rail-mode {
+  display: flex; gap: 4px; margin-bottom: 8px;
+}
+.sqh-rail-mode-btn {
+  flex: 1; height: 30px; border: 1px solid #e6dcca; border-radius: 8px;
+  background: transparent; color: #6d725f; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
+}
+.sqh-rail-mode-btn--on {
+  background: #143c2d; color: #f8f1df; border-color: #143c2d;
+}
+
+.sqh-hist-record {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 10px 12px; border-radius: 10px; border: 1px solid #e6dcca;
+  background: #fffdf8; cursor: pointer; text-align: left; width: 100%;
+  transition: background .12s;
+}
+.sqh-hist-record:hover { background: #f5f0e4; }
+.sqh-hist-record[data-active="true"] { border-color: #143c2d; background: #edf3e8; }
+.sqh-hist-record-teams { font-size: 13px; font-weight: 700; color: #17221b; }
+.sqh-hist-record-meta { font-size: 11px; color: #6d725f; display: flex; gap: 8px; }
+.sqh-hist-record-badges { display: flex; gap: 5px; }
+.sqh-hist-badge {
+  font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
+}
+.sqh-hist-badge--hit { background: #d6edcf; color: #1c6b2d; }
+.sqh-hist-badge--miss { background: #f5ddd8; color: #a03020; }
+
+.sqh-hist-check-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+}
+.sqh-hist-checkbox {
+  width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; accent-color: #143c2d;
+}
+.sqh-hist-compare-bar {
+  padding: 10px 12px; border-top: 1px solid #e6dcca; margin-top: 4px;
+}
+.sqh-hist-compare-btn {
+  width: 100%; height: 36px; border: 0; border-radius: 9px;
+  background: #143c2d; color: #f8f1df; font-size: 13px; font-weight: 700;
+  cursor: pointer;
+}
+.sqh-hist-compare-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── v2: 赛后回看 (PostMatchReview) ─────────────────────────────────────── */
+.sqh-pmr {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 20px; max-width: 560px;
+}
+.sqh-pmr-loading { padding: 32px; color: #6d725f; font-size: 13px; text-align: center; }
+.sqh-pmr-header { text-align: center; }
+.sqh-pmr-competition { font-size: 11.5px; color: #6d725f; margin-bottom: 8px; }
+.sqh-pmr-teams {
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  font-size: 15px; font-weight: 700; color: #17221b;
+}
+.sqh-pmr-score {
+  font-size: 28px; font-weight: 800; color: #143c2d;
+  padding: 4px 16px; background: #edf3e8; border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.sqh-pmr-meta { font-size: 11.5px; color: #9aa090; margin-top: 6px; }
+
+.sqh-pmr-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+.sqh-pmr-cell {
+  padding: 12px 14px; border: 1px solid #e6dcca; border-radius: 10px; background: #fffdf8;
+}
+.sqh-pmr-cell-label { font-size: 11px; color: #6d725f; margin-bottom: 4px; }
+.sqh-pmr-cell-value { font-size: 14px; font-weight: 700; color: #17221b; }
+
+.sqh-pmr-badges { display: flex; gap: 8px; }
+.sqh-pmr-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 7px; font-size: 12px; font-weight: 700;
+}
+.sqh-pmr-badge--hit { background: #d6edcf; color: #1c6b2d; }
+.sqh-pmr-badge--miss { background: #f5ddd8; color: #a03020; }
+
+.sqh-pmr-retro { display: flex; flex-direction: column; gap: 8px; }
+.sqh-pmr-retro-title { font-size: 12.5px; font-weight: 700; color: #17221b; }
+.sqh-pmr-factor-list {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px;
+}
+.sqh-pmr-factor-list li {
+  display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+  padding: 5px 10px; border-radius: 7px;
+}
+.sqh-pmr-factor-list--hit li { background: #edf5ea; color: #1c6b2d; }
+.sqh-pmr-factor-list--miss li { background: #fdf0ee; color: #a03020; }
+.sqh-pmr-retro-note {
+  font-size: 12px; color: #6d725f; line-height: 1.6;
+  background: #f5f2ed; border-radius: 8px; padding: 8px 10px; margin: 0;
+}
+.sqh-pmr-expired {
+  font-size: 12.5px; color: #9aa090; padding: 12px; border-radius: 8px;
+  background: #f5f2ed; text-align: center;
+}
+
+/* ── v2: 多场对比 (ComparePanel) ─────────────────────────────────────────── */
+.sqh-compare-overlay {
+  position: fixed; inset: 0; background: rgba(20,30,24,.45); z-index: 200;
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.sqh-compare-panel {
+  background: #fffdf8; border-radius: 18px 18px 0 0;
+  width: 100%; max-width: 860px; max-height: 70vh;
+  overflow-y: auto; box-shadow: 0 -4px 32px rgba(20,60,45,.12);
+}
+.sqh-compare-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px 12px; border-bottom: 1px solid #e6dcca; position: sticky; top: 0;
+  background: #fffdf8;
+}
+.sqh-compare-title { font-size: 15px; font-weight: 800; color: #17221b; }
+.sqh-compare-close {
+  width: 30px; height: 30px; border: 1px solid #e6dcca; border-radius: 8px;
+  background: #f5f2ed; color: #6d725f; cursor: pointer;
+  display: grid; place-items: center;
+}
+.sqh-compare-loading { padding: 32px; text-align: center; color: #6d725f; font-size: 13px; }
+.sqh-compare-table { padding: 12px 20px 20px; display: flex; flex-direction: column; gap: 1px; }
+.sqh-compare-row {
+  display: flex; align-items: stretch; border-bottom: 1px solid #f0ebe0;
+}
+.sqh-compare-row:last-child { border-bottom: 0; }
+.sqh-compare-row--header { border-bottom: 2px solid #e6dcca; }
+.sqh-compare-dim {
+  flex: 0 0 90px; font-size: 11.5px; color: #6d725f; font-weight: 600;
+  padding: 9px 8px 9px 0; display: flex; align-items: center;
+}
+.sqh-compare-col {
+  flex: 1; font-size: 12.5px; color: #17221b; padding: 9px 8px;
+  display: flex; align-items: center;
+}
+.sqh-compare-col--header { font-weight: 700; font-size: 12px; color: #143c2d; }
+.sqh-compare-error { color: #9aa090; font-size: 11.5px; }

@@ -134,9 +134,21 @@ v1 解决了"赛前看什么"（主判断 + 证据链 + 追问）。用户付费
 
 | 路径 | 方法 | 用途 | 权限 |
 |---|---|---|---|
-| `/api/football/osint/history` | GET | 已结束比赛列表（含 lean_correct）| 已付费 |
-| `/api/football/osint/history/{job_id}` | GET | 单场回顾：预测 + 实际 + 因子 | 已付费 |
+| `/api/football/osint/history` | GET | 已结束比赛列表（摘要字段） | 已注册（含未付费） |
+| `/api/football/osint/history/{job_id}` | GET | 单场回顾；因子 + retrospective 字段付费门控 | 已注册；完整内容需已付费 |
 | `/api/football/osint/compare` | POST | 多场对比（最多 3 个 job_id）| 已付费 |
+
+**权限分层说明**：
+
+| 字段 | 访客 | 已注册未付费 | 已付费 |
+|---|---|---|---|
+| 历史列表（lean / 比分 / 命中标记） | ❌ | ✅ | ✅ |
+| 单场：预测倾向 + 实际比分 + 命中标记 | ❌ | ✅ | ✅ |
+| 单场：因子回顾（hit / miss 列表） | ❌ | ❌ | ✅ |
+| 单场：retrospective 注记 | ❌ | ❌ | ✅ |
+| 多场对比 | ❌ | ❌ | ✅ |
+
+> 已注册未付费用户看到因子区域时，显示模糊遮罩 + "开通后查看完整因子分析"引导（复用 v1 `sqh-report-veil` 样式）。
 
 #### `GET /api/football/osint/history` 响应摘要
 
@@ -158,20 +170,30 @@ v1 解决了"赛前看什么"（主判断 + 证据链 + 追问）。用户付费
 
 #### `GET /api/football/osint/history/{job_id}` 响应摘要
 
+后端按 entitlement 决定返回哪些字段：
+
 ```json
 {
-  "record": { /* prediction_record 行 */ },
-  "factors": [ /* 来自 bronze_storage job 的 factors */ ],
-  "report_excerpt": "...",  /* report.md 前 500 字 */
+  "record": {
+    "job_id": "fo_20260620_abc123",
+    "home_team": "曼城", "away_team": "阿森纳",
+    "predicted_lean": "home",
+    "actual_outcome": "home_win",
+    "lean_correct": true,
+    "scoreline_hit": true,
+    "settled_at": "2026-06-20T23:10:00Z"
+  },
+  // ── 以下字段仅 full_analysis entitlement 返回 ──
+  "factors": [ /* 来自 bronze_storage job 的 factors，无权限时省略 */ ],
   "retrospective": {
     "hit_factors": ["近期状态", "历史交锋"],
     "miss_factors": ["客队阵容缺阵"],
     "note": "赛前识别的 3 个风险因子中，1 个出现。"
-  }
+  }  // 无权限时省略
 }
 ```
 
-`retrospective` 的 `hit_factors`/`miss_factors` v2 先用**规则**生成（不调 LLM）：因子方向与实际结果吻合 → hit，否则 → miss；`info_insufficient` 因子不参与。
+`retrospective` 用**规则**生成（不调 LLM）：因子方向与实际结果吻合 → hit，否则 → miss；`info_insufficient` 因子不参与。
 
 ### 4.3 bronze_storage 读取
 
@@ -183,9 +205,13 @@ v1 解决了"赛前看什么"（主判断 + 证据链 + 追问）。用户付费
 
 ### 5.1 赛后回看入口
 
-- 左栏赛事队列：已结束比赛显示灰色状态 + "回顾 →" 链接（仅付费可见）
+- 左栏赛事队列：已结束比赛显示灰色状态 + "回顾 →" 链接（已注册即可见，访客不可见）
 - 点击后中栏切换为 `PostMatchReview` 组件（复用 `ReportView` 样式）
-- 标题区显示实际比分 + 命中/未命中徽章（绿色勾 / 红色叉）
+- 标题区显示实际比分 + 命中/未命中徽章（绿色勾 / 红色叉）—— 已注册用户均可见
+
+**已注册未付费用户**的 `PostMatchReview` 展示：
+- ✅ 显示：比赛信息、预测倾向、实际比分、命中/未命中徽章
+- 🔒 遮罩：因子回顾区域（`sqh-report-veil` 复用）+ "开通后查看完整因子分析" CTA
 
 ### 5.2 多场对比
 
@@ -234,8 +260,8 @@ v1 解决了"赛前看什么"（主判断 + 证据链 + 追问）。用户付费
 
 | ID | 问题 | 默认建议 |
 |---|---|---|
-| Q-v2-1 | 赛后回看是否对"未付费"用户展示摘要？ | 不展示；回看是留存钩子，不开放给未付费 |
-| Q-v2-2 | `/history` 列表是否绑定到当前登录用户，还是全局？ | v2 全局（所有付费用户看同一份历史），个人命中率统计 v2.1 |
+| Q-v2-1 | 赛后回看是否对"未付费"用户展示摘要？ | ✅ **已决定：展示摘要**。未付费用户可见：比分、系统倾向、命中/未命中标记；不可见：因子回顾、retrospective 分析（需付费解锁） |
+| Q-v2-2 | `/history` 列表是否绑定到当前登录用户，还是全局？ | ✅ **已决定：全局**。所有付费用户看同一份系统历史；个人命中率统计延后 v2.1 |
 | Q-v2-3 | 因子命中/偏差的判定逻辑是否足够准确？ | 先上规则版本，收集用户反馈后看是否需要 LLM 辅助解读 |
 | Q-v2-4 | `info_insufficient` 的比赛在历史列表怎么展示？ | 显示但标注"证据不足，未作方向判断"，不计入命中率 |
 | Q-v2-5 | bronze_storage 里 job 的 factors 可能因缓存清理丢失，降级策略？ | 降级展示"因子数据已过期"，不影响命中标记的展示 |

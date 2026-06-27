@@ -107,8 +107,8 @@ def register_user(username: str, email: str, password: str, invite_code: str) ->
     if email and not EMAIL_RE.match(email):
         raise ValueError("邮箱格式不正确")
     db = get_db()
-    try:
-        db.execute("BEGIN IMMEDIATE")
+    user_id = 0
+    with db:  # commits on success, rolls back on any exception
         existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if existing:
             raise ValueError("用户名已存在")
@@ -132,10 +132,6 @@ def register_user(username: str, email: str, password: str, invite_code: str) ->
             "UPDATE registration_codes SET current_uses = current_uses + 1 WHERE code = ?",
             (code,),
         )
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
     return _user_row_to_dict(
         db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     )

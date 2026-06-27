@@ -316,6 +316,11 @@ async def warm_loop() -> None:
 
     while True:
         try:
+            from backend import telemetry as _tel
+            _tel.emit("system.uptime_heartbeat", status="ok")
+        except Exception:
+            pass
+        try:
             fixtures = await asyncio.to_thread(football_data_schedule.fetch_fixtures, 3)
             candidates = football_data_schedule.upcoming(fixtures)
             matches = candidates[:_WARM_MAX_MATCHES]

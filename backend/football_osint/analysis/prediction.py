@@ -55,12 +55,17 @@ _LEAN_CN: dict[str, str] = {
 }
 
 
-def predict(request: FootballOsintJobRequest, factors: list[FactorImpact]) -> PredictionResult:
+def predict(
+    request: FootballOsintJobRequest,
+    factors: list[FactorImpact],
+    factor_min: int = 1,
+) -> PredictionResult:
     # A factor is "active" when it's enabled — evidence was found and scored.
     # impact=0 with enabled=True means the teams are evenly matched on that
     # dimension, which IS a real signal (not a data gap).
     active_factors = [f for f in factors if f.group in ("form", "h2h", "squad") and f.enabled]
-    has_fundamental_signal = len(active_factors) > 0
+    # ponytail: factor_min read from system_config by caller; default=1 preserves prior behaviour
+    has_fundamental_signal = len(active_factors) >= factor_min
 
     home_impact = sum(f.impact * f.weight for f in factors if f.enabled and f.direction == "home")
     away_impact = sum(abs(f.impact) * f.weight for f in factors if f.enabled and f.direction == "away")

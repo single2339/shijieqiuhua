@@ -82,7 +82,7 @@ def run_prediction_sync(
 
     _collect_zero_config_sources(request, evidence, sources)
     factors = factor_registry_module.build_factors(request, match.profile, evidence)
-    prediction = prediction_module.predict(request, factors)
+    prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
     confidence = confidence_module.grade(match.profile, evidence, factors)
     cycle = intelligence_module.build_intelligence_cycle(sources, evidence)
     confirmed_findings = intelligence_module.confirmed_findings(match, evidence)
@@ -117,6 +117,18 @@ def run_prediction_sync(
 
 
 # ── internal helpers ──
+
+def _read_factor_min() -> int:
+    """Read info_insufficient_factor_min from system_config; default 1."""
+    try:
+        from backend.auth.db import get_db
+        row = get_db().execute(
+            "SELECT value FROM system_config WHERE key='info_insufficient_factor_min'"
+        ).fetchone()
+        return int(row[0]) if row else 1
+    except Exception:
+        return 1
+
 
 def _job_id(request: FootballOsintJobRequest) -> str:
     seed = "|".join([request.home_team, request.away_team, request.kickoff_at, request.competition])

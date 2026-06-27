@@ -11,6 +11,13 @@ from .adapters import dongqiudi_schedule, football_data_schedule
 from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
 from . import warm_cache
 from . import track_record
+from . import history as history_module
+
+
+def _require_registered(http_request: Request) -> dict:
+    """Gate behind login only — no entitlement check (registered free users allowed)."""
+    from backend.auth.routes import get_current_user
+    return get_current_user(http_request)  # raises 401 if not authenticated
 
 
 def _require_paid(http_request: Request) -> dict:
@@ -212,3 +219,34 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
         reasons=reasons[:3],
         confidence_level=confidence.level if confidence else "L4",
     )
+
+
+# ── v2: 赛后回看 & 多场对比 ──────────────────────────────────────────────────
+
+@router.get("/history")
+async def list_history(http_request: Request, days: int = 30):
+    """已结束比赛历史列表（摘要）。已注册用户可访问。"""
+    _require_registered(http_request)
+    return await asyncio.to_thread(history_module.get_history_list, days=min(days, 90))
+
+
+@router.get("/history/{job_id}")
+async def get_history_detail(job_id: str, http_request: Request):
+    """单场回顾。lean/比分/命中标记对已注册用户开放；因子+retrospective 需付费。"""
+    user = _require_registered(http_request)
+    from backend.billing import has_entitlement
+    paid = has_entitlement(user["id"])
+    result = await asyncio.to_thread(history_module.get_history_detail, job_id, paid=paid)
+    if result is None:
+        raise HTTPException(status_code=404, detail="未找到该比赛的已结算记录")
+    return result
+
+
+@router.post("/compare")
+async def compare_matches(body: dict, http_request: Request):
+    """多场对比（最多 3 场）。需付费。body: {"job_ids": ["fo_...", ...]}"""
+    _require_paid(http_request)
+    job_ids = body.get("job_ids", [])
+    if not job_ids or len(job_ids) > 3:
+        raise HTTPException(status_code=422, detail="job_ids 须为 1–3 个")
+    return await asyncio.to_thread(history_module.compare_jobs, job_ids)

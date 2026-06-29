@@ -19,6 +19,7 @@ Everything else lives in:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -131,7 +132,8 @@ def _read_factor_min() -> int:
 
 
 def _job_id(request: FootballOsintJobRequest) -> str:
-    seed = "|".join([request.home_team, request.away_team, request.kickoff_at, request.competition])
+    payload = request.model_dump(mode="json")
+    seed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
     return f"fo_{datetime.now(timezone.utc).strftime('%Y%m%d')}_{digest}"
 
@@ -180,6 +182,9 @@ def _collect_zero_config_sources(
     _collect_farich_foot_sources(request, evidence, sources)
 
     # ── weather / search / RSS / football-data — run in parallel (independent I/O) ──
+    # Do not attach betting/odds feeds here. Sporttery is reserved for result
+    # settlement fallback in track_record.py; PRD R1 excludes real odds/handicap
+    # evidence from the paid OSINT report surface.
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             pool.submit(_collect_one_weather, request, evidence): "weather",
@@ -233,6 +238,8 @@ def _collect_zero_config_sources(
 def _collect_one_weather(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:
     """Tiny wrapper so weather can be submitted to ThreadPoolExecutor."""
     return weather_adapter.collect(request, evidence)
+
+
 
 
 _DONGQIUDI_HTTP_ADAPTERS = {"dongqiudi_schedule", "dongqiudi_analysis"}

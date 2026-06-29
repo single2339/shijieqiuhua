@@ -2,16 +2,40 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field, field_validator
 
 from .adapters import dongqiudi_schedule, football_data_schedule
 from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
 from . import warm_cache
 from . import track_record
 from . import history as history_module
+
+_JOB_ID_RE = re.compile(r"^fo_\d{8}_[0-9a-f]{10}$")
+
+
+def _validate_job_id(job_id: str) -> str:
+    if not _JOB_ID_RE.fullmatch(job_id):
+        raise HTTPException(status_code=422, detail="job_id 格式无效")
+    return job_id
+
+
+class CompareRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1, max_length=3)
+
+    @field_validator("job_ids")
+    @classmethod
+    def validate_job_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("job_ids 不能重复")
+        invalid = [jid for jid in value if not _JOB_ID_RE.fullmatch(jid)]
+        if invalid:
+            raise ValueError("job_ids 含无效格式")
+        return value
 
 
 def _require_registered(http_request: Request) -> dict:
@@ -79,7 +103,7 @@ async def get_track_record():
 
 
 @router.get("/fixtures")
-async def list_fixtures(days: int = 3):
+async def list_fixtures(days: int = Query(3, ge=0, le=14)):
     fixtures = await asyncio.to_thread(football_data_schedule.fetch_fixtures, days)
 
     upcoming = football_data_schedule.upcoming(fixtures)
@@ -101,6 +125,7 @@ async def list_fixtures(days: int = 3):
 
 @router.get("/jobs/{job_id}", response_model=FootballOsintJob)
 async def get_job(job_id: str, http_request: Request):
+    job_id = _validate_job_id(job_id)
     _require_paid(http_request)
     job = warm_cache.get_cached_by_job_id(job_id)
     if job is None:
@@ -110,6 +135,7 @@ async def get_job(job_id: str, http_request: Request):
 
 @router.get("/jobs/{job_id}/report.md", response_class=PlainTextResponse)
 async def get_report(job_id: str, http_request: Request):
+    job_id = _validate_job_id(job_id)
     _require_paid(http_request)
     job = warm_cache.get_cached_by_job_id(job_id)
     if job is None:
@@ -224,15 +250,16 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
 # ── v2: 赛后回看 & 多场对比 ──────────────────────────────────────────────────
 
 @router.get("/history")
-async def list_history(http_request: Request, days: int = 30):
+async def list_history(http_request: Request, days: int = Query(30, ge=1, le=90)):
     """已结束比赛历史列表（摘要）。已注册用户可访问。"""
     _require_registered(http_request)
-    return await asyncio.to_thread(history_module.get_history_list, days=min(days, 90))
+    return await asyncio.to_thread(history_module.get_history_list, days=days)
 
 
 @router.get("/history/{job_id}")
 async def get_history_detail(job_id: str, http_request: Request):
     """单场回顾。lean/比分/命中标记对已注册用户开放；因子+retrospective 需付费。"""
+    job_id = _validate_job_id(job_id)
     user = _require_registered(http_request)
     from backend.billing import has_entitlement
     paid = has_entitlement(user["id"])
@@ -243,10 +270,7 @@ async def get_history_detail(job_id: str, http_request: Request):
 
 
 @router.post("/compare")
-async def compare_matches(body: dict, http_request: Request):
+async def compare_matches(body: CompareRequest, http_request: Request):
     """多场对比（最多 3 场）。需付费。body: {"job_ids": ["fo_...", ...]}"""
     _require_paid(http_request)
-    job_ids = body.get("job_ids", [])
-    if not job_ids or len(job_ids) > 3:
-        raise HTTPException(status_code=422, detail="job_ids 须为 1–3 个")
-    return await asyncio.to_thread(history_module.compare_jobs, job_ids)
+    return await asyncio.to_thread(history_module.compare_jobs, body.job_ids)

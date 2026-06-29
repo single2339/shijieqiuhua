@@ -116,7 +116,20 @@ export default function App() {
     setView('app')
   }
 
-  async function handleLogout() { await logoutUser(); setUser(null); setAnswer(null); setOsintJob(null); setError('') }
+  async function handleLogout() {
+    await logoutUser()
+    setUser(null)
+    setAnswer(null)
+    setOsintJob(null)
+    setError('')
+    setHistoryMode(false)
+    setHistoryRecords([])
+    setSelectedHistoryJobId(null)
+    setHistoryDetail(null)
+    setCompareIds([])
+    setCompareResult(null)
+    setShowCompare(false)
+  }
 
   function goAuth(mode: 'login' | 'register') { setAuthMode(mode); setView('auth') }
 
@@ -168,6 +181,10 @@ export default function App() {
   }
 
   function toggleCompareId(jobId: string) {
+    if (userTier !== 'paid') {
+      setShowPaywall(true)
+      return
+    }
     setCompareIds(prev =>
       prev.includes(jobId) ? prev.filter(id => id !== jobId) : prev.length < 3 ? [...prev, jobId] : prev
     )
@@ -175,6 +192,10 @@ export default function App() {
 
   async function handleCompare() {
     if (compareIds.length < 2) return
+    if (userTier !== 'paid') {
+      setShowPaywall(true)
+      return
+    }
     setCompareLoading(true)
     setShowCompare(true)
     try { setCompareResult(await compareMatches(compareIds)) } catch { setCompareResult([]) }
@@ -303,9 +324,11 @@ export default function App() {
               ) : (
                 historyRecords.map(r => (
                   <div key={r.job_id} className="sqh-hist-check-row">
-                    <input type="checkbox" className="sqh-hist-checkbox"
-                      checked={compareIds.includes(r.job_id)}
-                      onChange={() => toggleCompareId(r.job_id)} />
+                    {userTier === 'paid' && (
+                      <input type="checkbox" className="sqh-hist-checkbox"
+                        checked={compareIds.includes(r.job_id)}
+                        onChange={() => toggleCompareId(r.job_id)} />
+                    )}
                     <button className="sqh-hist-record" data-active={r.job_id === selectedHistoryJobId}
                       onClick={() => selectHistoryJob(r.job_id)}>
                       <div className="sqh-hist-record-teams">{r.home_team} vs {r.away_team}</div>
@@ -314,12 +337,18 @@ export default function App() {
                         <span>{r.competition}</span>
                       </div>
                       <div className="sqh-hist-record-badges">
-                        <span className={`sqh-hist-badge ${r.lean_correct ? 'sqh-hist-badge--hit' : 'sqh-hist-badge--miss'}`}>
-                          {r.lean_correct ? '方向✓' : '方向✗'}
-                        </span>
-                        <span className={`sqh-hist-badge ${r.scoreline_hit ? 'sqh-hist-badge--hit' : 'sqh-hist-badge--miss'}`}>
-                          {r.actual_home_score}-{r.actual_away_score}
-                        </span>
+                        {r.predicted_lean === 'info_insufficient' ? (
+                          <span className="sqh-hist-badge">未计入</span>
+                        ) : (
+                          <>
+                            <span className={`sqh-hist-badge ${r.lean_correct ? 'sqh-hist-badge--hit' : 'sqh-hist-badge--miss'}`}>
+                              {r.lean_correct ? '方向✓' : '方向✗'}
+                            </span>
+                            <span className={`sqh-hist-badge ${r.scoreline_hit ? 'sqh-hist-badge--hit' : 'sqh-hist-badge--miss'}`}>
+                              {r.actual_home_score}-{r.actual_away_score}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </button>
                   </div>

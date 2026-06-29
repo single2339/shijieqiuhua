@@ -8,6 +8,7 @@ import json
 import os
 import re
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..evidence import append_evidence
@@ -83,14 +84,33 @@ def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> 
     lat, lon = coords
     kickoff = (request.kickoff_at or "").strip()
     if not kickoff:
-        from datetime import datetime, timedelta, timezone
         kickoff = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
     # kickoff_at may contain a time part ("06-22 09:00" or "2026-06-22 09:00") —
     # Open-Meteo needs just the date. Strip everything after the first space.
     kickoff_date = kickoff.split(" ")[0].strip()
     if not kickoff_date:
-        from datetime import datetime, timedelta, timezone
         kickoff_date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    else:
+        # kickoff_at is stored as "%m-%d %H:%M" (no year) in warm_cache cache keys
+        # and production request payloads.  Open-Meteo requires an ISO date with a
+        # year prefix.  Reconstruct the year from the current UTC time:
+        #   - If the reconstructed date is > 180 days in the future → matches
+        #     from last year (e.g. Dec-31 viewed in January).
+        #   - If the reconstructed date is > 30 days in the past → matches
+        #     from next year (e.g. Jan-01 viewed in December).
+        if len(kickoff_date) == 5 and kickoff_date[2] == '-':
+            now_utc = datetime.now(timezone.utc)
+            year = now_utc.year
+            candidate = f"{year}-{kickoff_date}"
+            try:
+                parsed = datetime.strptime(candidate, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                parsed = now_utc  # unparseable — fall through to today
+            if parsed > now_utc + timedelta(days=180):
+                year -= 1  # match from last year
+            elif parsed < now_utc - timedelta(days=30):
+                year += 1  # match from next year
+            kickoff_date = f"{year}-{kickoff_date}"
 
     # Try shared weather cache first
     wk = cache.weather_key(lat, lon, kickoff_date)

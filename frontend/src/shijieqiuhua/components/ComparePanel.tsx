@@ -20,6 +20,7 @@ const ROWS: RowDef[] = [
   { label: '置信度',   render: r => r.confidence_level ?? '—' },
   { label: '强证据',   render: r => r.evidence_summary != null ? String(r.evidence_summary.strong) : '—' },
   { label: '弱信号',   render: r => r.evidence_summary != null ? String(r.evidence_summary.weak) : '—' },
+  { label: '样本不足', render: r => r.evidence_summary != null ? String(r.evidence_summary.insufficient) : '—' },
   { label: '信息完整度', render: r => r.factor_completeness ?? '—' },
   { label: '主要风险', render: r => r.top_uncertainties?.join('；') || '—' },
 ]

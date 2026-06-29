@@ -45,24 +45,34 @@ export default function PostMatchReview({ detail, loading, userTier, onUpgrade }
           <div className="sqh-pmr-cell-value">{LEAN_LABEL[record.predicted_lean] ?? record.predicted_lean}</div>
         </div>
         <div className="sqh-pmr-cell">
+          <div className="sqh-pmr-cell-label">预测比分带</div>
+          <div className="sqh-pmr-cell-value">{record.predicted_scoreline_band.join(' / ') || '—'}</div>
+        </div>
+        <div className="sqh-pmr-cell">
           <div className="sqh-pmr-cell-label">实际结果</div>
           <div className="sqh-pmr-cell-value">{OUTCOME_LABEL[record.actual_outcome] ?? record.actual_outcome}</div>
         </div>
       </div>
 
       <div className="sqh-pmr-badges">
-        <span className={`sqh-pmr-badge ${record.lean_correct ? 'sqh-pmr-badge--hit' : 'sqh-pmr-badge--miss'}`}>
-          {record.lean_correct
-            ? <><CheckCircle size={13} weight="fill" /> 方向命中</>
-            : <><XCircle size={13} weight="fill" /> 方向未中</>
-          }
-        </span>
-        <span className={`sqh-pmr-badge ${record.scoreline_hit ? 'sqh-pmr-badge--hit' : 'sqh-pmr-badge--miss'}`}>
-          {record.scoreline_hit
-            ? <><CheckCircle size={13} weight="fill" /> 比分命中</>
-            : <><XCircle size={13} weight="fill" /> 比分未中</>
-          }
-        </span>
+        {record.predicted_lean === 'info_insufficient' ? (
+          <span className="sqh-pmr-badge">信息不足，未计入命中率</span>
+        ) : (
+          <>
+            <span className={`sqh-pmr-badge ${record.lean_correct ? 'sqh-pmr-badge--hit' : 'sqh-pmr-badge--miss'}`}>
+              {record.lean_correct
+                ? <><CheckCircle size={13} weight="fill" /> 方向命中</>
+                : <><XCircle size={13} weight="fill" /> 方向未中</>
+              }
+            </span>
+            <span className={`sqh-pmr-badge ${record.scoreline_hit ? 'sqh-pmr-badge--hit' : 'sqh-pmr-badge--miss'}`}>
+              {record.scoreline_hit
+                ? <><CheckCircle size={13} weight="fill" /> 比分命中</>
+                : <><XCircle size={13} weight="fill" /> 比分未中</>
+              }
+            </span>
+          </>
+        )}
       </div>
 
       <div className={canDeep ? '' : 'sqh-report-locked'}>
@@ -79,30 +89,32 @@ export default function PostMatchReview({ detail, loading, userTier, onUpgrade }
             </div>
           </div>
         )}
-        <div style={{ filter: canDeep ? 'none' : 'blur(3px)', pointerEvents: canDeep ? 'auto' : 'none' }}>
-          {factors_expired ? (
-            <div className="sqh-pmr-expired">因子数据已过期，无法展示详细回顾。</div>
-          ) : retrospective ? (
-            <div className="sqh-pmr-retro">
-              <div className="sqh-pmr-retro-title">关键因子回顾</div>
-              {retrospective.hit_factors.length > 0 && (
-                <ul className="sqh-pmr-factor-list sqh-pmr-factor-list--hit">
-                  {retrospective.hit_factors.map(f => (
-                    <li key={f}><CheckCircle size={12} weight="fill" />{f}</li>
-                  ))}
-                </ul>
-              )}
-              {retrospective.miss_factors.length > 0 && (
-                <ul className="sqh-pmr-factor-list sqh-pmr-factor-list--miss">
-                  {retrospective.miss_factors.map(f => (
-                    <li key={f}><XCircle size={12} weight="fill" />{f}</li>
-                  ))}
-                </ul>
-              )}
-              <p className="sqh-pmr-retro-note">{retrospective.note}</p>
-            </div>
-          ) : null}
-        </div>
+        {canDeep && (
+          <div>
+            {factors_expired ? (
+              <div className="sqh-pmr-expired">因子数据已过期，无法展示详细回顾。</div>
+            ) : retrospective ? (
+              <div className="sqh-pmr-retro">
+                <div className="sqh-pmr-retro-title">关键因子回顾</div>
+                {retrospective.hit_factors.length > 0 && (
+                  <ul className="sqh-pmr-factor-list sqh-pmr-factor-list--hit">
+                    {retrospective.hit_factors.map(f => (
+                      <li key={f}><CheckCircle size={12} weight="fill" />{f}</li>
+                    ))}
+                  </ul>
+                )}
+                {retrospective.miss_factors.length > 0 && (
+                  <ul className="sqh-pmr-factor-list sqh-pmr-factor-list--miss">
+                    {retrospective.miss_factors.map(f => (
+                      <li key={f}><XCircle size={12} weight="fill" />{f}</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="sqh-pmr-retro-note">{retrospective.note}</p>
+              </div>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   )

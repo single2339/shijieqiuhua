@@ -26,7 +26,7 @@ def get_history_list(*, days: int = _HISTORY_DEFAULT_DAYS) -> list[dict]:
     rows = get_db().execute(
         """
         SELECT job_id, home_team, away_team, kickoff_at, competition,
-               predicted_lean, actual_home_score, actual_away_score,
+               predicted_lean, predicted_scoreline_band, actual_home_score, actual_away_score,
                actual_outcome, lean_correct, scoreline_hit, settled_at
         FROM prediction_record
         WHERE settled_at IS NOT NULL
@@ -45,15 +45,13 @@ def get_history_list(*, days: int = _HISTORY_DEFAULT_DAYS) -> list[dict]:
             "kickoff_at": r["kickoff_at"],
             "competition": r["competition"],
             "predicted_lean": r["predicted_lean"],
+            "predicted_scoreline_band": json.loads(r["predicted_scoreline_band"] or "[]"),
             "actual_home_score": r["actual_home_score"],
             "actual_away_score": r["actual_away_score"],
             "actual_outcome": r["actual_outcome"],
-            "lean_correct": bool(r["lean_correct"]),
-            "scoreline_hit": bool(r["scoreline_hit"]),
+            "lean_correct": None if r["lean_correct"] is None else bool(r["lean_correct"]),
+            "scoreline_hit": None if r["scoreline_hit"] is None else bool(r["scoreline_hit"]),
             "settled_at": r["settled_at"],
-            # info_insufficient rows have predicted_lean='info_insufficient' but
-            # only definite-lean rows are recorded (record_if_definite gate),
-            # so this field is always one of home/away/draw here.
         }
         for r in rows
     ]
@@ -93,8 +91,8 @@ def get_history_detail(job_id: str, *, paid: bool) -> dict | None:
             "actual_home_score": row["actual_home_score"],
             "actual_away_score": row["actual_away_score"],
             "actual_outcome": row["actual_outcome"],
-            "lean_correct": bool(row["lean_correct"]),
-            "scoreline_hit": bool(row["scoreline_hit"]),
+            "lean_correct": None if row["lean_correct"] is None else bool(row["lean_correct"]),
+            "scoreline_hit": None if row["scoreline_hit"] is None else bool(row["scoreline_hit"]),
             "settled_at": row["settled_at"],
         }
     }

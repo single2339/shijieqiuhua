@@ -184,11 +184,12 @@ export interface HistoryRecord {
   kickoff_at: string
   competition: string
   predicted_lean: string
+  predicted_scoreline_band: string[]
   actual_home_score: number
   actual_away_score: number
   actual_outcome: string
-  lean_correct: boolean
-  scoreline_hit: boolean
+  lean_correct: boolean | null
+  scoreline_hit: boolean | null
   settled_at: string
 }
 

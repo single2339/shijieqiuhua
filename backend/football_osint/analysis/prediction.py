@@ -74,6 +74,10 @@ def predict(
 
     if not has_fundamental_signal:
         lean = "info_insufficient"
+    elif abs(edge) < 0.01 and home_impact > 0 and away_impact > 0:
+        # Both sides have signals and the edge is near zero — this is a
+        # genuinely balanced match, not a "we don't know" scenario.
+        lean = "draw"
     elif abs(edge) < 0.015 or uncertainty > 0.015:
         lean = "home_or_draw" if edge >= 0 else "away_or_draw"
     else:
@@ -124,7 +128,10 @@ def predict(
             "draw": band(draw_mid),
             "away_win": band(away_mid),
         },
-        scoreline_band=[] if lean == "info_insufficient" else (["1-1", "1-0", "2-1"] if edge >= 0 else ["1-1", "0-1", "1-2"]),
+        scoreline_band=[] if lean == "info_insufficient" else (
+            ["1-1", "0-0", "1-0", "0-1"] if lean == "draw"
+            else (["1-1", "1-0", "2-1"] if edge >= 0 else ["1-1", "0-1", "1-2"])
+        ),
         drivers=drivers,
         uncertainties=uncertainties[:4],
     )

@@ -61,10 +61,13 @@ def test_record_if_definite_inserts_row_for_definite_lean(tmp_db):
     assert row["settled_at"] is None
 
 
-def test_record_if_definite_skips_ambiguous_lean(tmp_db):
-    inserted = track_record.record_if_definite(_job(lean="home_or_draw"), conn=tmp_db)
-    assert inserted is False
-    assert tmp_db.execute("SELECT COUNT(*) c FROM prediction_record").fetchone()["c"] == 0
+def test_record_if_definite_records_info_insufficient_for_history(tmp_db):
+    inserted = track_record.record_if_definite(_job(lean="info_insufficient"), conn=tmp_db)
+    assert inserted is True
+    row = tmp_db.execute("SELECT * FROM prediction_record WHERE job_id='job1'").fetchone()
+    assert row["predicted_lean"] == "info_insufficient"
+    assert row["lean_correct"] is None
+    assert row["scoreline_hit"] is None
 
 
 def test_record_if_definite_is_idempotent(tmp_db):
@@ -99,9 +102,77 @@ def test_settle_pending_resolves_match_and_computes_correctness(tmp_db, monkeypa
     assert row["settled_at"] is not None
 
 
+def test_settle_pending_scores_double_chance_predictions(tmp_db, monkeypatch):
+    track_record.record_if_definite(_job(lean="home_or_draw", scoreline_band=("1-1",)), conn=tmp_db)
+    fake_fixture = football_data_schedule.Fixture(
+        match_id="dc1", league="EPL",
+        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+        home_team="曼城", away_team="利物浦", status="finished",
+        home_score=1, away_score=1,
+    )
+    monkeypatch.setattr(
+        football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [fake_fixture]
+    )
+
+    assert track_record.settle_pending(conn=tmp_db) == 1
+    row = tmp_db.execute("SELECT actual_outcome, lean_correct, scoreline_hit FROM prediction_record WHERE job_id='job1'").fetchone()
+    assert row["actual_outcome"] == "draw"
+    assert row["lean_correct"] == 1
+    assert row["scoreline_hit"] == 1
+
+
+def test_settle_pending_parses_full_year_kickoff(tmp_db, monkeypatch):
+    track_record.record_if_definite(
+        _job(kickoff_at="2026-05-01 19:00", created_at="2026-04-25T10:00:00+00:00"),
+        conn=tmp_db,
+    )
+    captured = {}
+    fake_fixture = football_data_schedule.Fixture(
+        match_id="fy1", league="EPL",
+        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+        home_team="曼城", away_team="利物浦", status="finished",
+        home_score=2, away_score=1,
+    )
+    def fake_fetch(date_from, date_to):
+        captured["range"] = (date_from, date_to)
+        return [fake_fixture]
+    monkeypatch.setattr(football_data_schedule, "fetch_fixtures_for_range", fake_fetch)
+
+    assert track_record.settle_pending(conn=tmp_db) == 1
+    assert captured["range"] == ("2026-04-29", "2026-05-03")
+
+
+def test_settle_pending_continues_after_bad_scoreline_band(tmp_db, monkeypatch):
+    track_record.record_if_definite(_job(job_id="bad", home_team="坏队"), conn=tmp_db)
+    tmp_db.execute("UPDATE prediction_record SET predicted_scoreline_band='not-json' WHERE job_id='bad'")
+    track_record.record_if_definite(_job(job_id="good", home_team="好队"), conn=tmp_db)
+    tmp_db.commit()
+    fixtures = [
+        football_data_schedule.Fixture(
+            match_id="bad", league="EPL",
+            kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+            home_team="坏队", away_team="利物浦", status="finished",
+            home_score=2, away_score=1,
+        ),
+        football_data_schedule.Fixture(
+            match_id="good", league="EPL",
+            kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+            home_team="好队", away_team="利物浦", status="finished",
+            home_score=2, away_score=1,
+        ),
+    ]
+    monkeypatch.setattr(football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: fixtures)
+
+    assert track_record.settle_pending(conn=tmp_db) == 2
+    bad = tmp_db.execute("SELECT scoreline_hit FROM prediction_record WHERE job_id='bad'").fetchone()
+    good = tmp_db.execute("SELECT scoreline_hit FROM prediction_record WHERE job_id='good'").fetchone()
+    assert bad["scoreline_hit"] == 0
+    assert good["scoreline_hit"] == 1
+
 def test_settle_pending_leaves_unmatched_rows_pending(tmp_db, monkeypatch):
     track_record.record_if_definite(_job(lean="home"), conn=tmp_db)
     monkeypatch.setattr(football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [])
+    monkeypatch.setattr(track_record.sporttery_adapter, "fetch_fixtures_for_range", lambda date_from, date_to: [])
 
     settled = track_record.settle_pending(conn=tmp_db)
 
@@ -143,6 +214,30 @@ def test_get_stats_at_or_above_min_sample_includes_accuracy_and_recent(tmp_db):
     assert len(stats["recent"]) == 2
     assert stats["recent"][0]["lean_correct"] is True
 
+
+def test_get_stats_excludes_history_only_leans_from_public_accuracy(tmp_db):
+    for lean, job_id in (("home", "definite"), ("home_or_draw", "double"), ("info_insufficient", "abstain")):
+        track_record.record_if_definite(_job(lean=lean, job_id=job_id), conn=tmp_db)
+    tmp_db.execute(
+        "UPDATE prediction_record SET actual_home_score=1, actual_away_score=0, actual_outcome='home', "
+        "lean_correct=1, scoreline_hit=1, settled_at=datetime('now') WHERE job_id='definite'"
+    )
+    tmp_db.execute(
+        "UPDATE prediction_record SET actual_home_score=1, actual_away_score=1, actual_outcome='draw', "
+        "lean_correct=1, scoreline_hit=0, settled_at=datetime('now') WHERE job_id='double'"
+    )
+    tmp_db.execute(
+        "UPDATE prediction_record SET actual_home_score=0, actual_away_score=0, actual_outcome='draw', "
+        "lean_correct=NULL, scoreline_hit=NULL, settled_at=datetime('now') WHERE job_id='abstain'"
+    )
+    tmp_db.commit()
+
+    stats = track_record.get_stats(conn=tmp_db, min_sample=1, recent_limit=10)
+
+    assert stats["settled"] == 1
+    assert stats["lean_accuracy"] == 1.0
+    assert len(stats["recent"]) == 1
+    assert stats["recent"][0]["home_team"] == "曼城"
 
 def test_backfill_due_scans_storage_records_and_settles(tmp_db, tmp_path, monkeypatch):
     job_dir = tmp_path / "football_osint" / "job_old"

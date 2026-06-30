@@ -29,6 +29,12 @@ class FootballOsintJobRequest(BaseModel):
     venue: str = ""
     locale: str = "zh-CN"
     question: str = ""
+    provider: str = ""
+    provider_match_id: str = ""
+    home_provider_id: str = ""
+    away_provider_id: str = ""
+    home_aliases: list[str] = Field(default_factory=list)
+    away_aliases: list[str] = Field(default_factory=list)
     user_supplied: UserSuppliedInput = Field(default_factory=UserSuppliedInput)
 
 
@@ -97,6 +103,16 @@ class ConfidenceRating(BaseModel):
     reason: str
 
 
+class DataQualitySummary(BaseModel):
+    insufficiency_reasons: list[str] = Field(default_factory=list)
+    primary_insufficiency_reason: str = ""
+    source_summary: dict[str, int] = Field(default_factory=dict)
+    fundamental_factor_count: int = 0
+    relevant_search_results_count: int = 0
+    dropped_search_results_count: int = 0
+    extraction_status: str = "not_run"
+
+
 class IntelligenceCycleStage(BaseModel):
     name: Literal["收集", "加工", "开发", "生产"]
     status: Literal["completed", "partial", "skipped"]
@@ -123,6 +139,7 @@ class FootballOsintJob(BaseModel):
     factors: list[FactorImpact] = Field(default_factory=list)
     prediction: PredictionResult | None = None
     confidence: ConfidenceRating | None = None
+    data_quality: DataQualitySummary | None = None
     intelligence_cycle: list[IntelligenceCycleStage] = Field(default_factory=list)
     confirmed_findings: list[IntelligenceFinding] = Field(default_factory=list)
     assessments: list[IntelligenceFinding] = Field(default_factory=list)

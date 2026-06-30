@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.football_osint.models import FootballOsintJobStatus
+from backend.football_osint.models import FactorImpact, FootballOsintJobRequest, FootballOsintJobStatus, OsintSourceStatus, PredictionResult
 from backend.football_osint.pipeline import run_prediction_sync
 from backend.football_osint.sources import DONGQIUDI_SOURCE_TEMPLATES
 
@@ -44,6 +44,135 @@ def test_osint_prediction_runs_without_api_keys(monkeypatch, tmp_path):
     assert any(source.adapter == "dongqiudi_schedule" and source.status == "failed" for source in job.sources)
     assert not any(ev.topic == "collection.plan" for ev in job.evidence)
 
+
+def test_info_insufficient_job_has_data_quality_reasons(tmp_path):
+    job = run_prediction_sync(
+        {
+            "home_team": "Japan U23",
+            "away_team": "Korea U23",
+            "kickoff_at": "2026-06-08 18:00",
+            "competition": "AFC U23 Asian Cup",
+        },
+        storage_root=tmp_path,
+    )
+
+    assert job.prediction is not None
+    assert job.prediction.lean == "info_insufficient"
+    assert job.data_quality is not None
+    assert job.data_quality.insufficiency_reasons
+    assert job.data_quality.primary_insufficiency_reason in job.data_quality.insufficiency_reasons
+    assert job.data_quality.fundamental_factor_count == 0
+    assert job.data_quality.source_summary["ok"] >= 1
+
+def test_data_quality_guarantees_reason_for_insufficient_without_specific_source_gap():
+    from backend.football_osint.data_quality import build_data_quality
+
+    request = FootballOsintJobRequest(
+        home_team="巴西",
+        away_team="阿根廷",
+        kickoff_at="06-20 20:00",
+        competition="世界杯",
+        user_supplied={"notes": ["官方前瞻已补充"]},
+    )
+    factors = [
+        FactorImpact(
+            factor_id="fixture.existence",
+            label="比赛验证",
+            group="fixture",
+            enabled=True,
+            weight=0.14,
+            impact=0.0,
+            direction="neutral",
+            confidence=0.58,
+        )
+    ]
+    prediction = PredictionResult(
+        lean="info_insufficient",
+        summary="信息不足",
+        probability_band={"home_win": (0.32, 0.40), "draw": (0.26, 0.34), "away_win": (0.28, 0.36)},
+        scoreline_band=[],
+    )
+
+    quality = build_data_quality(
+        request,
+        [OsintSourceStatus(adapter="fixtures_public", label="公开赛程探测", status="ok")],
+        [],
+        factors,
+        prediction,
+    )
+
+    assert quality.insufficiency_reasons
+    assert quality.primary_insufficiency_reason in quality.insufficiency_reasons
+    assert quality.fundamental_factor_count == 0
+
+
+def test_football_data_stats_uses_provider_team_ids(monkeypatch):
+    from backend.football_osint import pipeline
+    from backend.football_osint.adapters import football_data_stats as fds
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+
+    called = {"name_search": 0, "form_ids": [], "h2h_ids": None}
+
+    def fail_name_search(name):
+        called["name_search"] += 1
+        raise AssertionError("name search should not be used when provider IDs exist")
+
+    def fake_form_by_id(team_id, team_name, limit=5):
+        called["form_ids"].append((team_id, team_name))
+        return fds.TeamFormRecord(team_name=team_name, wins=3, draws=1, losses=1, recent_count=5)
+
+    def fake_h2h_by_ids(home_id, away_id, home_name, away_name):
+        called["h2h_ids"] = (home_id, away_id)
+        return fds.H2HRecord(home_team=home_name, away_team=away_name, home_wins=1, draws=1, away_wins=1, total_matches=3)
+
+    monkeypatch.setattr(fds, "_find_team_id", fail_name_search)
+    monkeypatch.setattr(fds, "fetch_team_form_by_id", fake_form_by_id, raising=False)
+    monkeypatch.setattr(fds, "fetch_h2h_by_ids", fake_h2h_by_ids, raising=False)
+
+    request = FootballOsintJobRequest(
+        home_team="科特迪瓦",
+        away_team="挪威",
+        kickoff_at="07-01 01:00",
+        competition="世界杯",
+        provider="football-data",
+        home_provider_id="808",
+        away_provider_id="816",
+    )
+    evidence: list[OsintEvidence] = []
+    sources: list[OsintSourceStatus] = []
+
+    pipeline._collect_football_data_stats(request, evidence, sources)
+
+    assert called["name_search"] == 0
+    assert called["form_ids"] == [("808", "科特迪瓦"), ("816", "挪威")]
+    assert called["h2h_ids"] == ("808", "816")
+    assert sources[-1].status == "ok"
+    assert any(ev.topic == "fundamental.football_data.form" for ev in evidence)
+
+
+def test_data_quality_clears_reasons_for_non_insufficient_prediction():
+    from backend.football_osint.data_quality import SearchQualityStats, build_data_quality
+
+    request = FootballOsintJobRequest(home_team="巴西", away_team="阿根廷", kickoff_at="06-20 20:00", competition="世界杯")
+    prediction = PredictionResult(
+        lean="home",
+        summary="主队占优",
+        probability_band={"home_win": (0.40, 0.48), "draw": (0.24, 0.32), "away_win": (0.20, 0.28)},
+        scoreline_band=["2-1"],
+    )
+
+    quality = build_data_quality(
+        request,
+        [OsintSourceStatus(adapter="dongqiudi_analysis", label="懂球帝赛前分析", status="failed")],
+        [],
+        [],
+        prediction,
+        search_stats=SearchQualityStats(relevant_count=0, dropped_count=3),
+        extraction_attempted=True,
+    )
+
+    assert quality.insufficiency_reasons == []
+    assert quality.primary_insufficiency_reason == ""
 
 def test_osint_prediction_collects_lightpanda_markdown(monkeypatch, tmp_path):
     lightpanda = tmp_path / "lp-fetch-md"
@@ -456,6 +585,76 @@ def test_cache_key_free_text():
     assert key1 != key3
 
 
+def test_job_metadata_classifies_preset_and_free_text_without_public_raw_text():
+    from backend.football_osint import job_metadata
+    from backend.football_osint.models import FootballOsintJobRequest
+
+    preset = FootballOsintJobRequest(
+        home_team="巴西",
+        away_team="日本",
+        kickoff_at="06-30 01:00",
+        competition="世界杯",
+        question="全场比分预测是多少？",
+    )
+    preset_payload = job_metadata.record_request_metadata(
+        preset, warm_window="t-2h", cache_source="t-2h"
+    )
+    assert preset_payload["match_key"] == "巴西|日本|06-30 01:00"
+    assert preset_payload["question_kind"] == "preset"
+    assert preset_payload["question_id"] == "fulltime_score"
+    assert preset_payload["question"] == "全场比分预测是多少？"
+
+    free_text = FootballOsintJobRequest(
+        home_team="巴西",
+        away_team="日本",
+        kickoff_at="06-30 01:00",
+        question="我的私有笔记里有伤病线索，帮我判断",
+        user_supplied={"notes": ["private note"], "injuries": [{}]},
+    )
+    free_payload = job_metadata.record_request_metadata(free_text)
+    assert free_payload["question_kind"] == "free_text"
+    assert free_payload["question_id"] == "free_text"
+    assert free_payload["question"] == ""
+    assert free_payload["question_hash"]
+    assert free_payload["user_supplied_summary"] == {
+        "injuries_count": 1,
+        "lineups_count": 0,
+        "notes_count": 1,
+    }
+
+
+def test_run_prediction_sync_persists_request_metadata(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
+    job = run_prediction_sync(
+        {
+            "home_team": "巴西",
+            "away_team": "日本",
+            "kickoff_at": "06-30 01:00",
+            "competition": "世界杯",
+            "question": "全场比分预测是多少？",
+            "user_supplied": {"notes": ["private note"], "injuries": [{}]},
+        },
+        storage_root=tmp_path,
+        warm_window="t-2h",
+        cache_source="t-2h",
+    )
+
+    payload = json.loads((tmp_path / job.job_id / "request.json").read_text(encoding="utf-8"))
+    assert payload["match_key"] == "巴西|日本|06-30 01:00"
+    assert payload["question_kind"] == "preset"
+    assert payload["question_id"] == "fulltime_score"
+    assert payload["warm_window"] == "t-2h"
+    assert payload["cache_source"] == "t-2h"
+    assert payload["locale"] == "zh-CN"
+    assert payload["user_supplied_summary"] == {
+        "injuries_count": 1,
+        "lineups_count": 0,
+        "notes_count": 1,
+    }
+
+
 def test_is_preset_question():
     from backend.football_osint import warm_cache
 
@@ -514,6 +713,72 @@ async def test_cache_or_compute_caches_and_returns_consistent(monkeypatch):
     assert entry2.job.job_id == entry1.job.job_id
 
 
+def test_warm_cache_key_separates_provider_identity():
+    from backend.football_osint import warm_cache
+
+    legacy = warm_cache.cache_key("科特迪瓦", "挪威", "07-01 01:00", "全场比分预测是多少？")
+    provider = warm_cache.cache_key(
+        "科特迪瓦",
+        "挪威",
+        "07-01 01:00",
+        "全场比分预测是多少？",
+        provider="football-data",
+        provider_match_id="537424",
+        home_provider_id="808",
+        away_provider_id="816",
+    )
+
+    assert legacy != provider
+
+
+@pytest.mark.asyncio
+async def test_warm_run_forwards_fixture_provider_identity(monkeypatch):
+    from datetime import datetime, timezone
+
+    from backend.football_osint import warm_cache
+    from backend.football_osint.adapters import football_data_schedule
+
+    seen: list[tuple[str, str, str, str]] = []
+
+    async def fake_force_refresh(request, *, window):
+        import time
+        from backend.football_osint.models import (
+            FootballOsintAnswer, FootballOsintJob, FootballOsintJobStatus, OsintMatch,
+        )
+
+        seen.append((request.provider, request.provider_match_id, request.home_provider_id, request.away_provider_id))
+        job = FootballOsintJob(
+            job_id=f"warm_provider_{len(seen)}",
+            status=FootballOsintJobStatus.COMPLETED,
+            phase="done",
+            progress=100,
+            match=OsintMatch(home_team=request.home_team, away_team=request.away_team),
+        )
+        answer = FootballOsintAnswer(related=True, analysis_started=True, answer="ok")
+        return warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source=window)
+
+    monkeypatch.setattr(warm_cache, "_force_refresh", fake_force_refresh)
+    fixture = football_data_schedule.Fixture(
+        match_id="537424",
+        league="世界杯",
+        kickoff_at=datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc),
+        home_team="科特迪瓦",
+        away_team="挪威",
+        status="scheduled",
+        home_score=None,
+        away_score=None,
+        provider="football-data",
+        provider_match_id="537424",
+        home_provider_id="808",
+        away_provider_id="816",
+    )
+
+    await warm_cache._run_analysis_for_match(fixture, window="t-5h")
+
+    assert seen
+    assert set(seen) == {("football-data", "537424", "808", "816")}
+
+
 @pytest.mark.asyncio
 async def test_cache_or_compute_dedup_inflight(monkeypatch):
     """Concurrent requests for the same key only run one pipeline."""
@@ -564,6 +829,110 @@ async def test_cache_or_compute_dedup_inflight(monkeypatch):
     assert len(results) == 5
     for r in results:
         assert r.answer.answer == "dedup answer"
+
+
+@pytest.mark.asyncio
+async def test_warm_run_records_partial_status_and_successful_job_ids(monkeypatch, tmp_path):
+    import json
+    import threading
+    import time
+    from datetime import datetime, timezone
+
+    from backend.auth import db as auth_db
+    from backend.football_osint import warm_cache
+    from backend.football_osint.adapters import football_data_schedule
+    from backend.football_osint.models import (
+        FootballOsintAnswer, FootballOsintJob, FootballOsintJobStatus, OsintMatch,
+    )
+
+    storage = tmp_path / "bronze_storage"
+    storage.mkdir()
+    monkeypatch.setattr(auth_db, "STORAGE_ROOT", storage)
+    monkeypatch.setattr(auth_db, "DB_PATH", storage / "_auth.db")
+    monkeypatch.setattr(auth_db, "_local", threading.local())
+    conn = auth_db.get_db()
+
+    async def fake_force_refresh(request, *, window):
+        if request.question == warm_cache.PRESET_QUESTIONS[-1]:
+            raise RuntimeError("boom")
+        job = FootballOsintJob(
+            job_id=f"fo_20260630_{len(request.question):010x}"[-22:],
+            status=FootballOsintJobStatus.COMPLETED,
+            phase="done",
+            progress=100,
+            match=OsintMatch(home_team=request.home_team, away_team=request.away_team),
+        )
+        answer = FootballOsintAnswer(related=True, analysis_started=True, answer="ok")
+        return warm_cache.CacheEntry(job=job, answer=answer, cached_at=time.time(), source=window)
+
+    monkeypatch.setattr(warm_cache, "_force_refresh", fake_force_refresh)
+    fixture = football_data_schedule.Fixture(
+        match_id="m1",
+        league="世界杯",
+        kickoff_at=datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc),
+        home_team="巴西",
+        away_team="日本",
+        status="scheduled",
+        home_score=None,
+        away_score=None,
+    )
+
+    assert await warm_cache._run_analysis_for_match(fixture, window="t-2h") == 5
+    row = conn.execute(
+        "SELECT * FROM warm_cache_run WHERE match_key='巴西|日本|06-30 20:00' AND window='t-2h'"
+    ).fetchone()
+    assert row["status"] == "partial"
+    assert row["successful_questions"] == 5
+    assert len(json.loads(row["job_ids_json"])) == 5
+
+
+@pytest.mark.asyncio
+async def test_warm_due_matches_skips_durably_completed_windows(monkeypatch, tmp_path):
+    import threading
+    from datetime import datetime, timedelta, timezone
+
+    from backend.auth import db as auth_db
+    from backend.football_osint import job_metadata, warm_cache
+    from backend.football_osint.adapters import football_data_schedule
+
+    storage = tmp_path / "bronze_storage"
+    storage.mkdir()
+    monkeypatch.setattr(auth_db, "STORAGE_ROOT", storage)
+    monkeypatch.setattr(auth_db, "DB_PATH", storage / "_auth.db")
+    monkeypatch.setattr(auth_db, "_local", threading.local())
+    conn = auth_db.get_db()
+
+    kickoff = datetime.now(timezone.utc) + timedelta(hours=1)
+    kickoff_str = kickoff.astimezone(football_data_schedule.CST).strftime("%m-%d %H:%M")
+    mk = job_metadata.match_key("巴西", "日本", kickoff_str)
+    for window in ("t-5h", "t-2h"):
+        conn.execute(
+            "INSERT INTO warm_cache_run(match_key, window, home_team, away_team, kickoff_at, competition, status, successful_questions, finished_at) "
+            "VALUES (?, ?, '巴西', '日本', ?, '世界杯', 'completed', 6, datetime('now'))",
+            (mk, window, kickoff_str),
+        )
+    conn.commit()
+
+    calls: list[str] = []
+
+    async def fake_run(fixture, *, window):
+        calls.append(window)
+        return 6
+
+    monkeypatch.setattr(warm_cache, "_run_analysis_for_match", fake_run)
+    fixture = football_data_schedule.Fixture(
+        match_id="m1",
+        league="世界杯",
+        kickoff_at=kickoff,
+        home_team="巴西",
+        away_team="日本",
+        status="scheduled",
+        home_score=None,
+        away_score=None,
+    )
+
+    await warm_cache._warm_due_matches([fixture])
+    assert calls == []
 
 
 # ── endpoint tests: no 503 + consistency ──
@@ -723,7 +1092,11 @@ def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
         if call_count["n"] == 1:
             assert "前瞻" in query
         return [
-            {"title": f"搜索结果 {call_count['n']}", "url": f"https://sports.sina.com.cn/article/{call_count['n']}", "snippet": "巴西近5场3胜1平1负"},
+            {
+                "title": f"巴西vs阿根廷世界杯前瞻 {call_count['n']}",
+                "url": f"https://sports.sina.com.cn/article/{call_count['n']}",
+                "snippet": "巴西近5场3胜1平1负，阿根廷近5场2胜2平1负，双方比赛阵容待定。",
+            },
         ]
 
     monkeypatch.setattr(web_search, "search", fake_search)
@@ -742,6 +1115,87 @@ def test_cn_search_collects_evidence_with_correct_topics(monkeypatch, tmp_path):
     assert evidence[0].source == "国内媒体搜索"
     assert sources[0].adapter == "cn_search"
     assert sources[0].status == "ok"
+
+
+def test_cn_search_drops_country_encyclopedia_results(monkeypatch):
+    from backend.football_osint.adapters import web_search
+    from backend.football_osint.pipeline import _collect_chinese_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+
+    def fake_search(query, **kwargs):
+        return [
+            {"title": "科特迪瓦_百度百科", "url": "https://baike.baidu.com/item/x", "snippet": "科特迪瓦共和国位于西非。"},
+            {"title": "国家概况_中华人民共和国外交部", "url": "https://www.mfa.gov.cn/x", "snippet": "科特迪瓦国家概况。"},
+            {"title": "关于科特迪瓦的一切 - 知乎", "url": "https://zhuanlan.zhihu.com/p/x", "snippet": "科特迪瓦国土面积。"},
+        ]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    request = FootballOsintJobRequest(home_team="科特迪瓦", away_team="挪威", kickoff_at="07-01 01:00", competition="世界杯")
+    evidence: list[OsintEvidence] = []
+    sources: list[OsintSourceStatus] = []
+
+    stats = _collect_chinese_search(request, evidence, sources)
+
+    assert evidence == []
+    assert stats.relevant_count == 0
+    assert stats.dropped_count >= 3
+    assert sources[0].adapter == "cn_search"
+    assert sources[0].status == "skipped"
+    assert "无相关中文搜索结果" in sources[0].reason
+
+
+def test_cn_search_accepts_relevant_match_preview_and_dedupes(monkeypatch):
+    from backend.football_osint.adapters import web_search
+    from backend.football_osint.pipeline import _collect_chinese_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+
+    result = {
+        "title": "巴西vs阿根廷世界杯前瞻：阵容伤停与历史交锋",
+        "url": "https://sports.sina.com.cn/preview/bra-arg",
+        "snippet": "巴西和阿根廷将在世界杯交锋，内马尔缺席，梅西领衔首发。",
+    }
+
+    def fake_search(query, **kwargs):
+        return [result, dict(result)]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    request = FootballOsintJobRequest(home_team="巴西", away_team="阿根廷", kickoff_at="06-20 20:00", competition="世界杯")
+    evidence: list[OsintEvidence] = []
+    sources: list[OsintSourceStatus] = []
+
+    stats = _collect_chinese_search(request, evidence, sources)
+
+    assert len(evidence) == 1
+    assert evidence[0].topic == "search.cn.preview"
+    assert stats.relevant_count == 1
+    assert stats.dropped_count >= 1
+    assert sources[0].status == "ok"
+
+
+def test_cn_search_drops_two_country_non_football_results(monkeypatch):
+    from backend.football_osint.adapters import web_search
+    from backend.football_osint.pipeline import _collect_chinese_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+
+    def fake_search(query, **kwargs):
+        return [
+            {
+                "title": "科特迪瓦 挪威 旅游签证地图指南",
+                "url": "https://example.com/country-guide",
+                "snippet": "科特迪瓦和挪威人口、经济、历史、地理信息汇总。",
+            },
+        ]
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    request = FootballOsintJobRequest(home_team="科特迪瓦", away_team="挪威", kickoff_at="07-01 01:00", competition="世界杯")
+    evidence: list[OsintEvidence] = []
+    sources: list[OsintSourceStatus] = []
+
+    stats = _collect_chinese_search(request, evidence, sources)
+
+    assert evidence == []
+    assert stats.relevant_count == 0
+    assert stats.dropped_count >= 1
 
 
 def test_cn_form_regex_extracts_ppg_from_chinese_snippets():
@@ -845,9 +1299,9 @@ def test_media_cn_coverage_factor_enables_with_enough_evidence(monkeypatch, tmp_
 
     def fake_search(query, **kwargs):
         return [
-            {"title": "赛前分析 1", "url": "https://sports.sina.com.cn/1", "snippet": "巴西近5场3胜1平1负"},
-            {"title": "赛前分析 2", "url": "https://sports.qq.com/2", "snippet": "阿根廷近5场2胜2平1负"},
-            {"title": "赛前分析 3", "url": "https://zhibo8.com/3", "snippet": "双方历史交锋巴西占优"},
+            {"title": "巴西vs阿根廷赛前分析 1", "url": "https://sports.sina.com.cn/1", "snippet": "巴西和阿根廷世界杯比赛前瞻，巴西近5场3胜1平1负"},
+            {"title": "巴西vs阿根廷赛前分析 2", "url": "https://sports.qq.com/2", "snippet": "巴西对阿根廷阵容预测，阿根廷近5场2胜2平1负"},
+            {"title": "巴西vs阿根廷赛前分析 3", "url": "https://zhibo8.com/3", "snippet": "巴西与阿根廷历史交锋和世界杯赛前报道"},
         ]
 
     monkeypatch.setattr(web_search, "search", fake_search)
@@ -1021,8 +1475,8 @@ def test_media_cn_coverage_counts_rss_evidence(monkeypatch, tmp_path):
 
     def fake_search(query, **kwargs):
         return [
-            {"title": "国内媒体分析 1", "url": "https://sports.sina.com.cn/a", "snippet": "赛前分析"},
-            {"title": "国内媒体分析 2", "url": "https://sports.qq.com/b", "snippet": "阵容预测"},
+            {"title": "巴西vs阿根廷国内媒体分析 1", "url": "https://sports.sina.com.cn/a", "snippet": "巴西和阿根廷世界杯赛前分析"},
+            {"title": "巴西vs阿根廷国内媒体分析 2", "url": "https://sports.qq.com/b", "snippet": "巴西对阿根廷阵容预测"},
         ]
 
     monkeypatch.setattr(web_search, "search", fake_search)
@@ -1264,3 +1718,63 @@ def test_weather_factor_reflects_real_precipitation(monkeypatch):
     weather_factor = next(f for f in factors if f.factor_id == "weather.exposure")
     assert weather_factor.enabled is True
     assert weather_factor.impact == -0.03
+
+
+@pytest.mark.asyncio
+async def test_get_job_route_falls_back_to_bronze_status_when_cache_misses(monkeypatch, tmp_path):
+    from backend.football_osint import routes, warm_cache, history as h_mod
+    from backend.football_osint.models import (
+        FootballOsintJob,
+        FootballOsintJobStatus,
+        OsintMatch,
+        PredictionResult,
+        ConfidenceRating,
+    )
+
+    job_id = "fo_20260630_abcdef1234"
+    root = tmp_path / "football_osint"
+    job_dir = root / job_id
+    job_dir.mkdir(parents=True)
+    job = FootballOsintJob(
+        job_id=job_id,
+        status=FootballOsintJobStatus.COMPLETED,
+        progress=100,
+        match=OsintMatch(home_team="巴西", away_team="日本", kickoff_at="06-30 01:00"),
+        prediction=PredictionResult(lean="home", summary="主队占优", probability_band={}, scoreline_band=[]),
+        confidence=ConfidenceRating(level="L2", reason="证据较充分"),
+        report_markdown="# 报告\n",
+    )
+    (job_dir / "status.json").write_text(job.model_dump_json(), encoding="utf-8")
+    (job_dir / "report.md").write_text("# 报告\n", encoding="utf-8")
+
+    monkeypatch.setattr(warm_cache, "get_cached_by_job_id", lambda jid: None)
+    monkeypatch.setattr(h_mod, "DEFAULT_STORAGE_ROOT", root)
+    monkeypatch.setattr(routes, "_require_paid", lambda request: {"id": 1})
+
+    loaded = await routes.get_job(job_id, object())
+    report = await routes.get_report(job_id, object())
+
+    assert loaded.job_id == job_id
+    assert loaded.match.home_team == "巴西"
+    assert report == "# 报告\n"
+
+
+@pytest.mark.asyncio
+async def test_compare_route_rejects_distinct_jobs_for_same_match(monkeypatch):
+    from fastapi import HTTPException
+    from backend.football_osint import routes
+
+    first = "fo_20260630_aaaaaaaaaa"
+    second = "fo_20260630_bbbbbbbbbb"
+    monkeypatch.setattr(routes, "_require_paid", lambda request: {"id": 1})
+    monkeypatch.setattr(
+        routes.history_module,
+        "match_keys_for_job_ids",
+        lambda job_ids: {first: "巴西|日本|06-30 01:00", second: "巴西|日本|06-30 01:00"},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.compare_matches(routes.CompareRequest(job_ids=[first, second]), object())
+
+    assert exc.value.status_code == 422
+    assert "同一场比赛" in exc.value.detail

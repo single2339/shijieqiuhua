@@ -26,6 +26,10 @@ export function fixtureToMatch(fixture: FixtureStatus): FootballMatch {
     kickoffIso: fixture.kickoff_iso ?? '',
     homeTeam: fixture.home_team,
     awayTeam: fixture.away_team,
+    provider: fixture.provider,
+    provider_match_id: fixture.provider_match_id,
+    home_provider_id: fixture.home_provider_id,
+    away_provider_id: fixture.away_provider_id,
     publicLean: scoreLabel,
     questions: [...QUESTION_PRESETS],
   }

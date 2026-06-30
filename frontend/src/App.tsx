@@ -8,7 +8,7 @@ import {
 } from './shijieqiuhua/api'
 import type { AuthUser } from './shijieqiuhua/api'
 import { fixtureToMatch } from './shijieqiuhua/mockData'
-import type { CompareItem, FootballMatch, FootballOsintJob, FootballQuestionAnswer, HistoryDetail, HistoryRecord } from './shijieqiuhua/types'
+import type { CompareItem, FootballMatch, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord } from './shijieqiuhua/types'
 import AuthGate from './shijieqiuhua/components/AuthGate'
 import type { UserTier } from './shijieqiuhua/components/AuthGate'
 import AdminPanel from './shijieqiuhua/components/AdminPanel'
@@ -211,12 +211,16 @@ export default function App() {
     setOsintJob(null)
     stopPoll()
     startStaged()
-    const request = {
+    const request: FootballOsintJobRequest = {
       home_team: selectedMatch.homeTeam,
       away_team: selectedMatch.awayTeam,
       kickoff_at: selectedMatch.kickoffAt,
       competition: selectedMatch.league,
       question: next,
+      provider: selectedMatch.provider,
+      provider_match_id: selectedMatch.provider_match_id,
+      home_provider_id: selectedMatch.home_provider_id,
+      away_provider_id: selectedMatch.away_provider_id,
     }
     try {
       const [job, qa] = await Promise.all([

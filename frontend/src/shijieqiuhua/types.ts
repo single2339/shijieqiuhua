@@ -13,6 +13,10 @@ export interface FootballMatch {
   kickoffIso: string
   homeTeam: string
   awayTeam: string
+  provider?: string
+  provider_match_id?: string
+  home_provider_id?: string
+  away_provider_id?: string
   publicLean: string
   questions: MatchQuestion[]
 }
@@ -24,6 +28,10 @@ export interface FixtureStatus {
   kickoff_iso?: string
   home_team: string
   away_team: string
+  provider?: string
+  provider_match_id?: string
+  home_provider_id?: string
+  away_provider_id?: string
   status: 'scheduled' | 'live' | 'finished'
   home_score: number | null
   away_score: number | null
@@ -38,6 +46,12 @@ export interface FootballOsintJobRequest {
   kickoff_at?: string
   competition?: string
   venue?: string
+  provider?: string
+  provider_match_id?: string
+  home_provider_id?: string
+  away_provider_id?: string
+  home_aliases?: string[]
+  away_aliases?: string[]
   locale?: string
   question?: string
   user_supplied?: {
@@ -116,6 +130,16 @@ export interface PredictionResult {
   uncertainties: string[]
 }
 
+export interface DataQualitySummary {
+  insufficiency_reasons: string[]
+  primary_insufficiency_reason: string
+  source_summary: Record<string, number>
+  fundamental_factor_count: number
+  relevant_search_results_count: number
+  dropped_search_results_count: number
+  extraction_status: string
+}
+
 export interface ConfidenceRating {
   level: 'L1' | 'L2' | 'L3' | 'L4'
   reason: string
@@ -147,6 +171,7 @@ export interface FootballOsintJob {
   factors: FactorImpact[]
   prediction: PredictionResult | null
   confidence: ConfidenceRating | null
+  data_quality?: DataQualitySummary | null
   intelligence_cycle: IntelligenceCycleStage[]
   confirmed_findings: IntelligenceFinding[]
   assessments: IntelligenceFinding[]

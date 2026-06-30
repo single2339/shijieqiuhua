@@ -9,6 +9,7 @@ question caches with the latest data closer to match time.
 from __future__ import annotations
 
 import asyncio
+import json
 import hashlib
 import logging
 import os
@@ -65,16 +66,45 @@ class CacheEntry:
 
 # ── key helpers ──
 
-def cache_key(home_team: str, away_team: str, kickoff_at: str, question: str) -> str:
-    """Stable key for a (match, question) pair.
+def cache_key(
+    home_team: str,
+    away_team: str,
+    kickoff_at: str,
+    question: str,
+    *,
+    provider: str = "",
+    provider_match_id: str = "",
+    home_provider_id: str = "",
+    away_provider_id: str = "",
+) -> str:
+    """Stable key for a provider-aware (match, question) pair.
 
     Preset questions use the literal text; free-text questions are hashed
-    so identical wording produces the same key.
+    so identical wording produces the same key. Provider identity separates
+    fixture-derived requests from legacy/manual requests with ambiguous names.
     """
     q = question.strip()
-    if q in PRESET_QUESTIONS:
-        return f"{home_team}|{away_team}|{kickoff_at}|{q}"
-    return f"{home_team}|{away_team}|{kickoff_at}|free:{hashlib.sha1(q.encode()).hexdigest()[:16]}"
+    identity = "|".join([
+        provider.strip(),
+        provider_match_id.strip(),
+        home_provider_id.strip(),
+        away_provider_id.strip(),
+    ])
+    q_key = q if q in PRESET_QUESTIONS else f"free:{hashlib.sha1(q.encode()).hexdigest()[:16]}"
+    return f"{home_team}|{away_team}|{kickoff_at}|{identity}|{q_key}"
+
+
+def _cache_key_for_request(request: FootballOsintJobRequest) -> str:
+    return cache_key(
+        request.home_team,
+        request.away_team,
+        request.kickoff_at,
+        request.question,
+        provider=request.provider,
+        provider_match_id=request.provider_match_id,
+        home_provider_id=request.home_provider_id,
+        away_provider_id=request.away_provider_id,
+    )
 
 
 def match_prefix(home_team: str, away_team: str, kickoff_at: str) -> str:
@@ -91,7 +121,7 @@ def is_preset_question(question: str) -> bool:
 
 async def get_cached(request: FootballOsintJobRequest) -> CacheEntry | None:
     """Return cached entry for a match+question pair, or None."""
-    key = cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
+    key = _cache_key_for_request(request)
     async with _lock:
         entry = _cache.get(key)
         if entry is not None:
@@ -144,11 +174,11 @@ async def _compute_and_cache(
     from .pipeline import run_prediction_sync
     from .routes import _answer_from_job
 
-    job = await asyncio.to_thread(run_prediction_sync, request)
+    job = await asyncio.to_thread(run_prediction_sync, request, None, warm_window=source, cache_source=source)
     answer = await asyncio.to_thread(_answer_from_job, job, request.question)
     entry = CacheEntry(job=job, answer=answer, cached_at=time.time(), source=source)
 
-    key = cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
+    key = _cache_key_for_request(request)
     async with _lock:
         _store_entry(key, entry)
     return entry
@@ -175,7 +205,7 @@ async def cache_or_compute(
             return entry
 
     # ── in-flight dedup ──
-    key = cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
+    key = _cache_key_for_request(request)
     event: asyncio.Event | None = None
     is_runner = False
     async with _lock:
@@ -202,24 +232,24 @@ async def cache_or_compute(
         return await _compute_and_cache(request, source="on-demand")
 
 
-async def _force_refresh(request: FootballOsintJobRequest, *, window: str) -> None:
+async def _force_refresh(request: FootballOsintJobRequest, *, window: str) -> CacheEntry:
     """Force-overwrite cache for a match+question (warm loop only)."""
     from .pipeline import run_prediction_sync
     from .routes import _answer_from_job
 
-    key = cache_key(request.home_team, request.away_team, request.kickoff_at, request.question)
-    try:
-        job = await asyncio.to_thread(run_prediction_sync, request)
-        answer = await asyncio.to_thread(_answer_from_job, job, request.question)
-        entry = CacheEntry(job=job, answer=answer, cached_at=time.time(), source=window)
-        async with _lock:
-            _store_entry(key, entry)
-    except Exception:
-        log.exception(
-            "warm cache %s force-refresh failed for %s vs %s / %s",
-            window, request.home_team, request.away_team, request.question,
-        )
-
+    key = _cache_key_for_request(request)
+    job = await asyncio.to_thread(
+        run_prediction_sync,
+        request,
+        None,
+        warm_window=window,
+        cache_source=window,
+    )
+    answer = await asyncio.to_thread(_answer_from_job, job, request.question)
+    entry = CacheEntry(job=job, answer=answer, cached_at=time.time(), source=window)
+    async with _lock:
+        _store_entry(key, entry)
+    return entry
 
 # ── warm loop ──
 
@@ -231,7 +261,8 @@ async def _run_analysis_for_match(
     """Run full pipeline for all preset questions on one match. Returns count of successful runs."""
     kickoff_at = fixture.kickoff_at.astimezone(football_data_schedule.CST).strftime("%m-%d %H:%M")
     mp = match_prefix(fixture.home_team, fixture.away_team, kickoff_at)
-    ok_count = 0
+    entries: list[CacheEntry] = []
+    errors: list[str] = []
 
     for question in PRESET_QUESTIONS:
         request = FootballOsintJobRequest(
@@ -240,24 +271,103 @@ async def _run_analysis_for_match(
             kickoff_at=kickoff_at,
             competition=fixture.league,
             question=question,
+            provider=getattr(fixture, "provider", ""),
+            provider_match_id=getattr(fixture, "provider_match_id", ""),
+            home_provider_id=getattr(fixture, "home_provider_id", ""),
+            away_provider_id=getattr(fixture, "away_provider_id", ""),
         )
         try:
-            await _force_refresh(request, window=window)
-            ok_count += 1
-        except Exception:
+            entries.append(await _force_refresh(request, window=window))
+        except Exception as exc:
+            errors.append(str(exc))
             log.exception(
                 "warm cache %s failed for %s vs %s / %s",
                 window, fixture.home_team, fixture.away_team, question,
             )
 
-    async with _lock:
-        _completed_windows.add((mp, window))
+    ok_count = len(entries)
+    status = _warm_status(ok_count, len(PRESET_QUESTIONS))
+    _record_warm_run(fixture, kickoff_at, window, status, [entry.job.job_id for entry in entries], errors)
+    if status == "completed":
+        async with _lock:
+            _completed_windows.add((mp, window))
 
     log.warning(
         "warm cache %s: %s vs %s done (%d/%d questions)",
         window, fixture.home_team, fixture.away_team, ok_count, len(PRESET_QUESTIONS),
     )
     return ok_count
+
+
+def _warm_status(successful: int, expected: int) -> str:
+    if successful == expected:
+        return "completed"
+    if successful > 0:
+        return "partial"
+    return "failed"
+
+
+def _record_warm_run(
+    fixture: football_data_schedule.Fixture,
+    kickoff_at: str,
+    window: str,
+    status: str,
+    job_ids: list[str],
+    errors: list[str],
+) -> None:
+    from backend.auth.db import get_db
+    from . import job_metadata
+
+    mk = job_metadata.match_key(fixture.home_team, fixture.away_team, kickoff_at)
+    get_db().execute(
+        """
+        INSERT INTO warm_cache_run(
+            match_key, window, home_team, away_team, kickoff_at, competition,
+            status, expected_questions, successful_questions, job_ids_json,
+            finished_at, error
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+        ON CONFLICT(match_key, window) DO UPDATE SET
+            home_team=excluded.home_team,
+            away_team=excluded.away_team,
+            kickoff_at=excluded.kickoff_at,
+            competition=excluded.competition,
+            status=excluded.status,
+            expected_questions=excluded.expected_questions,
+            successful_questions=excluded.successful_questions,
+            job_ids_json=excluded.job_ids_json,
+            finished_at=excluded.finished_at,
+            error=excluded.error
+        """,
+        (
+            mk,
+            window,
+            fixture.home_team,
+            fixture.away_team,
+            kickoff_at,
+            fixture.league,
+            status,
+            len(PRESET_QUESTIONS),
+            len(job_ids),
+            json.dumps(job_ids, ensure_ascii=False),
+            "; ".join(errors),
+        ),
+    )
+    get_db().commit()
+
+
+def _warm_window_completed(match_key_value: str, window: str) -> bool:
+    if (match_key_value, window) in _completed_windows:
+        return True
+    from backend.auth.db import get_db
+    row = get_db().execute(
+        "SELECT status FROM warm_cache_run WHERE match_key=? AND window=?",
+        (match_key_value, window),
+    ).fetchone()
+    if row is not None and row["status"] == "completed":
+        _completed_windows.add((match_key_value, window))
+        return True
+    return False
 
 
 def _next_analysis_time(
@@ -277,7 +387,7 @@ def _next_analysis_time(
 
         for offset, window in [(timedelta(hours=5), "t-5h"), (timedelta(hours=2), "t-2h")]:
             target = f.kickoff_at - offset
-            if target > now and (mp, window) not in _completed_windows:
+            if target > now and not _warm_window_completed(mp, window):
                 candidates.append((target, f, window))
 
     if not candidates:
@@ -299,7 +409,7 @@ async def _warm_due_matches(fixtures: list[football_data_schedule.Fixture]) -> N
 
         for offset, window in [(timedelta(hours=5), "t-5h"), (timedelta(hours=2), "t-2h")]:
             target = f.kickoff_at - offset
-            if target <= now and (mp, window) not in _completed_windows:
+            if target <= now and not _warm_window_completed(mp, window):
                 log.warning("warm cache: running %s for %s vs %s", window, f.home_team, f.away_team)
                 await _run_analysis_for_match(f, window=window)
 

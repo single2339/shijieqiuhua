@@ -49,7 +49,7 @@ export default function ReportView({ osintJob, userTier, onUpgrade }: ReportView
     >
       {/* ── verdict ── */}
       {prediction && (
-        <VerdictCard prediction={prediction} confidence={confidence} />
+        <VerdictCard prediction={prediction} confidence={confidence} dataQuality={osintJob.data_quality} />
       )}
 
       {/* ── gated sections ── */}
@@ -153,6 +153,20 @@ const LEAN_LABEL: Record<string, string> = {
   info_insufficient: '信息不足',
 }
 
+export function dataQualityReasonLabel(code: string): string {
+  const labels: Record<string, string> = {
+    detail_fixture_unmatched: '赛前分析源暂未匹配到该场',
+    structured_stats_unresolved: '结构化战绩源未解析到双方近期数据',
+    irrelevant_search_results: '搜索结果多为百科或泛介绍',
+    no_relevant_search_results: '未找到同时覆盖双方的赛前报道',
+    llm_extraction_empty: '已有文本未抽取出关键基本面字段',
+    source_runtime_failure: '部分数据源暂时不可用',
+    too_early: '赛前信息可能尚未发布',
+    no_user_supplied_context: '尚未收到用户补充信息',
+  }
+  return labels[code] || code
+}
+
 function ConfBadge({ level }: { level: string }) {
   return (
     <span className={`sqh-cbadge sqh-cbadge--${level}`}>
@@ -161,9 +175,10 @@ function ConfBadge({ level }: { level: string }) {
   )
 }
 
-function VerdictCard({ prediction, confidence }: {
+function VerdictCard({ prediction, confidence, dataQuality }: {
   prediction: NonNullable<FootballOsintJob['prediction']>
   confidence: FootballOsintJob['confidence']
+  dataQuality?: FootballOsintJob['data_quality']
 }) {
   const insufficient = prediction.lean === 'info_insufficient'
 
@@ -186,7 +201,16 @@ function VerdictCard({ prediction, confidence }: {
       {insufficient && (
         <div className="sqh-verdict-honest">
           <ShieldCheck size={16} weight="duotone" />
-          我们没编。缺关键数据时如实说明，开赛前会自动复扫。
+          {dataQuality?.primary_insufficiency_reason ? (
+            <>
+              主因：{dataQualityReasonLabel(dataQuality.primary_insufficiency_reason)}。
+              {dataQuality.insufficiency_reasons.slice(1, 3).length > 0 && (
+                <> 其它缺口：{dataQuality.insufficiency_reasons.slice(1, 3).map(dataQualityReasonLabel).join('、')}。</>
+              )}
+            </>
+          ) : (
+            <>我们没编。缺关键数据时如实说明，开赛前会自动复扫。</>
+          )}
         </div>
       )}
 

@@ -34,6 +34,7 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
+from backend import telemetry
 from .adapters import lightpanda as lightpanda_adapter
 from . import cache
 from .adapters import user_supplied as user_supplied_adapter
@@ -45,6 +46,7 @@ from .analysis import intelligence as intelligence_module
 from .analysis import prediction as prediction_module
 from .analysis import report as report_module
 from . import evidence as evidence_module
+from . import data_quality as data_quality_module
 from . import factor_registry as factor_registry_module
 from . import storage
 from .models import (
@@ -67,6 +69,9 @@ from .adapters import web_search as web_search_adapter
 def run_prediction_sync(
     payload: dict[str, Any] | FootballOsintJobRequest,
     storage_root: str | Path | None = None,
+    *,
+    warm_window: str = "on-demand",
+    cache_source: str = "on-demand",
 ) -> FootballOsintJob:
     request = payload if isinstance(payload, FootballOsintJobRequest) else FootballOsintJobRequest(**payload)
     evidence: list[OsintEvidence] = []
@@ -82,10 +87,13 @@ def run_prediction_sync(
         profile=_profile_match(request),
     )
 
-    _collect_zero_config_sources(request, evidence, sources)
+    search_stats = _collect_zero_config_sources(request, evidence, sources)
     factors = factor_registry_module.build_factors(request, match.profile, evidence)
     prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
     confidence = confidence_module.grade(match.profile, evidence, factors)
+    data_quality = data_quality_module.build_data_quality(
+        request, sources, evidence, factors, prediction, search_stats=search_stats,
+    )
     cycle = intelligence_module.build_intelligence_cycle(sources, evidence)
     confirmed_findings = intelligence_module.confirmed_findings(match, evidence)
     assessments = intelligence_module.assessments(match, factors, prediction, confidence)
@@ -107,6 +115,7 @@ def run_prediction_sync(
         factors=factors,
         prediction=prediction,
         confidence=confidence,
+        data_quality=data_quality,
         intelligence_cycle=cycle,
         confirmed_findings=confirmed_findings,
         assessments=assessments,
@@ -114,7 +123,21 @@ def run_prediction_sync(
         next_steps=next_steps,
         report_markdown=report,
     )
-    storage.persist_job(job, storage_root)
+    try:
+        telemetry_payload = {
+            "lean": job.prediction.lean if job.prediction else "",
+            "insufficiency_reasons": job.data_quality.insufficiency_reasons if job.data_quality else [],
+            "adapter_statuses": {source.adapter: source.status for source in job.sources},
+            "fundamental_factor_count": job.data_quality.fundamental_factor_count if job.data_quality else 0,
+            "relevant_search_results_count": job.data_quality.relevant_search_results_count if job.data_quality else 0,
+            "dropped_search_results_count": job.data_quality.dropped_search_results_count if job.data_quality else 0,
+            "extraction_status": job.data_quality.extraction_status if job.data_quality else "not_run",
+        }
+        telemetry.emit("research.analysis_completed", payload=telemetry_payload)
+        telemetry.emit("research.dashboard_view", payload=telemetry_payload)
+    except Exception:
+        log.debug("analysis telemetry emit failed", exc_info=True)
+    storage.persist_job(job, storage_root, request=request, warm_window=warm_window, cache_source=cache_source)
     return job
 
 
@@ -159,7 +182,7 @@ def _collect_zero_config_sources(
     request: FootballOsintJobRequest,
     evidence: list[OsintEvidence],
     sources: list[OsintSourceStatus],
-) -> None:
+) -> data_quality_module.SearchQualityStats:
     fixture_id = evidence_module.append_evidence(
         evidence,
         source="User request",
@@ -186,6 +209,7 @@ def _collect_zero_config_sources(
     # Do not attach betting/odds feeds here. Sporttery is reserved for result
     # settlement fallback in track_record.py; PRD R1 excludes real odds/handicap
     # evidence from the paid OSINT report surface.
+    search_stats = data_quality_module.SearchQualityStats()
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             pool.submit(_collect_one_weather, request, evidence): "weather",
@@ -212,6 +236,8 @@ def _collect_zero_config_sources(
                             status=status,
                             reason="" if status == "ok" else "未匹配到相关新闻",
                         ))
+                elif label == "search" and isinstance(result, data_quality_module.SearchQualityStats):
+                    search_stats = result
                 # search / football_data append to evidence + sources internally
             except Exception:
                 log.warning("%s phase failed or timed out", label)
@@ -234,6 +260,7 @@ def _collect_zero_config_sources(
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="ok", evidence_ids=note_ids))
     else:
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="skipped", reason="未提供伤病、首发或球队新闻补充"))
+    return search_stats
 
 
 def _collect_one_weather(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:
@@ -323,7 +350,7 @@ def _collect_search_sources(
     request: FootballOsintJobRequest,
     evidence: list[OsintEvidence],
     sources: list[OsintSourceStatus],
-) -> None:
+) -> data_quality_module.SearchQualityStats:
     home = request.home_team
     away = request.away_team
 
@@ -338,7 +365,7 @@ def _collect_search_sources(
 
     # Chinese domestic media search — runs after DDG so both English and
     # Chinese coverage contribute evidence independently.
-    _collect_chinese_search(request, evidence, sources)
+    return _collect_chinese_search(request, evidence, sources)
 
 
 def _contains_chinese(text: str) -> bool:
@@ -565,6 +592,94 @@ CN_DOMAINS = [
     "163.com",
 ]
 
+_LOW_SIGNAL_CN_TITLE_MARKERS = (
+    "百度百科",
+    "_百科",
+    "百科",
+    "国家概况",
+    "国家简介",
+    "国家概览",
+    "外交部",
+    "关于科特迪瓦的一切",
+    "旅游",
+    "签证",
+    "地图",
+    "人口",
+    "经济",
+    "地理",
+)
+
+_LOW_SIGNAL_CN_URL_MARKERS = (
+    "baike.baidu.com",
+    "mfa.gov.cn",
+)
+
+_FOOTBALL_CONTEXT_CN_MARKERS = (
+    "足球",
+    "比赛",
+    "世界杯",
+    "前瞻",
+    "阵容",
+    "伤停",
+    "比分",
+    "交锋",
+    "战绩",
+    "出线",
+    "小组赛",
+    "首发",
+    "赛事",
+    "赛前",
+    "预测",
+)
+_GENERIC_TEAM_TOKENS = {
+    "u23",
+    "u21",
+    "u20",
+    "u19",
+    "fc",
+    "sc",
+    "club",
+    "football",
+    "soccer",
+    "national",
+    "team",
+}
+
+
+
+def _cn_result_text(result: dict[str, str]) -> str:
+    return " ".join(str(result.get(key, "")) for key in ("title", "snippet", "url"))
+
+
+def _cn_result_mentions_side(text: str, team: str, other_team: str) -> bool:
+    if _contains_chinese(team):
+        return team in text
+    tokens = [part for part in re.split(r"[^a-z0-9]+", team.lower()) if len(part) >= 2]
+    other_tokens = {part for part in re.split(r"[^a-z0-9]+", other_team.lower()) if len(part) >= 2}
+    unique_tokens = [token for token in tokens if token not in other_tokens and token not in _GENERIC_TEAM_TOKENS]
+    if not unique_tokens:
+        unique_tokens = [token for token in tokens if token not in _GENERIC_TEAM_TOKENS]
+    haystack = text.lower()
+    return bool(unique_tokens) and any(token in haystack for token in unique_tokens)
+
+
+def _cn_search_result_matches_match(result: dict[str, str], home: str, away: str) -> bool:
+    """Keep deterministic match-specific Chinese results before fetching pages."""
+    text = _cn_result_text(result)
+    title = str(result.get("title", ""))
+    url = str(result.get("url", "")).lower()
+    if any(marker in title for marker in _LOW_SIGNAL_CN_TITLE_MARKERS):
+        return False
+    if any(marker in text for marker in _LOW_SIGNAL_CN_TITLE_MARKERS):
+        return False
+    if any(marker in url for marker in _LOW_SIGNAL_CN_URL_MARKERS):
+        return False
+
+    has_home = _cn_result_mentions_side(text, home, away)
+    has_away = _cn_result_mentions_side(text, away, home)
+    has_football_context = any(marker in text for marker in _FOOTBALL_CONTEXT_CN_MARKERS)
+    return has_home and has_away and has_football_context
+
 
 def _targeted_cn_queries(question: str, home: str, away: str) -> list[str]:
     """Dimension-specific Chinese search queries for domestic media."""
@@ -593,7 +708,7 @@ def _collect_chinese_search(
     request: FootballOsintJobRequest,
     evidence: list[OsintEvidence],
     sources: list[OsintSourceStatus],
-) -> None:
+) -> data_quality_module.SearchQualityStats:
     home = request.home_team
     away = request.away_team
 
@@ -605,8 +720,11 @@ def _collect_chinese_search(
     queries.extend(_targeted_cn_queries(question, home, away))
     queries = list(dict.fromkeys(queries))
 
-    evidence_ids = []
-    cn_results: list[dict[str, str]] = []
+    evidence_ids: list[str] = []
+    seen_urls: set[str] = set()
+    raw_count = 0
+    relevant_count = 0
+    dropped_count = 0
     for i, query in enumerate(queries[:4]):
         sk = cache.search_key(f"cn:{query}")
         results = cache.search_cache.get(sk)
@@ -617,10 +735,15 @@ def _collect_chinese_search(
             if not results:
                 results = web_search_adapter.search(query, include_domains=CN_DOMAINS)
             cache.search_cache.set(sk, results)
-        if i == 0:
-            cn_results = results
         topic = "search.cn.preview" if i == 0 else f"search.cn.q{i}"
         for result in results:
+            raw_count += 1
+            url = str(result.get("url", "")).strip()
+            if not url or url in seen_urls or not _cn_search_result_matches_match(result, home, away):
+                dropped_count += 1
+                continue
+            seen_urls.add(url)
+            relevant_count += 1
             evidence_ids.append(evidence_module.append_evidence(
                 evidence,
                 source="国内媒体搜索",
@@ -630,20 +753,23 @@ def _collect_chinese_search(
                 side="neutral",
                 confidence=0.28,
                 raw_excerpt=result["snippet"],
-                url=result["url"],
+                url=url,
             ))
 
-    # Fetch full content of top 2 Chinese result pages for richer extraction
-    full_page_ids = _fetch_top_pages(cn_results, evidence, "国内媒体搜索", "search.cn.preview")
-    evidence_ids.extend(full_page_ids)
-
+    reason = ""
+    if not evidence_ids:
+        reason = "无相关中文搜索结果" if raw_count else "无中文搜索结果"
     sources.append(OsintSourceStatus(
         adapter="cn_search",
         label="国内媒体搜索",
         status="ok" if evidence_ids else "skipped",
         evidence_ids=evidence_ids,
-        reason="" if evidence_ids else "无中文搜索结果",
+        reason=reason,
     ))
+    return data_quality_module.SearchQualityStats(
+        relevant_count=relevant_count,
+        dropped_count=dropped_count,
+    )
 
 
 def _collect_football_data_stats(
@@ -661,11 +787,21 @@ def _collect_football_data_stats(
 
     home = request.home_team
     away = request.away_team
+    use_provider_ids = (
+        request.provider == "football-data"
+        and bool(request.home_provider_id)
+        and bool(request.away_provider_id)
+    )
+
 
     # Fetch form for both teams in parallel
     with ThreadPoolExecutor(max_workers=2) as pool:
-        home_future = pool.submit(football_data_stats.fetch_team_form, home)
-        away_future = pool.submit(football_data_stats.fetch_team_form, away)
+        if use_provider_ids:
+            home_future = pool.submit(football_data_stats.fetch_team_form_by_id, request.home_provider_id, home)
+            away_future = pool.submit(football_data_stats.fetch_team_form_by_id, request.away_provider_id, away)
+        else:
+            home_future = pool.submit(football_data_stats.fetch_team_form, home)
+            away_future = pool.submit(football_data_stats.fetch_team_form, away)
         try:
             home_form = home_future.result(timeout=15)
         except Exception:
@@ -695,8 +831,10 @@ def _collect_football_data_stats(
             raw_excerpt=excerpt,
         ))
 
-    # Fetch H2H
-    h2h = football_data_stats.fetch_h2h(home, away)
+    if use_provider_ids:
+        h2h = football_data_stats.fetch_h2h_by_ids(request.home_provider_id, request.away_provider_id, home, away)
+    else:
+        h2h = football_data_stats.fetch_h2h(home, away)
     if h2h is not None and h2h.total_matches > 0:
         # Format: "历史交锋：A X胜Y平Z负，B Z胜Y平X负"
         excerpt = (

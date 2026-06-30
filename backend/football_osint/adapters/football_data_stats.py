@@ -109,13 +109,9 @@ def _search_team_api(name: str) -> int | None:
     return None
 
 
-def fetch_team_form(team_name_cn: str, limit: int = 5) -> TeamFormRecord | None:
-    """Fetch recent finished matches for a team and return W/D/L counts."""
+def fetch_team_form_by_id(team_id: str, team_name: str, limit: int = 5) -> TeamFormRecord | None:
+    """Fetch recent finished matches by football-data team ID."""
     if not _check_key():
-        return None
-
-    team_id = _find_team_id(team_name_cn)
-    if team_id is None:
         return None
 
     cache_key = f"fd_form:{team_id}:{limit}"
@@ -124,6 +120,7 @@ def fetch_team_form(team_name_cn: str, limit: int = 5) -> TeamFormRecord | None:
         return cached
 
     try:
+        team_id_int = int(team_id)
         resp = httpx.get(
             f"{FOOTBALL_DATA_URL}/teams/{team_id}/matches",
             params={"status": "FINISHED", "limit": limit},
@@ -133,19 +130,18 @@ def fetch_team_form(team_name_cn: str, limit: int = 5) -> TeamFormRecord | None:
         resp.raise_for_status()
         matches = resp.json().get("matches", [])
     except Exception as e:
-        log.warning("team %d form fetch failed: %s", team_id, e)
+        log.warning("team %s form fetch failed: %s", team_id, e)
         return None
 
     wins = draws = losses = 0
     for m in matches:
         home = m.get("homeTeam", {})
-        away = m.get("awayTeam", {})
         score = (m.get("score") or {}).get("fullTime") or {}
         home_goals = score.get("home")
         away_goals = score.get("away")
         if home_goals is None or away_goals is None:
             continue
-        is_home = home.get("id") == team_id
+        is_home = home.get("id") == team_id_int
         if home_goals > away_goals:
             wins += 1 if is_home else 0
             losses += 0 if is_home else 1
@@ -156,7 +152,7 @@ def fetch_team_form(team_name_cn: str, limit: int = 5) -> TeamFormRecord | None:
             draws += 1
 
     record = TeamFormRecord(
-        team_name=team_name_cn,
+        team_name=team_name,
         wins=wins,
         draws=draws,
         losses=losses,
@@ -166,18 +162,21 @@ def fetch_team_form(team_name_cn: str, limit: int = 5) -> TeamFormRecord | None:
     return record
 
 
-def fetch_h2h(home_cn: str, away_cn: str) -> H2HRecord | None:
-    """Return head-to-head record between two teams.
-
-    Fetches recent finished matches for the home team and filters to matches
-    against the away team. Uses the same team ID cache.
-    """
+def fetch_team_form(team_name_cn: str, limit: int = 5) -> TeamFormRecord | None:
+    """Fetch recent finished matches for a team and return W/D/L counts."""
     if not _check_key():
         return None
 
-    home_id = _find_team_id(home_cn)
-    away_id = _find_team_id(away_cn)
-    if home_id is None or away_id is None:
+    team_id = _find_team_id(team_name_cn)
+    if team_id is None:
+        return None
+
+    return fetch_team_form_by_id(str(team_id), team_name_cn, limit)
+
+
+def fetch_h2h_by_ids(home_id: str, away_id: str, home_name: str, away_name: str) -> H2HRecord | None:
+    """Return head-to-head record between two football-data team IDs."""
+    if not _check_key():
         return None
 
     cache_key = f"fd_h2h:{home_id}:{away_id}"
@@ -186,6 +185,8 @@ def fetch_h2h(home_cn: str, away_cn: str) -> H2HRecord | None:
         return cached
 
     try:
+        home_id_int = int(home_id)
+        away_id_int = int(away_id)
         resp = httpx.get(
             f"{FOOTBALL_DATA_URL}/teams/{home_id}/matches",
             params={"status": "FINISHED", "limit": 30},
@@ -195,14 +196,14 @@ def fetch_h2h(home_cn: str, away_cn: str) -> H2HRecord | None:
         resp.raise_for_status()
         matches = resp.json().get("matches", [])
     except Exception as e:
-        log.warning("h2h fetch for teams %d/%d failed: %s", home_id, away_id, e)
+        log.warning("h2h fetch for teams %s/%s failed: %s", home_id, away_id, e)
         return None
 
     home_wins = draws = away_wins = 0
     for m in matches:
         h = m.get("homeTeam", {})
         a = m.get("awayTeam", {})
-        if h.get("id") != home_id or a.get("id") != away_id:
+        if h.get("id") != home_id_int or a.get("id") != away_id_int:
             continue
         score = (m.get("score") or {}).get("fullTime") or {}
         hg = score.get("home")
@@ -217,8 +218,8 @@ def fetch_h2h(home_cn: str, away_cn: str) -> H2HRecord | None:
             draws += 1
 
     record = H2HRecord(
-        home_team=home_cn,
-        away_team=away_cn,
+        home_team=home_name,
+        away_team=away_name,
         home_wins=home_wins,
         draws=draws,
         away_wins=away_wins,
@@ -226,3 +227,16 @@ def fetch_h2h(home_cn: str, away_cn: str) -> H2HRecord | None:
     )
     cache.schedule_cache.set(cache_key, record)
     return record
+
+
+def fetch_h2h(home_cn: str, away_cn: str) -> H2HRecord | None:
+    """Return head-to-head record between two teams."""
+    if not _check_key():
+        return None
+
+    home_id = _find_team_id(home_cn)
+    away_id = _find_team_id(away_cn)
+    if home_id is None or away_id is None:
+        return None
+
+    return fetch_h2h_by_ids(str(home_id), str(away_id), home_cn, away_cn)

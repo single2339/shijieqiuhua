@@ -286,13 +286,25 @@ def _r11_info_insufficient_high(conn: sqlite3.Connection) -> "Alert | None":
     if total < 50:
         return None
     pct = 100.0 * ii / total
+    reason_rows = conn.execute("""
+        SELECT json_extract(payload_json, '$.insufficiency_reasons[0]') AS reason
+        FROM telemetry_event
+        WHERE event_name='research.dashboard_view'
+          AND json_extract(payload_json, '$.lean')='info_insufficient'
+          AND ts >= datetime('now', '-1 day')
+    """).fetchall()
+    reasons: dict[str, int] = {}
+    for reason_row in reason_rows:
+        reason = reason_row[0] or "unknown"
+        reasons[reason] = reasons.get(reason, 0) + 1
+    top_reason = max(reasons, key=reasons.get) if reasons else "unknown"
     if pct > 70:
         return Alert(
             rule_id="ALERT-11",
             severity="P2",
             title=f"info_insufficient = {pct:.0f}% (>70%)",
-            body="Most matches lack data — RISK-3 active. Check adapter health.",
-            payload={"pct": pct},
+            body=f"Most matches lack data — RISK-3 active. Top reason: {top_reason}. Check adapter health.",
+            payload={"pct": pct, "top_reason": top_reason},
         )
     return None
 

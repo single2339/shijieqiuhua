@@ -118,6 +118,10 @@ async def list_fixtures(days: int = Query(3, ge=0, le=14)):
             "status": f.status,
             "home_score": f.home_score,
             "away_score": f.away_score,
+            "provider": getattr(f, "provider", "football-data"),
+            "provider_match_id": getattr(f, "provider_match_id", ""),
+            "home_provider_id": getattr(f, "home_provider_id", ""),
+            "away_provider_id": getattr(f, "away_provider_id", ""),
         }
         for f in upcoming
     ]
@@ -129,6 +133,8 @@ async def get_job(job_id: str, http_request: Request):
     _require_paid(http_request)
     job = warm_cache.get_cached_by_job_id(job_id)
     if job is None:
+        job = await asyncio.to_thread(history_module.load_job_from_bronze, job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="football osint job not found")
     return job
 
@@ -138,9 +144,12 @@ async def get_report(job_id: str, http_request: Request):
     job_id = _validate_job_id(job_id)
     _require_paid(http_request)
     job = warm_cache.get_cached_by_job_id(job_id)
-    if job is None:
+    if job is not None:
+        return job.report_markdown
+    report = await asyncio.to_thread(history_module.load_report_from_bronze, job_id)
+    if report is None:
         raise HTTPException(status_code=404, detail="football osint job not found")
-    return job.report_markdown
+    return report
 
 
 def _is_match_related(request: FootballOsintJobRequest) -> bool:
@@ -273,4 +282,13 @@ async def get_history_detail(job_id: str, http_request: Request):
 async def compare_matches(body: CompareRequest, http_request: Request):
     """多场对比（最多 3 场）。需付费。body: {"job_ids": ["fo_...", ...]}"""
     _require_paid(http_request)
+    match_keys = await asyncio.to_thread(history_module.match_keys_for_job_ids, body.job_ids)
+    seen: dict[str, str] = {}
+    for job_id in body.job_ids:
+        match_key = match_keys.get(job_id)
+        if not match_key:
+            continue
+        if match_key in seen:
+            raise HTTPException(status_code=422, detail="不能对比同一场比赛的多个问题记录")
+        seen[match_key] = job_id
     return await asyncio.to_thread(history_module.compare_jobs, body.job_ids)

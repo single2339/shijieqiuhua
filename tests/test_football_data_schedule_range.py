@@ -58,6 +58,33 @@ def test_fetch_fixtures_for_range_queries_explicit_dates(monkeypatch):
     assert fixtures[0].away_score == 1
 
 
+
+def test_parse_matches_preserves_provider_identity(monkeypatch):
+    from backend.football_osint.adapters import football_data_schedule as fds
+
+    monkeypatch.setattr(
+        fds.name_translation, "translate",
+        lambda names: {n: n for n in names},
+    )
+    payload = {
+        "matches": [{
+            "id": 537424,
+            "utcDate": "2026-06-30T17:00:00Z",
+            "status": "TIMED",
+            "competition": {"name": "FIFA World Cup"},
+            "homeTeam": {"id": 808, "name": "Côte d'Ivoire"},
+            "awayTeam": {"id": 816, "name": "Norway"},
+            "score": {"fullTime": {"home": None, "away": None}},
+        }]
+    }
+
+    fixture = fds.parse_matches(payload)[0]
+
+    assert fixture.provider == "football-data"
+    assert fixture.provider_match_id == "537424"
+    assert fixture.home_provider_id == "808"
+    assert fixture.away_provider_id == "816"
+
 def test_fetch_fixtures_for_range_without_api_key_returns_empty(monkeypatch):
     monkeypatch.delenv("FOOTBALL_DATA_API_KEY", raising=False)
     assert football_data_schedule.fetch_fixtures_for_range("2026-05-01", "2026-05-02") == []

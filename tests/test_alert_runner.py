@@ -71,6 +71,22 @@ def test_simulate_alert11_info_insufficient(tmp_db):
     assert any(a.rule_id == "ALERT-11" for a, _ in fired)
 
 
+def test_alert11_reports_top_info_insufficient_reason(tmp_db):
+    for _ in range(40):
+        telemetry.emit("research.dashboard_view", payload={
+            "lean": "info_insufficient",
+            "insufficiency_reasons": ["detail_fixture_unmatched"],
+        })
+    for _ in range(10):
+        telemetry.emit("research.dashboard_view", payload={"lean": "home"})
+
+    fired = alert_runner.run_once(dry_run=True)
+    alert = next(a for a, _ in fired if a.rule_id == "ALERT-11")
+
+    assert alert.payload["top_reason"] == "detail_fixture_unmatched"
+    assert "detail_fixture_unmatched" in alert.body
+
+
 def test_cooldown_blocks_repeat_within_window(tmp_db):
     alert_runner.simulate("ALERT-1")
 

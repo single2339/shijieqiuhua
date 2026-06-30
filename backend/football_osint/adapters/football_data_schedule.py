@@ -50,6 +50,10 @@ class Fixture:
     status: str
     home_score: int | None
     away_score: int | None
+    provider: str = "football-data"
+    provider_match_id: str = ""
+    home_provider_id: str = ""
+    away_provider_id: str = ""
 
 
 def fetch_fixtures(days_ahead: int = 3) -> list[Fixture]:
@@ -114,8 +118,11 @@ def parse_matches(payload: dict) -> list[Fixture]:
         league_en = _competition(m)
         home_en = _team(m, "homeTeam")
         away_en = _team(m, "awayTeam")
+        match_id = _payload_id(m.get("id"))
+        home_provider_id = _payload_id((m.get("homeTeam") or {}).get("id"))
+        away_provider_id = _payload_id((m.get("awayTeam") or {}).get("id"))
         fixtures.append(Fixture(
-            match_id=str(m.get("id", "")),
+            match_id=match_id,
             league=name_map.get(league_en, league_en),
             kickoff_at=kickoff,
             home_team=name_map.get(home_en, home_en),
@@ -123,6 +130,9 @@ def parse_matches(payload: dict) -> list[Fixture]:
             status=_STATUS_MAP.get(m.get("status", ""), "scheduled"),
             home_score=full_time.get("home"),
             away_score=full_time.get("away"),
+            provider_match_id=match_id,
+            home_provider_id=home_provider_id,
+            away_provider_id=away_provider_id,
         ))
     return fixtures
 
@@ -142,6 +152,10 @@ def _competition(match: dict) -> str:
 
 def _team(match: dict, side: str) -> str:
     return (match.get(side) or {}).get("name", "")
+
+
+def _payload_id(value: object) -> str:
+    return "" if value is None else str(value)
 
 
 def _parse_utc(value: str | None) -> datetime | None:

@@ -45,3 +45,55 @@ def test_info_insufficient_unparseable_kickoff_defaults_to_softer_wording():
 
     assert result.lean == "info_insufficient"
     assert "暂未发布" in result.summary
+
+
+def _direction_factor(*, impact: float, weight: float = 1.0, label: str = "近期状态信号") -> FactorImpact:
+    return FactorImpact(
+        factor_id="form.recent_signal",
+        label=label,
+        group="form",
+        enabled=True,
+        weight=weight,
+        impact=impact,
+        direction="home" if impact > 0 else "away",
+        confidence=0.8,
+    )
+
+
+def test_scoreline_band_varies_by_edge_strength_not_only_direction():
+    narrow_home = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.03)])
+    strong_home = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.18)])
+    strong_away = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=-0.18)])
+
+    assert narrow_home.lean in {"home_or_draw", "home"}
+    assert strong_home.lean == "home"
+    assert strong_away.lean == "away"
+    assert narrow_home.scoreline_band != strong_home.scoreline_band
+    assert "2-0" in strong_home.scoreline_band
+    assert "0-2" in strong_away.scoreline_band
+
+
+def test_assessment_uses_driver_labels_instead_of_falling_back_to_generic_source():
+    from backend.football_osint.analysis.confidence import ConfidenceRating
+    from backend.football_osint.analysis.intelligence import assessments
+    from backend.football_osint.models import OsintMatch, PredictionResult
+
+    factor = _direction_factor(impact=0.12, label="近期状态信号")
+    prediction = PredictionResult(
+        lean="home",
+        summary="",
+        probability_band={},
+        scoreline_band=["2-0"],
+        drivers=["近期状态信号"],
+        uncertainties=[],
+    )
+
+    result = assessments(
+        OsintMatch(home_team="A队", away_team="B队"),
+        [factor],
+        prediction,
+        ConfidenceRating(level="L3", reason=""),
+    )
+
+    assert "近期状态信号" in result[0].statement
+    assert "基础输入与公开源计划" not in result[0].statement

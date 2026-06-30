@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -419,6 +420,22 @@ def _fetch_top_pages(
     return evidence_ids
 
 
+def _search_result_matches_match(result: dict[str, str], home: str, away: str) -> bool:
+    """Keep match-specific results; discard country/profile pages that mention one side only."""
+    haystack = " ".join(
+        str(result.get(key, "")) for key in ("title", "snippet", "url")
+    ).lower()
+
+    def tokens(name: str) -> list[str]:
+        return [part for part in re.split(r"[^a-z0-9]+", name.lower()) if len(part) >= 3]
+
+    home_tokens = tokens(home)
+    away_tokens = tokens(away)
+    if not home_tokens or not away_tokens:
+        return True
+    return any(token in haystack for token in home_tokens) and any(token in haystack for token in away_tokens)
+
+
 def _collect_ddg_search(
     source,
     home: str,
@@ -450,10 +467,10 @@ def _collect_ddg_search(
     # → Nike shoes) by appending "national football team".
     h = f"{home_en} national football team" if " " not in home_en else home_en
     a = f"{away_en} national football team" if " " not in away_en else away_en
-    queries = [f"{h} {a} World Cup preview"]
+    queries = [f"{h} {a} football match preview"]
     if question and len(question) > 2:
-        queries.append(f"{home_en} {away_en} {question}")
-    queries.extend(_targeted_queries(question, home_en, away_en))
+        queries.append(f"{h} {a} football {question}")
+    queries.extend(_targeted_queries(question, h, a))
 
     evidence_ids = []
     primary_results: list[dict[str, str]] = []
@@ -475,10 +492,11 @@ def _collect_ddg_search(
             else:
                 results = web_search_adapter.search(query)
             cache.search_cache.set(sk, results)
+        relevant_results = [r for r in results if _search_result_matches_match(r, home_en, away_en)]
         if i == 0:
-            primary_results = results
+            primary_results = relevant_results
         topic = source.topic if i == 0 else f"{source.topic}.q{i}"
-        for result in results:
+        for result in relevant_results:
             evidence_ids.append(evidence_module.append_evidence(
                 evidence,
                 source=source.label,
@@ -513,22 +531,22 @@ def _targeted_queries(question: str, home: str, away: str) -> list[str]:
     queries: list[str] = []
 
     if any(kw in q for kw in ["红黄牌", "黄牌", "红牌", "牌", "犯规", "裁判"]):
-        queries.append(f"{home} {away} cards fouls referee stats")
+        queries.append(f"{home} {away} football cards fouls referee stats")
 
     if any(kw in q for kw in ["角球", "角"]):
-        queries.append(f"{home} {away} corners stats average")
+        queries.append(f"{home} {away} football corners stats average")
 
     if any(kw in q for kw in ["进球", "总进球", "进球数", "大球", "小球", "比分"]):
-        queries.append(f"{home} {away} goals scored conceded form stats")
+        queries.append(f"{home} {away} football goals scored conceded form stats")
 
     if any(kw in q for kw in ["球员", "核心", "主力", "首发", "伤病", "缺席", "阵容"]):
-        queries.append(f"{home} {away} injuries suspensions predicted lineup")
+        queries.append(f"{home} {away} football injuries suspensions predicted lineup")
 
     if any(kw in q for kw in ["半场", "上半", "下半"]):
-        queries.append(f"{home} {away} first half performance trends")
+        queries.append(f"{home} {away} football first half performance trends")
 
     if any(kw in q for kw in ["风险", "临场", "变数", "不确定"]):
-        queries.append(f"{home} {away} latest team news preview")
+        queries.append(f"{home} {away} football latest team news preview")
 
     return queries
 
@@ -581,16 +599,15 @@ def _collect_chinese_search(
 
     # Primary: preview + team news; then question-specific; then dimension-targeted.
     queries = [f"{home} {away} 前瞻 分析 预测"]
-    # Short fallback for when Sogou doesn't index long queries well
-    queries.append(f"{home} {away}")
     question = (request.question or "").strip()
     if question and len(question) > 2:
         queries.append(f"{home} {away} {question}")
     queries.extend(_targeted_cn_queries(question, home, away))
+    queries = list(dict.fromkeys(queries))
 
     evidence_ids = []
     cn_results: list[dict[str, str]] = []
-    for i, query in enumerate(queries[:2]):
+    for i, query in enumerate(queries[:4]):
         sk = cache.search_key(f"cn:{query}")
         results = cache.search_cache.get(sk)
         if results is None:

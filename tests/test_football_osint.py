@@ -894,6 +894,112 @@ def test_targeted_cn_queries_generates_dimension_specific_searches():
     assert queries == []
 
 
+def test_cn_search_executes_question_and_targeted_queries_without_bare_team_fallback(monkeypatch):
+    from backend.football_osint.adapters import web_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+    from backend.football_osint.pipeline import _collect_chinese_search
+
+    calls: list[str] = []
+
+    def fake_search(query, **kwargs):
+        calls.append(query)
+        return []
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+
+    request = FootballOsintJobRequest(
+        home_team="巴西",
+        away_team="阿根廷",
+        kickoff_at="2026-06-20 20:00",
+        competition="世界杯",
+        question="角球和红黄牌怎么判断？",
+    )
+
+    _collect_chinese_search(request, [], [])
+
+    assert calls
+    assert "巴西 阿根廷" not in calls
+    assert any("角球" in query for query in calls)
+    assert any("红黄牌" in query or "犯规" in query for query in calls)
+
+
+def test_ddg_queries_for_country_names_keep_football_context(monkeypatch):
+    from backend.football_osint.adapters import name_translation, web_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+    from backend.football_osint.pipeline import _collect_ddg_search
+    from backend.football_osint.sources import SEARCH_SOURCE_TEMPLATES
+
+    calls: list[str] = []
+
+    def fake_search(query, **kwargs):
+        calls.append(query)
+        return []
+
+    monkeypatch.setattr(name_translation, "to_english", lambda value: value)
+    monkeypatch.setattr(web_search, "search", fake_search)
+
+    request = FootballOsintJobRequest(
+        home_team="Jordan",
+        away_team="South Korea",
+        kickoff_at="2026-06-20 20:00",
+        competition="AFC Asian Cup",
+        question="角球和红黄牌怎么判断？",
+    )
+    _collect_ddg_search(SEARCH_SOURCE_TEMPLATES[0], "Jordan", "South Korea", request, [], [])
+
+    assert calls
+    assert all("football" in query.lower() or "soccer" in query.lower() for query in calls)
+
+
+def test_english_targeted_queries_keep_football_context_for_multiword_teams():
+    from backend.football_osint.pipeline import _targeted_queries
+
+    queries = _targeted_queries("角球和红黄牌怎么判断？", "New Zealand", "Costa Rica")
+
+    assert queries
+    assert all("football" in query.lower() or "soccer" in query.lower() for query in queries)
+
+
+def test_ddg_search_drops_results_that_only_match_one_country(monkeypatch):
+    from backend.football_osint.adapters import name_translation, web_search
+    from backend.football_osint.models import FootballOsintJobRequest, OsintEvidence, OsintSourceStatus
+    from backend.football_osint import pipeline
+    from backend.football_osint.sources import SEARCH_SOURCE_TEMPLATES
+
+    def fake_search(query, **kwargs):
+        return [
+            {
+                "title": "Jordan country profile",
+                "url": "https://example.com/jordan-country",
+                "snippet": "Population and travel information.",
+            },
+            {
+                "title": "Jordan vs South Korea football preview",
+                "url": "https://example.com/jordan-south-korea-football",
+                "snippet": "Lineups and recent form for both teams.",
+            },
+        ]
+
+    monkeypatch.setattr(name_translation, "to_english", lambda value: value)
+    monkeypatch.setattr(web_search, "search", fake_search)
+    monkeypatch.setattr(pipeline, "_fetch_top_pages", lambda *args, **kwargs: [])
+
+    evidence: list[OsintEvidence] = []
+    sources: list[OsintSourceStatus] = []
+    request = FootballOsintJobRequest(
+        home_team="Jordan",
+        away_team="South Korea",
+        kickoff_at="2026-06-20 20:00",
+        competition="AFC Asian Cup",
+    )
+
+    pipeline._collect_ddg_search(SEARCH_SOURCE_TEMPLATES[0], "Jordan", "South Korea", request, evidence, sources)
+
+    urls = {item.url for item in evidence}
+    assert "https://example.com/jordan-country" not in urls
+    assert "https://example.com/jordan-south-korea-football" in urls
+
+
 def test_cn_sports_rss_templates_loaded():
     """CN sports RSS templates are included in RSS_FEED_TEMPLATES."""
     from backend.football_osint.sources import RSS_FEED_TEMPLATES

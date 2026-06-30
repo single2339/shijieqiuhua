@@ -128,10 +128,7 @@ def predict(
             "draw": band(draw_mid),
             "away_win": band(away_mid),
         },
-        scoreline_band=[] if lean == "info_insufficient" else (
-            ["1-1", "0-0", "1-0", "0-1"] if lean == "draw"
-            else (["1-1", "1-0", "2-1"] if edge >= 0 else ["1-1", "0-1", "1-2"])
-        ),
+        scoreline_band=[] if lean == "info_insufficient" else _scoreline_band(lean, edge),
         drivers=drivers,
         uncertainties=uncertainties[:4],
     )
@@ -140,3 +137,28 @@ def predict(
 def band(mid: float) -> tuple[float, float]:
     """Symmetric ±0.04 probability band, clamped to [0, 1]."""
     return (round(max(0.0, mid - 0.04), 2), round(min(1.0, mid + 0.04), 2))
+
+
+def _scoreline_band(lean: str, edge: float) -> list[str]:
+    """Deterministic scoreline buckets from lean and edge strength.
+
+    This is still a conservative baseline, not a Poisson model: without reliable
+    goal-rate inputs, vary by edge magnitude so strong favourites do not share
+    the same band as tiny home/away edges.
+    """
+    if lean == "draw":
+        return ["1-1", "0-0", "1-0", "0-1"]
+
+    strength = abs(edge)
+    if edge >= 0:
+        if strength >= 0.12:
+            return ["2-0", "2-1", "1-0"]
+        if strength >= 0.06:
+            return ["2-1", "1-0", "1-1"]
+        return ["1-0", "1-1", "0-0"]
+
+    if strength >= 0.12:
+        return ["0-2", "1-2", "0-1"]
+    if strength >= 0.06:
+        return ["1-2", "0-1", "1-1"]
+    return ["0-1", "1-1", "0-0"]

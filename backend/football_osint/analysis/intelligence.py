@@ -91,7 +91,7 @@ def assessments(
     prediction: PredictionResult,
     confidence: ConfidenceRating,
 ) -> list[IntelligenceFinding]:
-    driver_labels = [factor.label for factor in factors if factor.factor_id in prediction.drivers]
+    driver_labels = [factor.label for factor in factors if factor.label in prediction.drivers]
     statement = (
         f"当前倾向为 {prediction.lean}，但该判断属于 {confidence.level}，"
         f"主要依据为{('、'.join(driver_labels) or '基础输入与公开源计划')}。"

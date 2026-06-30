@@ -57,10 +57,24 @@ def build_factors(
         squad_score = _squad_score_from_absences(extracted.home_absences, extracted.away_absences)
         standings_score = _standings_score_from_ranks(extracted.home_rank, extracted.away_rank)
         combined_form = max(-0.18, min(0.18, form_score + standings_score))
+        raw_draw_risk, raw_draw_evidence_ids = _draw_risk_from_evidence(evidence, request)
+        signal_draw_risk = (
+            0.0
+            if extracted.qualitative_inference
+            else _draw_risk_from_signals(
+                extracted.home_form,
+                extracted.away_form,
+                extracted.h2h_home_wins,
+                extracted.h2h_draws,
+                extracted.h2h_home_losses,
+            )
+        )
+        draw_risk = max(signal_draw_risk, raw_draw_risk)
 
         has_form_signal = extracted.home_form is not None and extracted.away_form is not None
         has_h2h = extracted.h2h_home_wins is not None and extracted.h2h_home_losses is not None
         form_evidence_ids = fundamental_evidence + [ev.id for ev in cn_evidence]
+        draw_evidence_ids = raw_draw_evidence_ids if raw_draw_risk > 0.0 else []
         if extracted.qualitative_inference:
             form_weight = 0.06 if has_form_signal else 0.0
             form_confidence = 0.25 if has_form_signal else 0.0
@@ -91,7 +105,8 @@ def build_factors(
         cn_text = "\n".join(ev.raw_excerpt for ev in cn_evidence)
         cn_form_score = _score_cn_form(cn_text, request)
 
-        # Collect ALL evidence text for English pattern matching (search + RSS + dongqiudi)
+        # Draw risk is scored per evidence item so unrelated search results
+        # cannot contribute draw pressure or evidence IDs for this match.
         all_text = "\n".join(ev.raw_excerpt for ev in evidence if ev.raw_excerpt)
         en_form_score = _score_en_form(all_text, request)
 
@@ -99,7 +114,11 @@ def build_factors(
         h2h_score = _score_h2h(fundamental_text, request)
         squad_score, has_sideline = _score_squad(fundamental_text, request)
         standings_score = _score_standings(fundamental_text, request)
-        combined_form = max(-0.18, min(0.18, form_score + standings_score + cn_form_score + en_form_score))
+        combined_form = max(
+            -0.18,
+            min(0.18, form_score + standings_score + cn_form_score + en_form_score),
+        )
+        draw_risk, draw_evidence_ids = _draw_risk_from_evidence(evidence, request)
 
         has_cn_form = cn_form_score != 0.0
         has_en_form = en_form_score != 0.0
@@ -181,6 +200,18 @@ def build_factors(
             missing_reason="" if youth else "非青年赛事，青年波动因子不启用",
         ),
         FactorImpact(
+            factor_id="uncertainty.draw_risk",
+            label="平局风险",
+            group="uncertainty",
+            enabled=draw_risk > 0.0,
+            weight=0.18 if draw_risk > 0.0 else 0.0,
+            impact=draw_risk,
+            direction="draw" if draw_risk > 0.0 else "neutral",
+            confidence=0.42 if draw_risk > 0.0 else 0.0,
+            evidence_ids=draw_evidence_ids,
+            missing_reason="" if draw_risk > 0.0 else "近期战绩/历史交锋未显示稳定平局倾向",
+        ),
+        FactorImpact(
             factor_id="h2h.relevance",
             label="历史交锋参考性",
             group="h2h",
@@ -250,7 +281,7 @@ _EN_FORM_WDL_RE = re.compile(
 )
 # English H2H — "head to head: 3 wins, 1 draw, 2 losses"
 _EN_H2H_WDL_RE = re.compile(
-    r"(?:head\s*(?:to|2)\s*head|h2h)[:\s]*"
+    r"(?:head[-\s]*(?:to|2)[-\s]*head(?:\s+record)?|h2h)[:\s]*"
     r"(?P<home_wins>\d+)\s*(?:wins?|W)?\s*[-–,]\s*"
     r"(?P<draws>\d+)\s*(?:draws?|D)?\s*[-–,]\s*"
     r"(?P<away_wins>\d+)\s*(?:wins?|W|losses?|L)?",
@@ -326,6 +357,113 @@ def _score_h2h(text: str, request: FootballOsintJobRequest) -> float:
     else:
         home_w, home_l = wb, lb
     return _h2h_score_from_counts(home_w, home_l)
+
+
+def _draw_risk_from_signals(
+    home_rec: tuple[int, int, int] | None,
+    away_rec: tuple[int, int, int] | None,
+    h2h_home_wins: int | None,
+    h2h_draws: int | None,
+    h2h_home_losses: int | None,
+) -> float:
+    draw_rates: list[float] = []
+    for rec in (home_rec, away_rec):
+        if rec and sum(rec) > 0:
+            draw_rates.append(rec[1] / sum(rec))
+
+    if h2h_draws is not None and h2h_home_wins is not None and h2h_home_losses is not None:
+        total = h2h_home_wins + h2h_draws + h2h_home_losses
+        if total > 0:
+            draw_rates.append(h2h_draws / total)
+
+    if not draw_rates:
+        return 0.0
+
+    pressure = sum(draw_rates) / len(draw_rates)
+    if pressure >= 0.55:
+        return 0.12
+    if pressure >= 0.40:
+        return 0.09
+    if pressure >= 0.30:
+        return 0.06
+    return 0.0
+
+
+def _draw_risk_from_evidence(
+    evidence: list[OsintEvidence],
+    request: FootballOsintJobRequest,
+) -> tuple[float, list[str]]:
+    best_score = 0.0
+    evidence_ids: list[str] = []
+    for ev in evidence:
+        if not ev.raw_excerpt:
+            continue
+        score = _draw_risk_from_text(ev.raw_excerpt, request)
+        if score <= 0.0:
+            continue
+        if score > best_score:
+            best_score = score
+            evidence_ids = [ev.id]
+        elif score == best_score:
+            evidence_ids.append(ev.id)
+    return best_score, list(dict.fromkeys(evidence_ids))
+
+
+def _draw_risk_from_text(text: str, request: FootballOsintJobRequest) -> float:
+    records: dict[str, tuple[int, int, int]] = {}
+    for m in _FORM_RE.finditer(text):
+        records[m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+
+    for m in _CN_FORM_RE.finditer(text):
+        records[m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+
+    from .adapters import name_translation
+
+    home_en = name_translation.to_english(request.home_team)
+    away_en = name_translation.to_english(request.away_team)
+    en_records: dict[str, tuple[int, int, int]] = {}
+    for m in _EN_FORM_RECORD_RE.finditer(text):
+        name = (m.group("name") or "").strip()
+        rec = (int(m.group("w")), int(m.group("d")), int(m.group("l")))
+        if name and sum(rec):
+            en_records[name] = rec
+    for m in _EN_FORM_COMPACT_RE.finditer(text):
+        name = (m.group("name") or "").strip()
+        rec = (int(m.group("w")), int(m.group("d")), int(m.group("l")))
+        if name and sum(rec) and name not in en_records:
+            en_records[name] = rec
+
+    home_rec = records.get(request.home_team) or _fuzzy_match_record(en_records, request.home_team, home_en)
+    away_rec = records.get(request.away_team) or _fuzzy_match_record(en_records, request.away_team, away_en)
+    h2h_home_wins: int | None = None
+    h2h_draws: int | None = None
+    h2h_home_losses: int | None = None
+    h2h_match = _H2H_RE.search(text)
+    if h2h_match:
+        name_a = h2h_match.group(1)
+        name_b = h2h_match.group(5)
+        if request.home_team in (name_a, name_b) and request.away_team in (name_a, name_b):
+            wa, da, la = int(h2h_match.group(2)), int(h2h_match.group(3)), int(h2h_match.group(4))
+            wb, db, lb = int(h2h_match.group(6)), int(h2h_match.group(7)), int(h2h_match.group(8))
+            if name_a == request.home_team:
+                h2h_home_wins, h2h_draws, h2h_home_losses = wa, da, la
+            else:
+                h2h_home_wins, h2h_draws, h2h_home_losses = wb, db, lb
+    else:
+        en_h2h_match = _EN_H2H_WDL_RE.search(text)
+        if en_h2h_match:
+            if _english_h2h_attached_to_team_pair(en_h2h_match, text, request.home_team, request.away_team, home_en, away_en):
+                h2h_home_wins = int(en_h2h_match.group("home_wins"))
+                h2h_draws = int(en_h2h_match.group("draws"))
+                h2h_home_losses = int(en_h2h_match.group("away_wins"))
+
+    return _draw_risk_from_signals(
+        home_rec,
+        away_rec,
+        h2h_home_wins,
+        h2h_draws,
+        h2h_home_losses,
+    )
 
 
 def _squad_score_from_absences(home_abs: int | None, away_abs: int | None) -> float:
@@ -457,6 +595,63 @@ def _score_en_form(text: str, request: FootballOsintJobRequest) -> float:
 
     raw = (home_ppg - away_ppg) * 0.04
     return max(-0.04, min(0.04, round(raw, 3)))
+
+
+def _english_h2h_attached_to_team_pair(
+    match: re.Match[str],
+    text: str,
+    home_name: str,
+    away_name: str,
+    home_en: str,
+    away_en: str,
+) -> bool:
+    """Accept English H2H counts only when the matchup is immediately attached."""
+    prefix = text[: match.start()].rstrip()
+    sentence_start = max(prefix.rfind(mark) for mark in (".", "!", "?", ";", ",", "\n", "。", "，"))
+    attached_prefix = prefix[sentence_start + 1 :]
+    return _team_pair_tail_matches(attached_prefix, home_name, away_name, home_en, away_en)
+
+
+
+def _team_pair_tail_matches(
+    text: str,
+    home_name: str,
+    away_name: str,
+    home_en: str,
+    away_en: str,
+) -> bool:
+    """Return True when the text immediately before H2H ends with the matchup."""
+    normalized = _normalize_match_text(text)
+    if not normalized:
+        return False
+
+    home_tokens = [_normalize_match_text(name) for name in (home_name, home_en) if name]
+    away_tokens = [_normalize_match_text(name) for name in (away_name, away_en) if name]
+    connectors = (" ", " vs ", " v ", " and ", " against ", " 对 ")
+    for home in dict.fromkeys(token for token in home_tokens if token):
+        for away in dict.fromkeys(token for token in away_tokens if token):
+            if home == away:
+                continue
+            for connector in connectors:
+                if normalized.endswith(f"{home}{connector}{away}") or normalized.endswith(f"{away}{connector}{home}"):
+                    return True
+    return False
+
+
+def _normalize_match_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\u4e00-\u9fff]+", " ", text.lower())).strip()
+
+def _contains_team_pair(
+    text: str,
+    home_name: str,
+    away_name: str,
+    home_en: str,
+    away_en: str,
+) -> bool:
+    lower = text.lower()
+    home_tokens = [name.lower() for name in (home_name, home_en) if name]
+    away_tokens = [name.lower() for name in (away_name, away_en) if name]
+    return any(token in lower for token in home_tokens) and any(token in lower for token in away_tokens)
 
 
 def _fuzzy_match_record(

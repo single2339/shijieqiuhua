@@ -69,11 +69,26 @@ def predict(
 
     home_impact = sum(f.impact * f.weight for f in factors if f.enabled and f.direction == "home")
     away_impact = sum(abs(f.impact) * f.weight for f in factors if f.enabled and f.direction == "away")
-    uncertainty = sum(abs(f.impact) * f.weight for f in factors if f.group == "uncertainty")
+    draw_pressure = sum(
+        f.impact * f.weight
+        for f in factors
+        if f.enabled and f.factor_id == "uncertainty.draw_risk" and f.direction == "draw"
+    )
+    uncertainty = sum(
+        abs(f.impact) * f.weight
+        for f in factors
+        if f.group == "uncertainty" and f.factor_id != "uncertainty.draw_risk"
+    )
     edge = home_impact - away_impact
 
     if not has_fundamental_signal:
         lean = "info_insufficient"
+    elif draw_pressure >= 0.012 and abs(edge) <= 0.025:
+        lean = "draw"
+    elif draw_pressure >= 0.012 and 0 < edge <= 0.055:
+        lean = "home_or_draw"
+    elif draw_pressure >= 0.012 and -0.055 <= edge < 0:
+        lean = "away_or_draw"
     elif abs(edge) < 0.01 and home_impact > 0 and away_impact > 0:
         # Both sides have signals and the edge is near zero — this is a
         # genuinely balanced match, not a "we don't know" scenario.

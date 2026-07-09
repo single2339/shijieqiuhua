@@ -68,6 +68,62 @@ def test_history_list_respects_days_filter(tmp_db, monkeypatch):
     assert get_history_list(days=30) == []
 
 
+def test_history_list_groups_by_match_key_and_hides_raw_free_text(tmp_db):
+    mk = "巴西|日本|06-30 01:00"
+    for job_id, question_id, primary in (
+        ("job_primary", "fulltime_score", 1),
+        ("job_detail", "free_text", 0),
+    ):
+        _insert_record(tmp_db, job_id=job_id, home="巴西", away="日本", kickoff="06-30 01:00")
+        tmp_db.execute(
+            """
+            UPDATE prediction_record
+            SET match_key=?, question_kind=?, question_id=?, question_hash='abc123',
+                warm_window='t-2h', record_role=?, stats_primary=?
+            WHERE job_id=?
+            """,
+            (mk, "free_text" if question_id == "free_text" else "preset",
+             question_id, "stats_primary" if primary else "history_detail", primary, job_id),
+        )
+    tmp_db.commit()
+
+    from backend.football_osint.history import get_history_list
+    rows = get_history_list(days=30)
+
+    assert len(rows) == 1
+    assert rows[0]["match_key"] == mk
+    assert rows[0]["primary_job_id"] == "job_primary"
+    assert rows[0]["detail_count"] == 2
+    assert "question" not in rows[0]
+
+
+def test_history_detail_includes_metadata_and_tolerates_malformed_scoreline(tmp_db):
+    _insert_record(tmp_db, job_id="job_bad_band")
+    tmp_db.execute(
+        """
+        UPDATE prediction_record
+        SET predicted_scoreline_band='not-json',
+            match_key='曼城|利物浦|2026-06-25 19:00',
+            question_kind='preset',
+            question_id='fulltime_score',
+            warm_window='t-2h',
+            record_role='stats_primary',
+            stats_primary=1
+        WHERE job_id='job_bad_band'
+        """
+    )
+    tmp_db.commit()
+
+    from backend.football_osint.history import get_history_detail
+    rec = get_history_detail("job_bad_band", paid=False)["record"]
+
+    assert rec["predicted_scoreline_band"] == []
+    assert rec["match_key"] == "曼城|利物浦|2026-06-25 19:00"
+    assert rec["question_id"] == "fulltime_score"
+    assert rec["warm_window"] == "t-2h"
+    assert rec["record_role"] == "stats_primary"
+
+
 # ── get_history_detail ────────────────────────────────────────────────────────
 
 def test_history_detail_returns_none_for_missing(tmp_db):

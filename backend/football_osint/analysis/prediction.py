@@ -14,6 +14,7 @@ PRD §4.1 contract; do not break PredictionResult shape.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from math import exp, factorial
 
 from ..models import (
     FactorImpact,
@@ -26,6 +27,7 @@ from ..models import (
 # (no year). Both are Beijing time by convention elsewhere in this package.
 _CST = timezone(timedelta(hours=8))
 _KICKOFF_FORMATS = ("%Y-%m-%d %H:%M", "%m-%d %H:%M")
+_DRAW_PRESSURE_LEAN_THRESHOLD = 0.012
 
 
 def _hours_until_kickoff(kickoff_at: str) -> float | None:
@@ -83,11 +85,11 @@ def predict(
 
     if not has_fundamental_signal:
         lean = "info_insufficient"
-    elif draw_pressure >= 0.012 and abs(edge) <= 0.025:
+    elif draw_pressure >= _DRAW_PRESSURE_LEAN_THRESHOLD and abs(edge) <= 0.025:
         lean = "draw"
-    elif draw_pressure >= 0.012 and 0 < edge <= 0.055:
+    elif draw_pressure >= _DRAW_PRESSURE_LEAN_THRESHOLD and 0 < edge <= 0.055:
         lean = "home_or_draw"
-    elif draw_pressure >= 0.012 and -0.055 <= edge < 0:
+    elif draw_pressure >= _DRAW_PRESSURE_LEAN_THRESHOLD and -0.055 <= edge < 0:
         lean = "away_or_draw"
     elif abs(edge) < 0.01 and home_impact > 0 and away_impact > 0:
         # Both sides have signals and the edge is near zero — this is a
@@ -143,7 +145,7 @@ def predict(
             "draw": band(draw_mid),
             "away_win": band(away_mid),
         },
-        scoreline_band=[] if lean == "info_insufficient" else _scoreline_band(lean, edge),
+        scoreline_band=[] if lean == "info_insufficient" else _scoreline_band(lean, edge, factors, draw_pressure),
         drivers=drivers,
         uncertainties=uncertainties[:4],
     )
@@ -154,26 +156,112 @@ def band(mid: float) -> tuple[float, float]:
     return (round(max(0.0, mid - 0.04), 2), round(min(1.0, mid + 0.04), 2))
 
 
-def _scoreline_band(lean: str, edge: float) -> list[str]:
-    """Deterministic scoreline buckets from lean and edge strength.
+def _scoreline_band(
+    lean: str,
+    edge: float,
+    factors: list[FactorImpact],
+    draw_pressure: float,
+) -> list[str]:
+    """Rank likely scorelines with a small Poisson grid.
 
-    This is still a conservative baseline, not a Poisson model: without reliable
-    goal-rate inputs, vary by edge magnitude so strong favourites do not share
-    the same band as tiny home/away edges.
+    The pipeline does not yet have reliable per-team xG. Use a conservative
+    baseline total, then adjust it with signals already present in the factor
+    set: youth volatility raises tempo/variance, bad weather and draw pressure
+    lower tempo, and the directional edge splits expected goals between teams.
     """
+    youth_volatility = any(
+        f.enabled and f.factor_id == "uncertainty.youth_volatility" for f in factors
+    )
+    weather_drag = sum(
+        abs(f.impact) * f.weight
+        for f in factors
+        if f.enabled and f.factor_id == "weather.exposure" and f.impact < 0
+    )
+
+    total_goals = 2.45
+    if youth_volatility:
+        total_goals += 0.55
+    if weather_drag:
+        total_goals -= 0.35
+    if draw_pressure > 0:
+        total_goals -= min(0.15, draw_pressure * 12.5)
     if lean == "draw":
-        return ["1-1", "0-0", "1-0", "0-1"]
+        total_goals -= 0.10
+    total_goals = max(1.65, min(3.25, total_goals))
 
-    strength = abs(edge)
+    spread = min(1.15, abs(edge) * 8.0)
+    if lean in {"home_or_draw", "away_or_draw"}:
+        spread *= 0.65
+    if lean == "draw":
+        spread = 0.0
+
+    home_lambda = total_goals / 2.0
+    away_lambda = total_goals / 2.0
     if edge >= 0:
-        if strength >= 0.12:
-            return ["2-0", "2-1", "1-0"]
-        if strength >= 0.06:
-            return ["2-1", "1-0", "1-1"]
-        return ["1-0", "1-1", "0-0"]
+        home_lambda += spread / 2.0
+        away_lambda -= spread / 2.0
+    else:
+        home_lambda -= spread / 2.0
+        away_lambda += spread / 2.0
 
-    if strength >= 0.12:
-        return ["0-2", "1-2", "0-1"]
-    if strength >= 0.06:
-        return ["1-2", "0-1", "1-1"]
-    return ["0-1", "1-1", "0-0"]
+    ranked: list[tuple[float, str]] = []
+    for home_goals in range(5):
+        for away_goals in range(5):
+            probability = _poisson_probability(home_lambda, home_goals) * _poisson_probability(
+                away_lambda, away_goals
+            )
+            probability *= _lean_score_multiplier(lean, edge, home_goals, away_goals)
+            if draw_pressure > 0:
+                if home_goals == away_goals:
+                    probability *= 1.0 + min(1.8, draw_pressure * 130.0)
+                elif abs(home_goals - away_goals) >= 2:
+                    probability *= 0.80
+            if youth_volatility and home_goals + away_goals >= 3:
+                probability *= 1.18
+            if youth_volatility and home_goals == 2 and away_goals == 2:
+                probability *= 1.20
+            if weather_drag:
+                if home_goals + away_goals <= 1:
+                    probability *= 1.25
+                if home_goals + away_goals >= 3:
+                    probability *= 0.70
+            ranked.append((probability, f"{home_goals}-{away_goals}"))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [score for _, score in ranked[:4]]
+
+
+def _poisson_probability(expected_goals: float, goals: int) -> float:
+    return exp(-expected_goals) * expected_goals**goals / factorial(goals)
+
+
+def _lean_score_multiplier(lean: str, edge: float, home_goals: int, away_goals: int) -> float:
+    goal_diff = home_goals - away_goals
+    strength = abs(edge)
+
+    if lean == "draw":
+        if goal_diff == 0:
+            return 1.90
+        return 0.55 if abs(goal_diff) == 1 else 0.25
+
+    if lean == "home":
+        if goal_diff > 0:
+            return 1.74 if strength >= 0.12 and goal_diff >= 2 else 1.45
+        return 0.55 if goal_diff == 0 else 0.25
+
+    if lean == "away":
+        if goal_diff < 0:
+            return 1.74 if strength >= 0.12 and goal_diff <= -2 else 1.45
+        return 0.55 if goal_diff == 0 else 0.25
+
+    if lean == "home_or_draw":
+        if goal_diff == 0:
+            return 1.44
+        return 1.25 if goal_diff > 0 else 0.35
+
+    if lean == "away_or_draw":
+        if goal_diff == 0:
+            return 1.44
+        return 1.25 if goal_diff < 0 else 0.35
+
+    return 1.0

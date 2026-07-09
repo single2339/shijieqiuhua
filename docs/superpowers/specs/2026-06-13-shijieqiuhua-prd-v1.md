@@ -29,13 +29,15 @@ trace_root: docs/superpowers/specs/2026-06-12-prd-redo/
 
 完整推导过程在 `docs/superpowers/specs/2026-06-12-prd-redo/` 目录的 10 份阶段文档中（01-10），本 PRD 是终态；如有歧义以本 PRD 为准。
 
+> **2026-06-30 修订**：缓存预热、`prediction_record`、公开命中率、赛后历史与 `/history` / `/compare` 数据质量，以 `docs/superpowers/specs/2026-06-30-football-cache-track-record-prd-addendum.md` 为准；本文其它产品定位、合规边界和 v1 范围仍有效。
+
 ---
 
 ## 1. 背景与定位
 
 ### 1.1 业务情境
 
-`shijieqiuhua` 子项目从 OSINT 网络分支而来，目标是为"懂球但不擅长读数据"的用户提供赛前研判工作台。当前代码已形成可运行闭环：React 19 + Vite 前端、FastAPI 后端、SQLite 鉴权/权益、`backend/football_osint/` 研判流水线、公开赛程和公开战绩、付费码解锁完整研判。生产轻量入口为 `backend/app_football.py`；`backend/main.py` 仍是 OSINT Network 总入口，也挂载足球路由但不负责足球预热任务。
+`shijieqiuhua` 子项目从 OSINT 网络分支而来，目标是为"懂球但不擅长读数据"的用户提供赛前研判工作台。当前代码已形成可运行闭环：React 19 + Vite 前端、FastAPI 后端、SQLite 鉴权/权益、`backend/football_osint/` 研判流水线、公开赛程和公开战绩、付费码解锁完整研判。生产入口为 `backend/app_football.py`；`backend/main.py` 仅保留为兼容 re-export，不再承载通用 OSINT/Horizon 平台运行。
 
 本次 PRD 重梳触发于 commit `8c09e12`：前端从"多组件 + 访问控制"压回"单页 mock"，后端出现哈希伪造的"近期状态信号"和被当成证据的"采集计划"占位项。已通过修复 PR 解决 SRF / 资源耗尽 / 内存泄漏 / 伪造证据等技术债，但暴露出**产品方向、范围与交付优先级未对齐**的根本问题。
 
@@ -274,7 +276,7 @@ backend/football_osint/
 
 服务入口：
 - `backend/app_football.py`：世界球花生产/轻量入口，挂载 auth/admin/billing/football 路由，启动 `warm_cache.warm_loop()` 和 `track_record.backfill_loop()`。
-- `backend/main.py`：OSINT Network 总入口，挂载足球路由供一体化运行；后台采集由 `OSINT_ROLE` 控制，但不启动足球 warm loop。
+- `backend/main.py`：兼容入口，仅 re-export `backend.app_football.app`；不再启动通用 OSINT/Horizon 采集栈，也不通过 `OSINT_ROLE` 控制后台采集。
 
 ### 5.2 比赛 profile 规则
 
@@ -510,7 +512,7 @@ CREATE TABLE prediction_record (
 
 | ID | 项 | 说明 |
 |---|---|---|
-| OPS-1 | systemd unit + MemoryMax=1.8G + 自动重启 | 世界球花建议跑 `backend.app_football:app`；总平台可跑 `backend.main:app` |
+| OPS-1 | systemd unit + MemoryMax=1.8G + 自动重启 | 世界球花运行 `backend.app_football:app`；`backend.main:app` 仅用于兼容旧 import/deploy 路径 |
 | OPS-2 | runbook 简版：DeepSeek 503 / 数据源全挂 / bronze 写失败 | `docs/runbook-v1.md` |
 | OPS-3 | 故障 5 分钟定位：日志按 `request_id` 索引 | 日志查询脚本 |
 | OPS-4 | admin CLI（详见 §8.1） | `python -m backend.admin` |

@@ -75,6 +75,14 @@ app.include_router(football_osint_router)
 app.include_router(billing_router)
 
 
+from backend.football import FootballAnalysisRequest, FootballAnalysisResponse, analyze_football_match
+
+
+@app.post("/api/football/analyze", response_model=FootballAnalysisResponse)
+async def analyze_football(request: FootballAnalysisRequest):
+    return analyze_football_match(request)
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "shijieqiuhua"}

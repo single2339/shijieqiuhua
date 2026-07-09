@@ -27,7 +27,20 @@ export function formatTrackRecordSummary(stats: TrackRecordStats): string | null
   return `近 ${stats.settled} 场比赛 · 方向命中率 ${leanPct}% · 比分命中率 ${scorePct}%`
 }
 
-const LEAN_LABEL: Record<string, string> = { home: '主胜', away: '主负', draw: '平局' }
+const LEAN_LABEL: Record<string, string> = {
+  home: '主胜',
+  away: '客胜',
+  draw: '平局',
+  home_or_draw: '主胜或平',
+  away_or_draw: '客胜或平',
+}
+
+export function formatBestLeanSummary(stats: TrackRecordStats): string | null {
+  if (!stats.best_lean) return null
+  const pct = Math.round(stats.best_lean.accuracy * 100)
+  const label = LEAN_LABEL[stats.best_lean.lean] ?? stats.best_lean.lean
+  return `胜率最高：${label} · ${stats.best_lean.settled} 场命中率 ${pct}%`
+}
 
 // Public track-record proof section — promoted from a collapsed hero link to
 // its own full-bleed section so it can carry real conversion weight.
@@ -45,6 +58,7 @@ function TrackRecordProof() {
 
   const leanPct = Math.round(stats.lean_accuracy * 100)
   const scorePct = Math.round(stats.scoreline_accuracy * 100)
+  const bestLeanSummary = formatBestLeanSummary(stats)
 
   return (
     <section className="sqh-proof" id="record">
@@ -54,7 +68,7 @@ function TrackRecordProof() {
           <h2 className="sqh-proof-title">每一条判断，事后都对得上账</h2>
           <p className="sqh-proof-sub">
             我们记录每一场给出明确方向的研判，比赛结束后用第三方数据源核对实际结果。
-            模糊倾向与「信息不足」不计入命中率统计——拒绝靠宽松口径粉饰战绩。
+            主胜、客胜、平局和双选方向全部入账；「信息不足」不计入命中率统计——拒绝靠宽松口径粉饰战绩。
           </p>
         </div>
 
@@ -62,12 +76,22 @@ function TrackRecordProof() {
           <div className="sqh-proof-stat"><b className="mono">{stats.settled}</b><span>场已结算判断</span></div>
           <div className="sqh-proof-stat sqh-proof-stat--accent"><b className="mono">{leanPct}%</b><span>方向命中率</span></div>
           <div className="sqh-proof-stat"><b className="mono">{scorePct}%</b><span>比分区间命中率</span></div>
+          {stats.best_lean && (
+            <div className="sqh-proof-stat sqh-proof-stat--best">
+              <b className="mono">{Math.round(stats.best_lean.accuracy * 100)}%</b>
+              <span>{LEAN_LABEL[stats.best_lean.lean] ?? stats.best_lean.lean} 胜率最高</span>
+            </div>
+          )}
         </div>
 
         <div className="sqh-proof-rule">
           <Scales size={18} weight="duotone" />
-          <p>只统计 <b>主胜 / 主负 / 平局</b> 这类明确方向的判断；遇到模糊倾向或证据不足时我们直接说「信息不足」——这部分不参与命中率计算，也不会拉低或美化数字。</p>
+          <p>统计口径覆盖 <b>主胜 / 客胜 / 平局 / 主胜或平 / 客胜或平</b>；遇到证据不足时我们直接说「信息不足」——这部分不参与命中率计算，也不会拉低或美化数字。</p>
         </div>
+
+        {bestLeanSummary && (
+          <div className="sqh-proof-best">{bestLeanSummary}</div>
+        )}
 
         <div className="sqh-proof-cards-head"><h3>最近战绩</h3></div>
         <div className="sqh-proof-cards">

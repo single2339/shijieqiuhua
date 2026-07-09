@@ -206,7 +206,7 @@ depends_on:
 | 微信小程序提审规则（[小程序运营规范](https://developers.weixin.qq.com/miniprogram/product/)） | ⏳ D4 阅读，重点找"足球预测"相关条款 |
 | 微信支付商户号申请条件 | ⏳ D4 阅读，决定 v1.5 路径可行性 |
 | 网信办 + 广告法关于足球预测/赛事分析的合规边界 | ⏳ D4 阅读 |
-| osint-network 主项目 `docs/01-compliance-and-data-classification.md` | ⏳ D4 阅读，看是否能复用合规框架 |
+| 合规参考 | ⏳ D4 阅读，改以当前 PRD/验收标准与公开足球内容合规边界为准 |
 
 ---
 

@@ -13,7 +13,17 @@ CREATE TABLE IF NOT EXISTS prediction_record (
     lean_correct INTEGER,
     scoreline_hit INTEGER,
     settled_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    match_key TEXT NOT NULL DEFAULT '',
+    question_kind TEXT NOT NULL DEFAULT 'legacy',
+    question_id TEXT NOT NULL DEFAULT 'legacy_unknown',
+    question_hash TEXT,
+    warm_window TEXT NOT NULL DEFAULT 'legacy_unknown',
+    cache_source TEXT NOT NULL DEFAULT 'migration',
+    record_role TEXT NOT NULL DEFAULT 'legacy_pending',
+    stats_primary INTEGER NOT NULL DEFAULT 0,
+    excluded_reason TEXT NOT NULL DEFAULT '',
+    created_from_job_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_prediction_record_settled ON prediction_record(settled_at);

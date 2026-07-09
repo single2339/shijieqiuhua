@@ -1635,6 +1635,8 @@
 .sqh-proof-stat b { font-size: clamp(34px,5vw,52px); font-weight: 800; line-height: 1; }
 .sqh-proof-stat span { font-size: 13px; color: rgba(248,241,223,.65); }
 .sqh-proof-stat--accent b { color: #c9a86a; }
+.sqh-proof-stat--best b { color: #9fe6a4; }
+.sqh-proof-stat--best span { color: rgba(248,241,223,.78); }
 
 .sqh-proof-rule {
   display: flex; gap: 12px; align-items: flex-start; margin-top: 44px;
@@ -1644,6 +1646,17 @@
 .sqh-proof-rule svg { flex: 0 0 auto; margin-top: 2px; color: #c9a86a; }
 .sqh-proof-rule p { font-size: 13px; line-height: 1.8; color: rgba(248,241,223,.78); }
 .sqh-proof-rule p b { color: #f8f1df; }
+.sqh-proof-best {
+  width: fit-content;
+  margin: 18px auto 0;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(159, 230, 164, .12);
+  border: 1px solid rgba(159, 230, 164, .24);
+  color: #c8f4ca;
+  font-size: 12.5px;
+  font-weight: 700;
+}
 
 .sqh-proof-cards-head { display: flex; align-items: baseline; justify-content: center; margin-top: 56px; }
 .sqh-proof-cards-head h3 { font-size: 18px; font-weight: 700; }

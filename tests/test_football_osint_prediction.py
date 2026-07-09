@@ -74,6 +74,32 @@ def _draw_risk_factor(*, impact: float = 0.10, weight: float = 0.18) -> FactorIm
         confidence=0.45,
     )
 
+def _youth_volatility_factor() -> FactorImpact:
+    return FactorImpact(
+        factor_id="uncertainty.youth_volatility",
+        label="青年赛事波动",
+        group="uncertainty",
+        enabled=True,
+        weight=0.20,
+        impact=-0.02,
+        direction="neutral",
+        confidence=0.82,
+    )
+
+
+def _weather_factor(*, impact: float = -0.05) -> FactorImpact:
+    return FactorImpact(
+        factor_id="weather.exposure",
+        label="天气影响",
+        group="weather",
+        enabled=True,
+        weight=0.08,
+        impact=impact,
+        direction="neutral",
+        confidence=0.45,
+    )
+
+
 
 def test_draw_pressure_turns_tiny_favourite_into_draw():
     result = predict(
@@ -415,6 +441,53 @@ def test_scoreline_band_varies_by_edge_strength_not_only_direction():
     assert narrow_home.scoreline_band != strong_home.scoreline_band
     assert "2-0" in strong_home.scoreline_band
     assert "0-2" in strong_away.scoreline_band
+
+
+def test_scoreline_band_uses_volatility_not_only_lean_and_edge():
+    mature = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.04)])
+    youth = predict(
+        _request("2026-06-20 20:00"),
+        [_direction_factor(impact=0.04), _youth_volatility_factor()],
+    )
+
+    assert mature.lean == youth.lean
+    assert mature.scoreline_band != youth.scoreline_band
+    assert any(score in youth.scoreline_band for score in {"2-2", "3-1", "2-1"})
+
+
+def test_scoreline_band_uses_low_tempo_weather_signal():
+    normal = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.04)])
+    low_tempo = predict(
+        _request("2026-06-20 20:00"),
+        [_direction_factor(impact=0.04), _weather_factor()],
+    )
+
+    assert normal.lean == low_tempo.lean
+    assert normal.scoreline_band != low_tempo.scoreline_band
+    assert "0-0" in low_tempo.scoreline_band[:3]
+
+
+def test_scoreline_band_uses_draw_risk_even_when_lean_stays_home():
+    baseline = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.18)])
+    draw_risk = predict(
+        _request("2026-06-20 20:00"),
+        [_direction_factor(impact=0.18), _draw_risk_factor()],
+    )
+
+    assert baseline.lean == draw_risk.lean == "home"
+    assert baseline.scoreline_band != draw_risk.scoreline_band
+    assert "1-1" in draw_risk.scoreline_band
+
+def test_scoreline_band_uses_subthreshold_draw_risk_without_changing_lean():
+    baseline = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.18)])
+    draw_context = predict(
+        _request("2026-06-20 20:00"),
+        [_direction_factor(impact=0.18), _draw_risk_factor(impact=0.06)],
+    )
+
+    assert baseline.lean == draw_context.lean == "home"
+    assert draw_context.scoreline_band != baseline.scoreline_band
+    assert any(score in draw_context.scoreline_band for score in {"0-0", "1-1"})
 
 
 def test_assessment_uses_driver_labels_instead_of_falling_back_to_generic_source():

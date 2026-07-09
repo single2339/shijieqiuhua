@@ -114,7 +114,7 @@ def parse_matches(payload: dict) -> list[Fixture]:
         kickoff = _parse_utc(m.get("utcDate"))
         if kickoff is None:
             continue
-        full_time = (m.get("score") or {}).get("fullTime") or {}
+        home_score, away_score = _regulation_score(m.get("score") or {})
         league_en = _competition(m)
         home_en = _team(m, "homeTeam")
         away_en = _team(m, "awayTeam")
@@ -128,13 +128,27 @@ def parse_matches(payload: dict) -> list[Fixture]:
             home_team=name_map.get(home_en, home_en),
             away_team=name_map.get(away_en, away_en),
             status=_STATUS_MAP.get(m.get("status", ""), "scheduled"),
-            home_score=full_time.get("home"),
-            away_score=full_time.get("away"),
+            home_score=home_score,
+            away_score=away_score,
             provider_match_id=match_id,
             home_provider_id=home_provider_id,
             away_provider_id=away_provider_id,
         ))
     return fixtures
+
+
+def _regulation_score(score: dict) -> tuple[int | None, int | None]:
+    """Return the 90-minute score, excluding extra time and penalties."""
+    regular_time = score.get("regularTime") or {}
+    if regular_time.get("home") is not None and regular_time.get("away") is not None:
+        return regular_time.get("home"), regular_time.get("away")
+
+    duration = score.get("duration")
+    if duration and duration != "REGULAR":
+        return None, None
+
+    full_time = score.get("fullTime") or {}
+    return full_time.get("home"), full_time.get("away")
 
 
 def upcoming(fixtures: list[Fixture]) -> list[Fixture]:

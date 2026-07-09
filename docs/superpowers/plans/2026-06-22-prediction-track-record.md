@@ -1,5 +1,7 @@
 # Prediction Track Record Implementation Plan
 
+> **已被 2026-06-30 PRD 修订补丁 supersede**：本文保留为历史 implementation plan，不再直接作为开工依据。新的实现入口是 `docs/superpowers/specs/2026-06-30-football-cache-track-record-prd-addendum.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a public "prediction vs actual result" track record — storage, auto-backfill, a stats API, and a landing-page stat strip — so the product can advertise a verifiable hit-rate.

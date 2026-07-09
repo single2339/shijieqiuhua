@@ -84,6 +84,8 @@ def get_db() -> sqlite3.Connection:
             sql_path = _MIGRATIONS_DIR / migration
             if sql_path.exists():
                 _local.conn.executescript(sql_path.read_text(encoding="utf-8"))
+        from backend.football_osint.schema import ensure_schema
+        ensure_schema(_local.conn)
     return _local.conn
 
 

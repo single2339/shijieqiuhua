@@ -1,0 +1,27 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "世界球花 / OSINT Network 项目介绍 Deck": {
+      "versions": [
+        {
+          "path": "Project Introduction Deck.html",
+          "createdAt": "2026-07-09T13:55:48.397Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "世界球花 / OSINT Network 项目介绍 PPTX": {
+      "versions": [
+        {
+          "path": "osint-network-intro.pptx",
+          "createdAt": "2026-07-09T13:56:02.500Z",
+          "status": "needs-review"
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-07-09T13:55:48.398Z",
+  "updatedAt": "2026-07-09T13:56:02.501Z"
+}

@@ -24,6 +24,7 @@ import PostMatchReview from './shijieqiuhua/components/PostMatchReview'
 import ComparePanel from './shijieqiuhua/components/ComparePanel'
 import IdleHint from './shijieqiuhua/components/IdleHint'
 import { useStagedProgress } from './shijieqiuhua/useStagedProgress'
+import { dedupeHistoryRecords } from './shijieqiuhua/historyRecords'
 import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
@@ -150,6 +151,10 @@ export default function App() {
   const fixtureLeagues = useMemo(
     () => [...new Set(matches.map(m => m.league.split('·')[0].trim()))].slice(0, 4),
     [matches],
+  )
+  const displayedHistoryRecords = useMemo(
+    () => dedupeHistoryRecords(historyRecords),
+    [historyRecords],
   )
 
   function stopPoll() { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
@@ -308,7 +313,7 @@ export default function App() {
         <aside className="sqh-panel sqh-match-rail" aria-label="赛事列表">
           <div className="sqh-rail-hd">
             <div className="sqh-section-title"><Clock size={16} weight="duotone" /><span>{historyMode ? '历史回顾' : '赛程'}</span></div>
-            <div className="sqh-rail-count mono">{historyMode ? `${historyRecords.length} 场` : `${matches.length} 场`}</div>
+            <div className="sqh-rail-count mono">{historyMode ? `${displayedHistoryRecords.length} 场` : `${matches.length} 场`}</div>
           </div>
           {user && (
             <div className="sqh-rail-mode">
@@ -323,10 +328,10 @@ export default function App() {
             <div className="sqh-rail-list">
               {historyLoading ? (
                 <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>加载中…</span>
-              ) : historyRecords.length === 0 ? (
+              ) : displayedHistoryRecords.length === 0 ? (
                 <span style={{ fontSize: 12, color: '#6d725f', padding: 8 }}>暂无已结算记录</span>
               ) : (
-                historyRecords.map(r => (
+                displayedHistoryRecords.map(r => (
                   <div key={r.job_id} className="sqh-hist-check-row">
                     {userTier === 'paid' && (
                       <input type="checkbox" className="sqh-hist-checkbox"

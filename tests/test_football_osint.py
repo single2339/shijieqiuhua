@@ -45,7 +45,19 @@ def test_osint_prediction_runs_without_api_keys(monkeypatch, tmp_path):
     assert not any(ev.topic == "collection.plan" for ev in job.evidence)
 
 
-def test_info_insufficient_job_has_data_quality_reasons(tmp_path):
+def test_info_insufficient_job_has_data_quality_reasons(monkeypatch, tmp_path):
+    from backend.football_osint import pipeline
+
+    monkeypatch.setattr(pipeline, "_collect_farich_foot_sources", lambda request, evidence, sources: None)
+    monkeypatch.setattr(pipeline, "_collect_one_weather", lambda request, evidence: (None, "test disabled"))
+    monkeypatch.setattr(
+        pipeline,
+        "_collect_search_sources",
+        lambda request, evidence, sources: pipeline.data_quality_module.SearchQualityStats(),
+    )
+    monkeypatch.setattr(pipeline.rss_adapter, "collect_all", lambda request, evidence: [])
+    monkeypatch.setattr(pipeline, "_collect_football_data_stats", lambda request, evidence, sources: None)
+
     job = run_prediction_sync(
         {
             "home_team": "Japan U23",
@@ -403,7 +415,6 @@ def test_osint_prediction_rejects_anonymous(monkeypatch):
 
 def test_osint_prediction_returns_job_for_paid_user(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    monkeypatch.setenv("OSINT_ROLE", "api")
     monkeypatch.delenv("BING_API_KEY", raising=False)
     _bypass_paywall(monkeypatch)
 
@@ -433,7 +444,6 @@ def test_osint_prediction_returns_job_for_paid_user(monkeypatch):
 
 def test_osint_answer_rejects_unrelated_question(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    monkeypatch.setenv("OSINT_ROLE", "api")
     _bypass_paywall(monkeypatch)
 
     from backend.main import app
@@ -460,7 +470,6 @@ def test_osint_answer_rejects_unrelated_question(monkeypatch):
 
 def test_osint_answer_handles_twelve_concurrent_related_requests(monkeypatch, tmp_path):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    monkeypatch.setenv("OSINT_ROLE", "api")
     monkeypatch.setenv("FOOTBALL_OSINT_LIGHTPANDA_BIN", str(tmp_path / "missing-lp-fetch-md"))
     _bypass_paywall(monkeypatch)
 

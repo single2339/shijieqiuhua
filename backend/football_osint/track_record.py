@@ -21,7 +21,8 @@ from backend.football_osint.storage import DEFAULT_STORAGE_ROOT
 log = logging.getLogger(__name__)
 
 _TRACKABLE_LEANS = {"home", "away", "draw", "home_or_draw", "away_or_draw", "info_insufficient"}
-_STATS_LEANS = {"home", "away", "draw"}
+_STATS_LEANS = {"home", "away", "draw", "home_or_draw", "away_or_draw"}
+_LEAN_ORDER = {lean: i for i, lean in enumerate(("home", "away", "draw", "home_or_draw", "away_or_draw"))}
 _MIN_SAMPLE_DEFAULT = 20
 _SETTLE_AFTER_HOURS = 3  # only attempt to record once kickoff is clearly in the past
 
@@ -30,37 +31,177 @@ def _norm(name: str) -> str:
     return name.strip().lower()
 
 
-def record_if_definite(job: FootballOsintJob, *, conn: sqlite3.Connection | None = None) -> bool:
-    """Insert a prediction_record row if the completed job should appear in history.
-
-    Hit-rate stats later exclude ``info_insufficient`` rows, but history still
-    records them so users can review that the system declined to form a lean.
-    """
+def record_if_definite(
+    job: FootballOsintJob,
+    *,
+    conn: sqlite3.Connection | None = None,
+    metadata: dict | None = None,
+) -> bool:
+    """Insert a prediction_record row if the completed job should appear in history."""
     if job.status != FootballOsintJobStatus.COMPLETED:
         return False
     if job.prediction is None or job.prediction.lean not in _TRACKABLE_LEANS:
         return False
 
     c = conn or get_db()
+    meta = _record_metadata(job, metadata)
     try:
         c.execute(
             """
             INSERT INTO prediction_record
               (job_id, home_team, away_team, kickoff_at, competition,
-               predicted_lean, predicted_scoreline_band, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               predicted_lean, predicted_scoreline_band, created_at,
+               match_key, question_kind, question_id, question_hash,
+               warm_window, cache_source, record_role, stats_primary,
+               excluded_reason, created_from_job_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
             (
                 job.job_id, job.match.home_team, job.match.away_team,
                 job.match.kickoff_at, job.match.competition,
                 job.prediction.lean, json.dumps(job.prediction.scoreline_band, ensure_ascii=False),
-                job.created_at,
+                job.created_at, meta["match_key"], meta["question_kind"], meta["question_id"],
+                meta["question_hash"], meta["warm_window"], meta["cache_source"],
+                "history_detail", "", job.job_id,
             ),
         )
+        select_stats_primary(c, meta["match_key"])
         c.commit()
         return True
     except sqlite3.IntegrityError:
         return False  # already recorded
+
+
+def _record_metadata(job: FootballOsintJob, metadata: dict | None) -> dict:
+    from backend.football_osint import job_metadata
+
+    if metadata is None:
+        return {
+            "match_key": job_metadata.match_key(job.match.home_team, job.match.away_team, job.match.kickoff_at),
+            "question_kind": "legacy",
+            "question_id": "legacy_unknown",
+            "question_hash": None,
+            "warm_window": "legacy_unknown",
+            "cache_source": "migration",
+        }
+    return {
+        "match_key": metadata.get("match_key") or job_metadata.match_key(job.match.home_team, job.match.away_team, job.match.kickoff_at),
+        "question_kind": metadata.get("question_kind") or "legacy",
+        "question_id": metadata.get("question_id") or "legacy_unknown",
+        "question_hash": metadata.get("question_hash"),
+        "warm_window": metadata.get("warm_window") or "legacy_unknown",
+        "cache_source": metadata.get("cache_source") or "migration",
+    }
+
+
+def _load_request_metadata(job_dir: Path) -> dict | None:
+    path = job_dir / "request.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.warning("track_record: failed to parse %s", path)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+
+def select_stats_primary(conn: sqlite3.Connection, match_key_value: str) -> None:
+    rows = conn.execute(
+        """
+        SELECT job_id, predicted_lean, question_id, warm_window, created_at
+        FROM prediction_record
+        WHERE match_key=?
+        """,
+        (match_key_value,),
+    ).fetchall()
+    primary = _choose_stats_primary(rows)
+    stats_placeholders = ",".join("?" for _ in _STATS_LEANS)
+    conn.execute(
+        f"""
+        UPDATE prediction_record
+        SET stats_primary=0,
+            record_role='history_detail',
+            excluded_reason=CASE
+                WHEN predicted_lean NOT IN ({stats_placeholders}) THEN 'non_public_lean'
+                WHEN question_id NOT IN ('fulltime_score','legacy_unknown') THEN 'non_public_question'
+                ELSE 'duplicate_match'
+            END
+        WHERE match_key=?
+        """,
+        (*sorted(_STATS_LEANS), match_key_value),
+    )
+    if primary is not None:
+        conn.execute(
+            """
+            UPDATE prediction_record
+            SET stats_primary=1, record_role='stats_primary', excluded_reason=''
+            WHERE job_id=?
+            """,
+            (primary["job_id"],),
+        )
+
+
+def _choose_stats_primary(rows) -> sqlite3.Row | None:
+    candidates = [
+        row for row in rows
+        if row["predicted_lean"] in _STATS_LEANS
+        and row["question_id"] in {"fulltime_score", "legacy_unknown"}
+    ]
+    if not candidates:
+        return None
+
+    def rank(row) -> tuple[int, int, str]:
+        window_rank = {"t-2h": 3, "t-5h": 2, "on-demand": 1}.get(row["warm_window"], 0)
+        return (1 if row["question_id"] == "fulltime_score" else 0, window_rank, row["created_at"] or "")
+
+    return max(candidates, key=rank)
+
+
+def migrate_prediction_record_metadata(*, conn: sqlite3.Connection | None = None) -> dict[str, int]:
+    c = conn or get_db()
+    rows = c.execute("SELECT * FROM prediction_record").fetchall()
+    if not rows:
+        return {"matches_total": 0, "changed_rows": 0}
+
+    from backend.football_osint import job_metadata
+
+    changed_rows = 0
+    match_keys: set[str] = set()
+    for row in rows:
+        mk = row["match_key"] or job_metadata.match_key(row["home_team"], row["away_team"], row["kickoff_at"])
+        match_keys.add(mk)
+        needs_legacy_update = not row["match_key"] or row["record_role"] == "legacy_pending"
+        needs_created_from_update = row["created_from_job_id"] is None
+        if not needs_legacy_update and not needs_created_from_update:
+            continue
+        if not needs_legacy_update:
+            c.execute(
+                "UPDATE prediction_record SET created_from_job_id=COALESCE(created_from_job_id, job_id) WHERE job_id=?",
+                (row["job_id"],),
+            )
+            changed_rows += 1
+            continue
+        c.execute(
+            """
+            UPDATE prediction_record
+            SET match_key=?,
+                question_kind='legacy',
+                question_id='legacy_unknown',
+                warm_window='legacy_unknown',
+                cache_source='migration',
+                created_from_job_id=COALESCE(created_from_job_id, job_id)
+            WHERE job_id=?
+            """,
+            (mk, row["job_id"]),
+        )
+        changed_rows += 1
+
+    for mk in match_keys:
+        select_stats_primary(c, mk)
+    c.commit()
+    return {"matches_total": len(match_keys), "changed_rows": changed_rows}
 
 
 def _approx_kickoff(kickoff_at: str, created_at_iso: str) -> datetime:
@@ -89,7 +230,7 @@ def _approx_kickoff(kickoff_at: str, created_at_iso: str) -> datetime:
 
 
 def _resolve_one(home_team: str, away_team: str, kickoff_guess: datetime) -> tuple[int, int] | None:
-    """Look up the actual final score for one match.
+    """Look up the actual 90-minute score for one match.
 
     Tries football-data.org first, then falls back to the 体彩 API (free, no
     key needed).  ±2 day window + exact normalized name match.
@@ -180,6 +321,7 @@ def backfill_due(storage_root: str | Path | None = None) -> dict:
     """
     root = Path(storage_root) if storage_root else DEFAULT_STORAGE_ROOT
     conn = get_db()
+    migrate_prediction_record_metadata(conn=conn)
 
     already_recorded = {
         r["job_id"] for r in conn.execute("SELECT job_id FROM prediction_record").fetchall()
@@ -201,7 +343,8 @@ def backfill_due(storage_root: str | Path | None = None) -> dict:
         if kickoff_guess > now - timedelta(hours=_SETTLE_AFTER_HOURS):
             continue  # too early — match likely hasn't finished yet
 
-        if record_if_definite(job, conn=conn):
+        metadata = _load_request_metadata(status_path.parent)
+        if record_if_definite(job, conn=conn, metadata=metadata):
             recorded += 1
 
     settled = settle_pending(conn=conn)
@@ -216,7 +359,8 @@ def get_stats(*, conn: sqlite3.Connection | None = None, min_sample: int | None 
     stats_params = tuple(sorted(_STATS_LEANS))
     agg = c.execute(
         "SELECT COUNT(*) n, SUM(lean_correct) lc, SUM(scoreline_hit) sh "
-        f"FROM prediction_record WHERE settled_at IS NOT NULL AND predicted_lean IN ({stats_placeholders})",
+        f"FROM prediction_record WHERE stats_primary=1 AND settled_at IS NOT NULL "
+        f"AND predicted_lean IN ({stats_placeholders})",
         stats_params,
     ).fetchone()
     settled = agg["n"] or 0
@@ -226,15 +370,42 @@ def get_stats(*, conn: sqlite3.Connection | None = None, min_sample: int | None 
     recent_rows = c.execute(
         "SELECT home_team, away_team, kickoff_at, predicted_lean, predicted_scoreline_band, "
         "actual_home_score, actual_away_score, lean_correct, scoreline_hit "
-        f"FROM prediction_record WHERE settled_at IS NOT NULL AND predicted_lean IN ({stats_placeholders}) "
+        f"FROM prediction_record WHERE stats_primary=1 AND settled_at IS NOT NULL "
+        f"AND predicted_lean IN ({stats_placeholders}) "
         "ORDER BY settled_at DESC LIMIT ?",
         (*stats_params, recent_limit),
     ).fetchall()
+
+    by_lean_rows = c.execute(
+        "SELECT predicted_lean, COUNT(*) n, SUM(lean_correct) lc "
+        f"FROM prediction_record WHERE stats_primary=1 AND settled_at IS NOT NULL "
+        f"AND predicted_lean IN ({stats_placeholders}) "
+        "GROUP BY predicted_lean",
+        stats_params,
+    ).fetchall()
+    by_lean = sorted(
+        (
+            {
+                "lean": r["predicted_lean"],
+                "settled": r["n"],
+                "accuracy": round((r["lc"] or 0) / r["n"], 4),
+            }
+            for r in by_lean_rows
+            if r["n"]
+        ),
+        key=lambda item: (-item["accuracy"], -item["settled"], _LEAN_ORDER.get(item["lean"], 99)),
+    )
 
     return {
         "settled": settled,
         "lean_accuracy": round((agg["lc"] or 0) / settled, 4),
         "scoreline_accuracy": round((agg["sh"] or 0) / settled, 4),
+        "sample_policy": "one_stats_primary_per_match",
+        "excluded_duplicates": c.execute(
+            "SELECT COUNT(*) c FROM prediction_record WHERE stats_primary=0 AND settled_at IS NOT NULL"
+        ).fetchone()["c"],
+        "by_lean": by_lean,
+        "best_lean": by_lean[0] if by_lean else None,
         "recent": [
             {
                 "home_team": r["home_team"],

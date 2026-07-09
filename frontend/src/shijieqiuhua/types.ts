@@ -193,10 +193,18 @@ export interface TrackRecordEntry {
   scoreline_hit: boolean
 }
 
+export interface TrackRecordLeanStat {
+  lean: string
+  settled: number
+  accuracy: number
+}
+
 export interface TrackRecordStats {
   settled: number
   lean_accuracy?: number
   scoreline_accuracy?: number
+  by_lean?: TrackRecordLeanStat[]
+  best_lean?: TrackRecordLeanStat | null
   recent?: TrackRecordEntry[]
 }
 

@@ -71,7 +71,6 @@ def test_football_analysis_handles_missing_optional_market_data():
 
 def test_football_analysis_api_is_public_readonly(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    monkeypatch.setenv("OSINT_ROLE", "api")
 
     from fastapi.testclient import TestClient
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class IntelLayer(str, Enum):
@@ -91,11 +91,11 @@ class DashboardData(BaseModel):
 
 # ── AI Q&A ──
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=20000)
     start_date: str = ""
     end_date: str = ""
     layer: str = ""
-    skills: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list, max_length=20)
 
 
 class AskResponse(BaseModel):
@@ -144,16 +144,16 @@ class BriefWorkspaceMaterial(BaseModel):
 
 
 class ReportRequest(BaseModel):
-    topic: str = ""
-    country: str = ""
-    days: int = 7
-    layer: str = ""
+    topic: str = Field(default="", max_length=500)
+    country: str = Field(default="", max_length=100)
+    days: int = Field(default=7, ge=1, le=365)
+    layer: str = Field(default="", max_length=50)
     detail_level: str = "standard"  # "brief", "standard", "deep"
-    skills: list[str] = Field(default_factory=list)
-    item_ids: list[str] = Field(default_factory=list)
-    event_ids: list[str] = Field(default_factory=list)
-    warning_ids: list[str] = Field(default_factory=list)
-    source_materials: list[BriefWorkspaceMaterial] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list, max_length=20)
+    item_ids: list[str] = Field(default_factory=list, max_length=500)
+    event_ids: list[str] = Field(default_factory=list, max_length=500)
+    warning_ids: list[str] = Field(default_factory=list, max_length=500)
+    source_materials: list[BriefWorkspaceMaterial] = Field(default_factory=list, max_length=100)
 
 
 class ReportSection(BaseModel):
@@ -439,7 +439,7 @@ class SituationBriefResult(BaseModel):
 
 
 class AnalysisInterpretRequest(BaseModel):
-    analysis_type: str
+    analysis_type: str = Field(..., min_length=1, max_length=100)
     context: dict = Field(default_factory=dict)
 
 
@@ -451,12 +451,27 @@ class AnalysisInterpretResponse(BaseModel):
 
 # ── Super Analysis ──
 
+SUPER_ANALYSIS_ALLOWED_SKILLS = frozenset({"super-analysis"})
+
+
 class SuperAnalysisRequest(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=20000)
     start_date: str = ""
     end_date: str = ""
-    skills: list[str] = Field(default_factory=list)
-    request_id: str = ""
+    skills: list[str] = Field(default_factory=list, max_length=20)
+    request_id: str = Field(
+        default="",
+        max_length=64,
+        pattern=r"^(?:[A-Za-z0-9_-]{8,64})?$",
+    )
+
+    @field_validator("skills")
+    @classmethod
+    def validate_skills(cls, skills: list[str]) -> list[str]:
+        invalid = sorted(set(skills) - SUPER_ANALYSIS_ALLOWED_SKILLS)
+        if invalid:
+            raise ValueError(f"unsupported super-analysis skills: {', '.join(invalid)}")
+        return skills
 
 
 class BayesianIntelItem(BaseModel):
@@ -464,13 +479,36 @@ class BayesianIntelItem(BaseModel):
     source: str
     date: str
     layer: str
-    confidence: float
-    verdict: str
-    prior_class: str
-    prior_probability: float
-    evidence_items: list[dict] = Field(default_factory=list)
-    bayesian_trace: list[float] = Field(default_factory=list)
+    quality_score: float = Field(ge=0, le=1)
+    independent_source_count: int = Field(ge=1)
+    source_class: Literal[
+        "high-credibility",
+        "medium-credibility",
+        "low-credibility",
+        "kol",
+        "unknown",
+    ]
     content_snippet: str = ""
+
+
+class HypothesisEvidenceAssessment(BaseModel):
+    evidence_id: str
+    source: str
+    relation: Literal["support", "contradict", "neutral"]
+    strength: Literal["weak", "moderate", "strong"]
+    likelihood_ratio: float = Field(gt=0)
+    posterior_probability: float = Field(ge=0, le=1)
+    rationale: str
+
+
+class HypothesisAssessment(BaseModel):
+    hypothesis: str
+    prior_probability: float = Field(ge=0, le=1)
+    posterior_probability: float = Field(ge=0, le=1)
+    verdict: Literal["verified", "refuted", "uncertain"]
+    confidence_level: Literal["L1", "L2", "L3", "L4", "L5"]
+    independent_source_count: int = Field(ge=0)
+    evidence: list[HypothesisEvidenceAssessment] = Field(default_factory=list)
 
 
 class WebResult(BaseModel):
@@ -484,5 +522,14 @@ class SuperAnalysisResponse(BaseModel):
     analysis: str
     relevant_items: list[BayesianIntelItem] = Field(default_factory=list)
     web_results: list[WebResult] = Field(default_factory=list)
-    model: str = "deepseek-v4-flash"
+    hypothesis_assessment: HypothesisAssessment | None = None
+    collection_status: Literal["complete", "empty", "partial", "unavailable"] = "complete"
+    provider_statuses: dict[
+        str,
+        Literal["success", "empty", "error", "disabled"],
+    ] = Field(default_factory=dict)
+    degraded: bool = False
+    analysis_status: Literal["complete", "unavailable", "error"] = "complete"
+    errors: list[str] = Field(default_factory=list)
+    model: str
     request_id: str = ""

@@ -12,6 +12,8 @@ from typing import List
 
 import asyncio
 import logging
+import threading
+import time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -23,9 +25,10 @@ if _dotenv.exists():
     dotenv.load_dotenv(_dotenv)
 
 import httpx
-from fastapi import Depends, FastAPI, Query, Request, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
 
 
 from backend.bronze_reader import scan_bronze
@@ -69,6 +72,7 @@ from backend.processors.llm_classifier import classify_with_llm
 from backend.processors.location import extract_location_with_fallback
 from backend.seed_data import main as reseed
 from backend.merger import build_merge_index, load_merge_index
+from backend.osint_sources import get_source
 from backend.opencode_adapter import (
     DEFAULT_EMPTY_AGENT_OUTPUT,
     OpenCodeAdapter,
@@ -87,7 +91,13 @@ def osint_role() -> str:
     worker: run background jobs only
     all: legacy single-process mode
     """
-    role = os.environ.get("OSINT_ROLE", "api").strip().lower()
+    configured_role = os.environ.get("OSINT_ROLE", "").strip().lower()
+    if not configured_role:
+        # Preserve the documented legacy switch while making the explicit
+        # OSINT_ROLE setting authoritative for production deployments.
+        legacy_collector = os.environ.get("OSINT_COLLECTOR", "").strip().lower()
+        configured_role = "all" if legacy_collector in {"demo", "horizon"} else "api"
+    role = configured_role
     if role not in OSINT_ROLE_VALUES:
         log.warning("Unknown OSINT_ROLE=%s; falling back to api", role)
         return "api"
@@ -109,21 +119,48 @@ def resolve_stats_window(start_date: str, end_date: str) -> tuple[str, str]:
     start = end - timedelta(days=max(STATS_DEFAULT_DAYS, 1) - 1)
     return start.isoformat(), end.isoformat()
 
+
+def _atomic_json_write(path: Path, payload: dict) -> None:
+    """Write a JSON document without exposing a partially-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+
+
+def _source_credibility(name: str) -> float:
+    """Use the curated source catalog; unknown sources get a neutral prior."""
+    normalized = name.strip().lower()
+    config = get_source(normalized)
+    if config is None:
+        # Catalog names sometimes include display prefixes or suffixes.
+        from backend.osint_sources import SOURCES
+        config = next((s for s in SOURCES if s.name.lower() in normalized), None)
+    return round(config.credibility if config else 0.5, 2)
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=max(STATS_DEFAULT_DAYS, 1) - 1)
+    return start.isoformat(), end.isoformat()
+
 # ── Agent system ──
 from backend.agents.config import is_agent_mode
 from backend.agents.registry import AgentRegistry
 from backend.agents.base import AgentCallbacks, AgentEvent
 from backend.agents.models import AgentTask as AgentTaskModel
 from backend.websocket.manager import ws_manager
-from backend.auth.routes import router as auth_router, get_current_user
+from backend.auth.routes import router as auth_router, get_current_user, require_admin, _cookie_secure
 from backend.auth.admin_routes import router as admin_router
 from backend.auth.tracking import record_activity
+from backend.task_queue import CollectionJobQueue
 
 # Import agent modules so they self-register via AgentRegistry
 import backend.agents.collectors.api_collectors  # noqa: F401
 import backend.agents.collectors.rss_collector  # noqa: F401
 import backend.agents.collectors.social_collectors  # noqa: F401
-import backend.agents.processors.bayesian_scoring  # noqa: F401
+import backend.agents.processors.document_quality  # noqa: F401
 import backend.agents.processors.pipeline  # noqa: F401
 import backend.agents.processors.classification  # noqa: F401
 import backend.agents.processors.location_extraction  # noqa: F401
@@ -177,7 +214,7 @@ async def lifespan(app: FastAPI):
     role = osint_role()
 
     # Seed demo data once so the dashboard has something on first load
-    if not any(STORAGE.rglob("*.json")):
+    if not any(STORAGE.rglob("*.json")) and os.getenv("OSINT_DEMO_SEED", "false").strip().lower() in {"1", "true", "yes", "on"}:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: reseed(clear=True))
 
@@ -187,6 +224,7 @@ async def lifespan(app: FastAPI):
 
     _cache_refresh_task: asyncio.Task | None = None
     _reindex_task: asyncio.Task | None = None
+    _collection_queue_task: asyncio.Task | None = None
 
     if should_prewarm_api_cache():
         loop.run_in_executor(None, _prewarm_dashboard_cache)
@@ -229,6 +267,31 @@ async def lifespan(app: FastAPI):
         await _agent_orch.start_collection_loop()
         await _agent_orch.start_merge_loop()
 
+        queue = CollectionJobQueue(STORAGE)
+
+        async def _collection_queue_loop():
+            while True:
+                try:
+                    job = await asyncio.to_thread(queue.claim_next)
+                    if job is None:
+                        await asyncio.sleep(2)
+                        continue
+                    result = await _agent_orch.run(AgentTaskModel(
+                        task_type="collect",
+                        params={"action": "collect", "hours": job["target"].get("hours", 48)},
+                    ))
+                    if result.status.value == "completed":
+                        await asyncio.to_thread(queue.complete, job["job_id"])
+                    else:
+                        await asyncio.to_thread(queue.fail, job["job_id"], result.error or "collection failed")
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    log.exception("Collection queue worker failed: %s", exc)
+                    await asyncio.sleep(2)
+
+        _collection_queue_task = asyncio.create_task(_collection_queue_loop())
+
     try:
         yield
     finally:
@@ -242,6 +305,12 @@ async def lifespan(app: FastAPI):
             _reindex_task.cancel()
             try:
                 await _reindex_task
+            except asyncio.CancelledError:
+                pass
+        if _collection_queue_task is not None:
+            _collection_queue_task.cancel()
+            try:
+                await _collection_queue_task
             except asyncio.CancelledError:
                 pass
         if _agent_orch is not None:
@@ -268,12 +337,40 @@ app.add_middleware(
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
+class _RequestTooLarge(Exception):
+    pass
+
+
 @app.middleware("http")
 async def body_size_limit_middleware(request: Request, call_next):
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > _MAX_BODY_BYTES:
+    try:
+        if content_length and int(content_length) > _MAX_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "请求体过大"})
+    except ValueError:
+        return JSONResponse(status_code=400, content={"detail": "无效的 Content-Length"})
+
+    # Chunked requests do not carry Content-Length. Wrap the receive channel
+    # so the limit is enforced while the body is streamed, not after an
+    # unbounded body has already been buffered in memory.
+    if request.method in {"POST", "PUT", "PATCH"} and not content_length:
+        original_receive = request._receive
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await original_receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > _MAX_BODY_BYTES:
+                    raise _RequestTooLarge
+            return message
+
+        request._receive = limited_receive
+    try:
+        return await call_next(request)
+    except _RequestTooLarge:
         return JSONResponse(status_code=413, content={"detail": "请求体过大"})
-    return await call_next(request)
 
 
 # ── Auth routes ──
@@ -285,7 +382,7 @@ _CACHE_RULES: dict[str, str] = {
     "/api/dashboard": "public, max-age=60",
     "/api/stats": "public, max-age=10",
     "/api/health": "no-cache",
-    "/api/analysis/": "public, max-age=60",
+    "/api/analysis/": "private, max-age=60",
 }
 
 
@@ -306,6 +403,34 @@ _rate_limit_store: dict[str, list[float]] = {}
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX = 300    # max requests per window per IP
 _RATE_LIMIT_WRITE_MAX = 60  # stricter for POST endpoints
+_super_analysis_rate_store: dict[int, list[float]] = {}
+_SUPER_ANALYSIS_RATE_WINDOW = 60.0
+_SUPER_ANALYSIS_RATE_MAX = 5
+_super_analysis_semaphore = asyncio.Semaphore(2)
+_super_analysis_inflight: set[int] = set()
+
+
+def _consume_super_analysis_quota(user_id: int, *, now: float | None = None) -> bool:
+    current = time.monotonic() if now is None else now
+    window = [
+        timestamp
+        for timestamp in _super_analysis_rate_store.get(user_id, [])
+        if current - timestamp < _SUPER_ANALYSIS_RATE_WINDOW
+    ]
+    if len(window) >= _SUPER_ANALYSIS_RATE_MAX:
+        _super_analysis_rate_store[user_id] = window
+        return False
+    window.append(current)
+    _super_analysis_rate_store[user_id] = window
+    if len(_super_analysis_rate_store) > 4096:
+        expired_users = [
+            key
+            for key, timestamps in _super_analysis_rate_store.items()
+            if not timestamps or current - timestamps[-1] >= _SUPER_ANALYSIS_RATE_WINDOW
+        ]
+        for key in expired_users:
+            del _super_analysis_rate_store[key]
+    return True
 
 # ── Public API paths (no auth required) ──
 _PUBLIC_PREFIXES = (
@@ -325,13 +450,17 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     from backend.auth import service
-    token = request.cookies.get("osint_access_token")
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
     if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
+        token = request.cookies.get("osint_access_token", "")
 
     payload = service.decode_token(token) if token else None
+
+    if payload is not None:
+        from backend.auth import service
+        if service.is_access_token_revoked(payload.get("jti", "")):
+            payload = None
 
     if payload is None:
         # Access token missing or expired — try refresh token
@@ -342,16 +471,16 @@ async def auth_middleware(request: Request, call_next):
                 new_access = result["access_token"]
                 new_refresh = result["refresh_token"]
                 # Inject new access token so downstream Depends(get_current_user) can read it
-                request._headers["authorization"] = f"Bearer {new_access}"
+                MutableHeaders(scope=request.scope)["authorization"] = f"Bearer {new_access}"
                 response = await call_next(request)
                 response.set_cookie(
                     "osint_access_token", new_access,
-                    httponly=True, secure=False, samesite="lax",
+                    httponly=True, secure=_cookie_secure(), samesite="lax",
                     max_age=3600, path="/",
                 )
                 response.set_cookie(
                     "osint_refresh_token", new_refresh,
-                    httponly=True, secure=False, samesite="lax",
+                    httponly=True, secure=_cookie_secure(), samesite="lax",
                     max_age=7 * 24 * 3600, path="/",
                 )
                 return response
@@ -417,41 +546,66 @@ def _init_indexer() -> None:
 _master_list_cache: dict[str, tuple[float, list]] = {}
 _dashboard_cache: dict[str, tuple[float, object]] = {}
 _analysis_snapshot_locks: dict[str, asyncio.Lock] = {}
+_cache_lock = threading.RLock()
+_MAX_SNAPSHOT_LOCKS = 512  # bound the per-cache-key lock registry
 DASHBOARD_CACHE_TTL = 300  # seconds — long enough to absorb a full scan (102s) + buffer
 DASHBOARD_CACHE_MAX_SIZE = 256  # prevent unbounded growth
+DASHBOARD_MAX_FULL_PAGE_ITEMS = int(os.environ.get("DASHBOARD_MAX_FULL_PAGE_ITEMS", "5000"))
+
+
+def _get_snapshot_lock(cache_key: str) -> asyncio.Lock:
+    """Return the per-key lock, bounding the registry. Runs in the event-loop
+    thread (async callers only), so dict mutation needs no extra locking. Only
+    unheld locks are evicted, so in-flight mutual exclusion is never broken."""
+    lock = _analysis_snapshot_locks.get(cache_key)
+    if lock is None:
+        if len(_analysis_snapshot_locks) >= _MAX_SNAPSHOT_LOCKS:
+            for k in [k for k, l in _analysis_snapshot_locks.items() if not l.locked()]:
+                del _analysis_snapshot_locks[k]
+        lock = _analysis_snapshot_locks.setdefault(cache_key, asyncio.Lock())
+    return lock
 
 
 def _evict_expired_cache() -> None:
     """Remove expired entries from both caches."""
     import time as _time
     now = _time.time()
-    for cache in (_master_list_cache, _dashboard_cache):
-        expired = [k for k, (ts, _) in cache.items() if now - ts >= DASHBOARD_CACHE_TTL]
-        for k in expired:
-            del cache[k]
+    with _cache_lock:
+        for cache in (_master_list_cache, _dashboard_cache):
+            expired = [k for k, (ts, _) in cache.items() if now - ts >= DASHBOARD_CACHE_TTL]
+            for k in expired:
+                del cache[k]
 
 
 def _cache_set(key: str, value: object) -> None:
     """Set cache entry with eviction of expired entries and LRU-like cap."""
     import time as _time
-    _evict_expired_cache()
-    if len(_dashboard_cache) >= DASHBOARD_CACHE_MAX_SIZE:
-        oldest = min(_dashboard_cache.items(), key=lambda x: x[1][0])
-        del _dashboard_cache[oldest[0]]
-    _dashboard_cache[key] = (_time.time(), value)
+    with _cache_lock:
+        _evict_expired_cache()
+        if len(_dashboard_cache) >= DASHBOARD_CACHE_MAX_SIZE:
+            oldest = min(_dashboard_cache.items(), key=lambda x: x[1][0])
+            del _dashboard_cache[oldest[0]]
+        _dashboard_cache[key] = (_time.time(), value)
 
 
 def _cache_get(key: str) -> object | None:
     """Return a live cache entry, or None when missing/expired."""
     import time as _time
-    cached = _dashboard_cache.get(key)
-    if not cached:
+    with _cache_lock:
+        cached = _dashboard_cache.get(key)
+        if not cached:
+            return None
+        ts, data = cached
+        if _time.time() - ts < DASHBOARD_CACHE_TTL:
+            return data
+        _dashboard_cache.pop(key, None)
         return None
-    ts, data = cached
-    if _time.time() - ts < DASHBOARD_CACHE_TTL:
-        return data
-    _dashboard_cache.pop(key, None)
-    return None
+
+
+def _clear_caches() -> None:
+    with _cache_lock:
+        _master_list_cache.clear()
+        _dashboard_cache.clear()
 
 
 def _master_cache_key(start_date: str, end_date: str, date: str) -> str:
@@ -462,22 +616,24 @@ def _get_or_build_items(start_date: str, end_date: str, date: str) -> list:
     """Get item list from master cache, or build and cache it (the expensive part)."""
     import time as _time
     key = _master_cache_key(start_date, end_date, date)
-    cached = _master_list_cache.get(key)
-    if cached:
-        ts, items = cached
-        if _time.time() - ts < DASHBOARD_CACHE_TTL:
-            return items
+    with _cache_lock:
+        cached = _master_list_cache.get(key)
+        if cached:
+            ts, items = cached
+            if _time.time() - ts < DASHBOARD_CACHE_TTL:
+                return items
     s_date = start_date or None
     e_date = end_date or None
     if date:
         s_date = date
         e_date = date
     items = _build_items(start_date=s_date, end_date=e_date)
-    _evict_expired_cache()
-    if len(_master_list_cache) >= DASHBOARD_CACHE_MAX_SIZE:
-        oldest = min(_master_list_cache.items(), key=lambda x: x[1][0])
-        del _master_list_cache[oldest[0]]
-    _master_list_cache[key] = (_time.time(), items)
+    with _cache_lock:
+        _evict_expired_cache()
+        if len(_master_list_cache) >= DASHBOARD_CACHE_MAX_SIZE:
+            oldest = min(_master_list_cache.items(), key=lambda x: x[1][0])
+            del _master_list_cache[oldest[0]]
+        _master_list_cache[key] = (_time.time(), items)
     return items
 
 
@@ -492,9 +648,7 @@ def _build_dashboard_data(all_items: list, page: int, page_size: int) -> Dashboa
             if not src_name:
                 continue
             if src_name not in source_map:
-                seed = int.from_bytes(hashlib.md5(src_name.encode()).digest()[:4], "big")
-                cred = 0.5 + (seed / 0xFFFFFFFF) * 0.4
-                source_map[src_name] = {"credibility": round(cred, 2), "count": 0, "last": ""}
+                source_map[src_name] = {"credibility": _source_credibility(src_name), "count": 0, "last": ""}
             source_map[src_name]["count"] += 1
             last = item.captured_at or now_ts
             if last > source_map[src_name]["last"]:
@@ -515,10 +669,16 @@ def _build_dashboard_data(all_items: list, page: int, page_size: int) -> Dashboa
     ]
 
     total = len(all_items)
-    start = (page - 1) * page_size
-    end = start + page_size
-    paged_items = all_items[start:end]
-    has_more = end < total
+    if page_size <= 0:
+        # page_size=0 is a convenience mode for the map/feed view, but it is
+        # still bounded so a public request cannot force an unbounded response.
+        paged_items = all_items[:DASHBOARD_MAX_FULL_PAGE_ITEMS]
+        has_more = len(all_items) > len(paged_items)
+    else:
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged_items = all_items[start:end]
+        has_more = end < total
 
     return DashboardData(
         intel_items=paged_items,
@@ -581,15 +741,19 @@ def _collection_confidence_from_sources(sources: list[str]) -> float:
 
 
 @app.get("/api/dashboard", response_model=DashboardData)
-async def get_dashboard(start_date: str = "", end_date: str = "", date: str = "", page: int = 1, page_size: int = 100):
+async def get_dashboard(
+    start_date: str = "",
+    end_date: str = "",
+    date: str = "",
+    page: int = Query(1, ge=1, le=100_000),
+    page_size: int = Query(100, ge=0, le=5000),
+):
     import time as _time
 
     cache_key = f"{start_date}|{end_date}|{date}|{page}|{page_size}"
-    cached = _dashboard_cache.get(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
-        ts, data = cached
-        if _time.time() - ts < DASHBOARD_CACHE_TTL:
-            return data
+        return cached
 
     def _process() -> DashboardData:
         all_items = _get_or_build_items(start_date, end_date, date)
@@ -616,43 +780,42 @@ async def health():
     return {"status": "ok", "bronze_docs": count}
 
 
-_collect_task: asyncio.Task | None = None
+_collect_task: asyncio.Task | None = None  # legacy in-process compatibility
+_last_collection_job_id: str | None = None
 
 @app.post("/api/collect")
-async def trigger_collect(hours: int = 48):
+async def trigger_collect(hours: int = Query(48, ge=1, le=168), user: dict = Depends(require_admin)):
     """Run Horizon scrapers once in the background and return immediately."""
-    global _collect_task
-
-    if _collect_task and not _collect_task.done():
-        return {"status": "running", "message": "采集任务正在进行中"}
-
-    orch = AgentRegistry.create("orchestrator", callbacks=_ws_callbacks())
-    task = AgentTaskModel(task_type="collect", params={"action": "collect", "hours": hours})
-    _collect_task = asyncio.create_task(orch.run(task))
-    return {"status": "started", "message": "采集任务已启动"}
+    global _last_collection_job_id
+    queue = CollectionJobQueue(STORAGE)
+    job_id = queue.enqueue(hours=hours)
+    _last_collection_job_id = job_id
+    job = queue.get(job_id)
+    if job and job["status"] in {"pending", "running"}:
+        status = "running" if job["status"] == "running" else "started"
+        return {"status": status, "job_id": job_id, "message": "采集任务已进入持久化队列"}
+    return {"status": job["status"] if job else "started", "job_id": job_id}
 
 
 @app.get("/api/collect/status")
 async def collect_status():
     """Check the status of the background collection task."""
-    global _collect_task
-    if _collect_task is None:
+    if _last_collection_job_id is None:
         return {"status": "idle", "message": "暂无采集任务"}
-    if _collect_task.done():
-        exc = _collect_task.exception()
-        if exc:
-            log.exception("Background collection task failed")
-            return {"status": "error", "message": "采集任务执行失败，请查看服务器日志"}
-        result = _collect_task.result()
-        return {"status": "completed", "results": result}
-    return {"status": "running", "message": "采集中..."}
+    job = CollectionJobQueue(STORAGE).get(_last_collection_job_id)
+    if job is None:
+        return {"status": "idle", "message": "暂无采集任务"}
+    if job["status"] in {"pending", "running"}:
+        return {"status": "running", "job_id": job["job_id"], "message": "采集中..."}
+    if job["status"] in {"dead", "failed"}:
+        return {"status": "error", "job_id": job["job_id"], "message": job["last_error"] or "采集任务失败"}
+    return {"status": "completed", "job_id": job["job_id"], "message": "采集完成"}
 
 
 @app.post("/api/merge")
-async def trigger_merge():
+async def trigger_merge(user: dict = Depends(require_admin)):
     """Manually trigger the daily content merge task."""
-    _dashboard_cache.clear()
-    _master_list_cache.clear()
+    _clear_caches()
     result = await asyncio.get_running_loop().run_in_executor(
         None, lambda: build_merge_index(STORAGE)
     )
@@ -660,7 +823,11 @@ async def trigger_merge():
 
 
 @app.post("/api/reclassify")
-async def trigger_reclassify(force: bool = Query(False), use_llm: bool = Query(False)):
+async def trigger_reclassify(
+    force: bool = Query(False),
+    use_llm: bool = Query(False),
+    user: dict = Depends(require_admin),
+):
     """Re-classify existing bronze documents.
 
     Defaults to deterministic classification/location. LLM classification is
@@ -727,7 +894,7 @@ async def trigger_reclassify(force: bool = Query(False), use_llm: bool = Query(F
                 h_meta["location_city"] = city
             exts["horizon_metadata"] = h_meta
             data["extensions"] = exts
-            json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            _atomic_json_write(json_path, data)
             return {"result": "updated"}
         except (json.JSONDecodeError, OSError) as e:
             log.warning("Failed to update %s: %s", json_path, e)
@@ -746,8 +913,7 @@ async def trigger_reclassify(force: bool = Query(False), use_llm: bool = Query(F
         if i + batch_size < total:
             await asyncio.sleep(0.1)
 
-    _dashboard_cache.clear()
-    _master_list_cache.clear()
+    _clear_caches()
     return {
         "status": "ok",
         "total": total,
@@ -759,14 +925,13 @@ async def trigger_reclassify(force: bool = Query(False), use_llm: bool = Query(F
 
 
 @app.post("/api/reindex")
-async def trigger_reindex():
+async def trigger_reindex(user: dict = Depends(require_admin)):
     """Rebuild or incrementally update the SQLite index from bronze JSON files."""
     idx = _get_indexer()
     before = idx.count()
     new = idx.incremental_update()
     after = idx.count()
-    _dashboard_cache.clear()
-    _master_list_cache.clear()
+    _clear_caches()
     return {
         "status": "ok",
         "before": before,
@@ -872,7 +1037,7 @@ def _build_dashboard_stats_fast(start_date: str, end_date: str) -> DashboardStat
     source_matrix = [
         SourceMatrix(
             name=name,
-            credibility=0.5 + (int.from_bytes(hashlib.md5(name.encode()).digest()[:4], "big") / 0xFFFFFFFF) * 0.4,
+            credibility=_source_credibility(name),
             document_count=sum(dist.values()),
             layer_distribution=dist,
         )
@@ -897,11 +1062,9 @@ async def dashboard_stats(start_date: str = "", end_date: str = ""):
 
     start_date, end_date = resolve_stats_window(start_date, end_date)
     cache_key = f"stats|{start_date}|{end_date}"
-    cached = _dashboard_cache.get(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
-        ts, data = cached
-        if _time.time() - ts < DASHBOARD_CACHE_TTL:
-            return data
+        return cached
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, lambda: _build_dashboard_stats_fast(start_date, end_date))
@@ -988,16 +1151,21 @@ def _build_items(
     When a merge index exists, items are built from merged groups with
     multi-source ``sources`` lists. Otherwise falls back to 1:1 doc→item.
     """
+    layer_values = {value.strip() for value in layer_filter.split(",") if value.strip()}
     docs = (
         _get_indexer().get_all()
         if use_merge_groups
-        else _get_indexer().query(
-            start_date=start_date,
-            end_date=end_date,
-            layer=layer_filter,
-            country=country_filter,
-            limit=limit,
-        )
+        else [
+            doc
+            for value in (layer_values or {""})
+            for doc in _get_indexer().query(
+                start_date=start_date,
+                end_date=end_date,
+                layer=value,
+                country=country_filter,
+                limit=limit,
+            )
+        ]
     )
     items: list[IntelItem] = []
 
@@ -1034,7 +1202,7 @@ def _build_items(
         layer = _get_layer(doc)
         src_name = sources[0] if sources else (doc.source_system or doc.collector_id)
 
-        if layer_filter and layer.value != layer_filter:
+        if layer_values and layer.value not in layer_values:
             return None
         if country_filter and country_filter.lower() not in (country or "").lower():
             return None
@@ -1152,11 +1320,9 @@ async def _build_items_async(
     """Async wrapper: runs _build_items in thread pool with 30s cache."""
     import time as _time
     cache_key = f"build|{start_date}|{end_date}|{layer_filter}|{country_filter}|{limit}|merge={int(use_merge_groups)}"
-    cached = _dashboard_cache.get(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
-        ts, data = cached
-        if _time.time() - ts < DASHBOARD_CACHE_TTL:
-            return data
+        return cached
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         None, lambda: _build_items(start_date, end_date, layer_filter, country_filter, limit, use_merge_groups)
@@ -1177,7 +1343,7 @@ async def _build_realtime_verification_snapshot(
     if cached is not None:
         return cached
 
-    lock = _analysis_snapshot_locks.setdefault(cache_key, asyncio.Lock())
+    lock = _get_snapshot_lock(cache_key)
     async with lock:
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -1213,6 +1379,7 @@ async def _load_realtime_verification_snapshot(
         start_date=s_date,
         end_date=e_date,
         country_filter=country,
+        layer_filter=",".join(requested_layers),
         limit=ANALYSIS_REALTIME_ITEM_LIMIT,
         use_merge_groups=False,
     )
@@ -1274,7 +1441,7 @@ async def analysis_brief(
     if cached is not None:
         return cached
 
-    lock = _analysis_snapshot_locks.setdefault(cache_key, asyncio.Lock())
+    lock = _get_snapshot_lock(cache_key)
     async with lock:
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -1284,6 +1451,7 @@ async def analysis_brief(
             start_date=s_date,
             end_date=e_date,
             country_filter=country,
+            layer_filter=",".join(requested_layers),
             limit=ANALYSIS_REALTIME_ITEM_LIMIT,
             use_merge_groups=False,
         )
@@ -1361,7 +1529,7 @@ async def analysis_corroboration(
     if cached is not None:
         return cached
 
-    lock = _analysis_snapshot_locks.setdefault(cache_key, asyncio.Lock())
+    lock = _get_snapshot_lock(cache_key)
     async with lock:
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -1420,7 +1588,7 @@ async def analysis_gaps(
     if cached is not None:
         return cached
 
-    lock = _analysis_snapshot_locks.setdefault(cache_key, asyncio.Lock())
+    lock = _get_snapshot_lock(cache_key)
     async with lock:
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -1511,26 +1679,24 @@ async def process_locate(req: LocateRequest):
     return LocateResponse(**result.data)
 
 
-class BayesianScoreRequest(PydanticBase):
+class DocumentQualityRequest(PydanticBase):
     text: str
     source_system: str = ""
 
-class BayesianScoreResponse(PydanticBase):
-    posterior: float
-    verdict: str
-    prior_quality: str
-    prior_class: str
-    evidence_items: list[dict]
+class DocumentQualityResponse(PydanticBase):
+    quality_score: float
+    source_class: str
+    quality_factors: dict
 
-@app.post("/api/process/bayesian-score", response_model=BayesianScoreResponse)
-async def process_bayesian_score(req: BayesianScoreRequest):
-    agent = AgentRegistry.create("bayesian_scorer")
-    task = AgentTaskModel(task_type="bayesian_score", params={
+@app.post("/api/process/document-quality", response_model=DocumentQualityResponse)
+async def process_document_quality(req: DocumentQualityRequest):
+    agent = AgentRegistry.create("document_quality")
+    task = AgentTaskModel(task_type="document_quality", params={
         "text": req.text,
         "source_system": req.source_system,
     })
     result = await agent.run(task)
-    return BayesianScoreResponse(**result.data)
+    return DocumentQualityResponse(**result.data)
 
 
 class PipelineRequest(PydanticBase):
@@ -1541,15 +1707,14 @@ class PipelineRequest(PydanticBase):
     summarize: bool = True
     classify: bool = True
     locate: bool = True
-    bayesian: bool = False
+    document_quality: bool = False
     skills: list[str] = PydanticField(default_factory=list)
 
 @app.post("/api/process/pipeline")
 async def process_pipeline(req: PipelineRequest):
     """Run processing pipeline: translate → summarize → classify → locate.
 
-    Bayesian scoring is opt-in via ``bayesian=true`` and is not part of the
-    default collection path.
+    Document quality assessment is opt-in via ``document_quality=true``.
     """
     agent = AgentRegistry.create("collection_pipeline", callbacks=_ws_callbacks())
     task = AgentTaskModel(task_type="pipeline", params={
@@ -1560,7 +1725,7 @@ async def process_pipeline(req: PipelineRequest):
         "summarize": req.summarize,
         "classify": req.classify,
         "locate": req.locate,
-        "bayesian": req.bayesian,
+        "document_quality": req.document_quality,
     }, skills=req.skills)
     result = await agent.run(task)
     return result.data
@@ -1610,7 +1775,31 @@ async def agent_status():
 
 @app.websocket("/ws/{channel}")
 async def websocket_endpoint(ws: WebSocket, channel: str):
-    await ws_manager.connect(channel, ws)
+    from backend.auth import service
+
+    token = ws.cookies.get("osint_access_token", "")
+    if not token:
+        authorization = ws.headers.get("authorization", "")
+        if authorization.startswith("Bearer "):
+            token = authorization[7:].strip()
+    payload = service.decode_token(token) if token else None
+    if payload is None or service.is_access_token_revoked(payload.get("jti", "")):
+        await ws.close(code=1008, reason="authentication required")
+        return
+    try:
+        user_id = int(payload.get("sub", 0))
+    except (TypeError, ValueError):
+        await ws.close(code=1008, reason="invalid authentication")
+        return
+    user = service.get_user_by_id(user_id)
+    if user is None or not user["is_active"]:
+        await ws.close(code=1008, reason="authentication required")
+        return
+    if not channel or len(channel) > 64 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in channel):
+        await ws.close(code=1008, reason="invalid channel")
+        return
+    if not await ws_manager.connect(channel, ws):
+        return
     try:
         while True:
             await ws.receive_text()
@@ -1620,7 +1809,7 @@ async def websocket_endpoint(ws: WebSocket, channel: str):
         ws_manager.disconnect(channel, ws)
 
 @app.post("/api/analysis/interpret", response_model=AnalysisInterpretResponse)
-async def analysis_interpret(req: AnalysisInterpretRequest):
+async def analysis_interpret(req: AnalysisInterpretRequest, user: dict = Depends(get_current_user)):
     """Generate AI interpretation for any analysis view."""
     agent = AgentRegistry.create("interpretation")
     task = AgentTaskModel(task_type="interpret", params={
@@ -1635,12 +1824,16 @@ async def analysis_interpret(req: AnalysisInterpretRequest):
 
 
 @app.get("/api/super-analysis/progress")
-async def super_analysis_progress(request_id: str = ""):
+async def super_analysis_progress(request_id: str = "", user: dict = Depends(get_current_user)):
     """获取超级分析的实时进度。"""
     from backend.processors.progress import get_progress
     if not request_id:
         return {"phase": "idle", "message": "", "percent": 0, "elapsed_seconds": 0, "detail": {}}
-    return get_progress(request_id)
+    progress = get_progress(request_id, user["id"])
+    if progress is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="分析任务不存在")
+    return progress
 
 
 @app.get("/api/opencode/status")
@@ -1652,35 +1845,6 @@ async def opencode_status(user: dict = Depends(get_current_user)):
     return status
 
 
-@app.post("/api/super-analysis", response_model=SuperAnalysisResponse)
-async def super_analysis(req: SuperAnalysisRequest):
-    """超级分析 — 结合贝叶斯框架对用户问题进行结构化情报分析。"""
-    from backend.processors.progress import init_progress, mark_finished, mark_error
-
-    request_id = req.request_id or uuid.uuid4().hex[:12]
-    init_progress(request_id)
-    agent = AgentRegistry.create("super_analyst", storage_root=STORAGE)
-    task = AgentTaskModel(task_type="super_analysis", params={
-        "question": req.question,
-        "start_date": req.start_date,
-        "end_date": req.end_date,
-        "request_id": request_id,
-    }, skills=req.skills)
-    try:
-        result = await agent.run(task)
-    except Exception as e:
-        mark_error(request_id, str(e))
-        raise
-    data = result.data
-    items = [BayesianIntelItem(**item) for item in data.get("relevant_items", [])]
-    mark_finished(request_id)
-    return SuperAnalysisResponse(
-        question=data.get("question", req.question),
-        analysis=data.get("analysis", "分析失败"),
-        relevant_items=items,
-        web_results=[WebResult(**wr) for wr in data.get("web_results", [])],
-        request_id=request_id,
-    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1768,6 +1932,8 @@ async def intel_ask(req: AskRequest, request: Request, user: dict = Depends(get_
         if filters:
             prompt = f"{req.question}\n\nFilters: {', '.join(filters)}"
         answer = await _run_opencode_agent("qa-analyst", prompt)
+        if is_empty_agent_output(answer):
+            raise RuntimeError("qa agent produced empty output")
         return AskResponse(answer=answer or "分析完成，暂无文本输出", references=[])
     except Exception:
         agent = AgentRegistry.create("qa_analyst", indexer=_get_indexer())
@@ -1837,104 +2003,93 @@ async def intel_report(req: ReportRequest, request: Request, user: dict = Depend
         return await _run_local_report_writer(req, selected_materials)
 
 
-async def _run_opencode_super_analysis_enhancement(
-    *,
-    question: str,
-    python_analysis: str,
-    relevant_items: list,
-    web_results: list,
-) -> str:
-    """Use OpenCode + osint-core as an optional second-pass super-analysis reviewer."""
-    if os.getenv("OPENCODE_SUPER_ANALYSIS_ENABLED", "true").strip().lower() not in {"1", "true", "yes", "on"}:
-        return ""
-
-    item_lines = []
-    for i, item in enumerate(relevant_items[:8], 1):
-        if isinstance(item, BayesianIntelItem):
-            item_data = item.model_dump()
-        elif isinstance(item, dict):
-            item_data = item
-        else:
-            item_data = {}
-        item_lines.append(
-            f"[{i}] {item_data.get('date', '')} | {item_data.get('source', '')} | {item_data.get('layer', '')} | "
-            f"confidence={item_data.get('confidence', '')}\n"
-            f"标题: {item_data.get('title', '')}\n"
-            f"摘要: {item_data.get('content_snippet', '')[:220]}"
-        )
-
-    web_lines = []
-    for i, result in enumerate(web_results[:6], 1):
-        if not isinstance(result, dict):
-            continue
-        web_lines.append(
-            f"[W{i}] {result.get('title', '')}\n"
-            f"摘要: {result.get('snippet', '')[:220]}\n"
-            f"URL: {result.get('url', '')}"
-        )
-
-    prompt = (
-        "你是 OpenCode super-analyst。请使用 osint-core 方法论对 Python 超级分析结果做二次复核。\n"
-        "必须遵守：三方验证、事实/推断分离、L1-L4 置信度、主动列出替代解释、保留待核查项。\n"
-        "不要重写全文，只输出补充增强段，标题使用「## OpenCode + osint-core 复核」。\n\n"
-        f"## 用户问题\n{question}\n\n"
-        f"## Python 超级分析结果\n{python_analysis[:4000]}\n\n"
-        f"## 内部情报摘录\n{chr(10).join(item_lines) or '无'}\n\n"
-        f"## 网络数据摘录\n{chr(10).join(web_lines) or '无'}\n\n"
-        "请输出：1) 需要强化的证据链；2) 替代解释；3) 仍需采集/核查的问题；4) 对原结论的置信度修正建议。"
-    )
-    result = await OpenCodeAdapter().run("super-analyst", prompt, timeout=int(os.getenv("OPENCODE_SUPER_ANALYSIS_TIMEOUT", "120")))
-    if not result.ok or is_empty_agent_output(result.text):
-        log.warning("opencode super-analyst enhancement unavailable: %s", result.error)
-        return ""
-    return result.text.strip()
-
-
 @app.post("/api/intel/super-analysis", response_model=SuperAnalysisResponse)
 async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user: dict = Depends(get_current_user)):
-    """Super analysis — Bayesian evidence evaluation + web search + LLM deep reasoning."""
-    _ip = request.client.host if request.client else ""
-    record_activity(user["id"], "super_analysis", {"question": req.question[:200]}, ip_address=_ip)
-
-    from backend.processors.progress import init_progress, mark_finished, mark_error
-    request_id = req.request_id or uuid.uuid4().hex[:12]
-    init_progress(request_id)
+    """Super analysis — hypothesis-level evidence evaluation and deep reasoning."""
+    owner_id = user["id"]
+    if not _consume_super_analysis_quota(owner_id):
+        raise HTTPException(status_code=429, detail="超级分析请求过于频繁，请稍后重试")
+    if owner_id in _super_analysis_inflight:
+        raise HTTPException(status_code=429, detail="该用户已有超级分析任务正在运行")
+    _super_analysis_inflight.add(owner_id)
     try:
-        agent = AgentRegistry.create("super_analyst", storage_root=STORAGE)
-        task = AgentTaskModel(task_type="super_analysis", params={
-            "question": req.question,
-            "start_date": req.start_date,
-            "end_date": req.end_date,
-            "request_id": request_id,
-        }, skills=req.skills)
-        result = await agent.run(task)
-    except Exception as e:
-        mark_error(request_id, str(e))
+        await asyncio.wait_for(_super_analysis_semaphore.acquire(), timeout=0.1)
+    except TimeoutError:
+        _super_analysis_inflight.discard(owner_id)
+        raise HTTPException(status_code=429, detail="超级分析任务繁忙，请稍后重试")
+    except BaseException:
+        _super_analysis_inflight.discard(owner_id)
         raise
-    data = result.data
-    items = [BayesianIntelItem(**item) for item in data.get("relevant_items", [])]
-    analysis = data.get("analysis", "分析失败")
-    enhancement = await _run_opencode_super_analysis_enhancement(
-        question=data.get("question", req.question),
-        python_analysis=analysis,
-        relevant_items=items,
-        web_results=data.get("web_results", []),
-    )
-    if enhancement:
-        analysis = f"{analysis}\n\n---\n\n## OpenCode + osint-core 增强研判\n{enhancement}"
-    mark_finished(request_id)
-    return SuperAnalysisResponse(
-        question=data.get("question", req.question),
-        analysis=analysis,
-        relevant_items=items,
-        web_results=[WebResult(**wr) for wr in data.get("web_results", [])],
-        model="deepseek-v4-flash + opencode/osint-core" if enhancement else "deepseek-v4-flash",
-        request_id=request_id,
-    )
+
+    request_id = req.request_id or uuid.uuid4().hex
+    from backend.processors.progress import init_progress, mark_error, mark_finished
+
+    try:
+        _ip = request.client.host if request.client else ""
+        record_activity(
+            owner_id,
+            "super_analysis",
+            {"question": req.question[:200]},
+            ip_address=_ip,
+        )
+        init_progress(request_id, owner_id)
+        try:
+            agent = AgentRegistry.create("super_analyst", storage_root=STORAGE)
+            task = AgentTaskModel(task_type="super_analysis", params={
+                "question": req.question,
+                "start_date": req.start_date,
+                "end_date": req.end_date,
+                "request_id": request_id,
+                "owner_id": owner_id,
+            }, skills=req.skills)
+            result = await asyncio.wait_for(agent.run(task), timeout=300)
+            if not result.data:
+                raise RuntimeError(result.error or "super analysis agent returned no data")
+            data = result.data
+            response = SuperAnalysisResponse(
+                question=data.get("question", req.question),
+                analysis=data.get("analysis", ""),
+                relevant_items=[
+                    BayesianIntelItem(**item)
+                    for item in data.get("relevant_items", [])
+                ],
+                web_results=[
+                    WebResult(**web_result)
+                    for web_result in data.get("web_results", [])
+                ],
+                hypothesis_assessment=data.get("hypothesis_assessment"),
+                collection_status=data.get("collection_status", "complete"),
+                provider_statuses=data.get("provider_statuses", {}),
+                degraded=data.get("degraded", False),
+                analysis_status=data.get("analysis_status", "complete"),
+                errors=data.get("errors", []),
+                model=data.get("model") or getattr(agent, "model", "unknown"),
+                request_id=request_id,
+            )
+        except asyncio.CancelledError:
+            mark_error(request_id, "分析已取消", owner_id)
+            raise
+        except Exception:
+            log.exception(
+                "super analysis failed request_id=%s user_id=%s",
+                request_id,
+                owner_id,
+            )
+            mark_error(request_id, "分析失败", owner_id)
+            raise HTTPException(
+                status_code=502,
+                detail="超级分析暂时不可用，请稍后重试",
+            )
+
+        mark_finished(request_id, owner_id)
+        return response
+    finally:
+        _super_analysis_semaphore.release()
+        _super_analysis_inflight.discard(owner_id)
 
 
 @app.post("/api/intel/build-embedding-index")
-async def intel_build_embedding_index(request: Request, user: dict = Depends(get_current_user)):
+async def intel_build_embedding_index(request: Request, user: dict = Depends(require_admin)):
     """Build/rebuilt the embedding semantic search index from all bronze documents."""
     from backend.bronze_reader import scan_bronze
     from backend.processors.embedding_index import EmbeddingIndex

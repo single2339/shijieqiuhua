@@ -454,18 +454,37 @@ export interface SuperAnalysisRequest {
   request_id?: string
 }
 
+export type SuperAnalysisConfidenceLevel = 'L1' | 'L2' | 'L3' | 'L4' | 'L5'
+
 export interface BayesianIntelItem {
   title: string
   source: string
   date: string
   layer: string
-  confidence: number
-  verdict: string
-  prior_class: string
-  prior_probability: number
-  evidence_items: Array<{ name: string; quality: string; lr: number; direction: string }>
-  bayesian_trace: number[]
+  quality_score: number
+  independent_source_count: number
+  source_class: string
   content_snippet: string
+}
+
+export interface HypothesisEvidenceAssessment {
+  evidence_id: string
+  source: string
+  relation: 'support' | 'contradict' | 'neutral'
+  strength: 'weak' | 'moderate' | 'strong'
+  likelihood_ratio: number
+  posterior_probability: number
+  rationale: string
+}
+
+export interface HypothesisAssessment {
+  hypothesis: string
+  prior_probability: number
+  posterior_probability: number
+  verdict: 'verified' | 'refuted' | 'uncertain'
+  confidence_level: SuperAnalysisConfidenceLevel
+  independent_source_count: number
+  evidence: HypothesisEvidenceAssessment[]
 }
 
 export interface WebResult {
@@ -479,8 +498,14 @@ export interface SuperAnalysisResponse {
   analysis: string
   relevant_items: BayesianIntelItem[]
   web_results: WebResult[]
-  model?: string
-  request_id?: string
+  hypothesis_assessment: HypothesisAssessment | null
+  collection_status: 'complete' | 'empty' | 'partial' | 'unavailable'
+  provider_statuses: Record<string, 'success' | 'empty' | 'error' | 'disabled'>
+  degraded: boolean
+  analysis_status: 'complete' | 'unavailable' | 'error'
+  errors: string[]
+  model: string
+  request_id: string
 }
 
 // ── Auth & User ──
@@ -512,6 +537,7 @@ export interface AdminUserDetail {
   created_at: string
   last_login_at: string | null
   action_count: number
+  recent_actions?: Array<{ action_type: string; details_json: string; ip_address: string; created_at: string }>
 }
 
 export interface InviteCodeInfo {
@@ -529,10 +555,12 @@ export interface AdminStats {
   total_users: number
   active_7d: number
   active_30d: number
+  today_logins: number
+  today_actions: number
   daily_logins: Array<{ date: string; count: number }>
-  daily_actions: Array<{ date: string; count: number }>
+  daily_actions: Array<{ date: string; action_type: string; count: number }>
   top_users: Array<{ username: string; action_count: number }>
-  invite_code_usage: Array<{ code: string; uses: number }>
+  invite_code_usage: { total: number; used: number }
 }
 
 export const LAYER_META: Record<IntelLayer, { label: string; color: string }> = {

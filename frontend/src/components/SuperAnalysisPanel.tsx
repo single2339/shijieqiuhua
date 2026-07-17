@@ -7,8 +7,15 @@ import { useSuperAnalysis } from '../hooks/useSuperAnalysis'
 import { useFloatingPanel } from '../hooks/useFloatingPanel'
 import { parseAnalysis, highlightText, generateHTML } from '../lib/markdown'
 import type { Block } from '../lib/markdown'
+import { safeExternalUrl } from '../utils/safeUrl'
+import { confidenceColor } from '../utils/intelDisplay'
 
-interface Props { onClose: () => void; isMobile?: boolean }
+interface Props {
+  onClose: () => void
+  isMobile?: boolean
+  startDate?: string
+  endDate?: string
+}
 
 // ── Animation variants ──
 
@@ -188,11 +195,11 @@ function ProgressDisplay({ progress, displayPercent }: { progress: SuperAnalysis
   )
 }
 
-export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
+export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', endDate = '' }: Props) {
   const {
     question, setQuestion, loading, result, error, progress, displayPercent,
     handleSubmit, inputRef,
-  } = useSuperAnalysis()
+  } = useSuperAnalysis({ startDate, endDate })
   const panelRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const floating = useFloatingPanel({
@@ -215,7 +222,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
     a.href = url
     a.download = `super-analysis-${Date.now()}.html`
     a.click()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
   }, [result])
 
   const analysisBlocks: Block[] = result ? parseAnalysis(result.analysis) : []
@@ -439,6 +446,110 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                 animate="visible"
                 style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
               >
+                {result.collection_status === 'empty' && (
+                  <div style={{
+                    padding: '10px 12px',
+                    border: '1px solid var(--glass-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(0,0,0,0.02)',
+                    color: 'var(--text-secondary)',
+                    fontSize: 11,
+                    lineHeight: 1.7,
+                  }}>
+                    <div style={{ fontWeight: 700 }}>未找到相关情报</div>
+                    <div>数据源均已正常查询，但没有与问题匹配的结果。</div>
+                  </div>
+                )}
+
+                {result.collection_status !== 'empty' && (result.degraded || result.collection_status !== 'complete' || result.analysis_status !== 'complete' || result.errors.length > 0) && (
+                  <div style={{
+                    padding: '10px 12px',
+                    border: '1px solid rgba(224,169,74,0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(224,169,74,0.08)',
+                    color: 'var(--warning)',
+                    fontSize: 11,
+                    lineHeight: 1.7,
+                  }}>
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>降级分析</div>
+                    <div>采集状态：{result.collection_status}</div>
+                    <div>分析状态：{result.analysis_status}</div>
+                    <div>
+                      数据源：
+                      {Object.entries(result.provider_statuses)
+                        .map(([provider, status]) => `${provider}=${status}`)
+                        .join('，') || '无'}
+                    </div>
+                    {result.errors.map((message, index) => (
+                      <div key={`${index}-${message}`}>{message}</div>
+                    ))}
+                  </div>
+                )}
+
+                {result.hypothesis_assessment && (
+                  <div style={{
+                    padding: '14px 16px',
+                    border: '1px solid var(--glass-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(13,148,136,0.04)',
+                  }}>
+                    <div style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: 'var(--accent)',
+                      marginBottom: 8,
+                    }}>
+                      结构化假设评估
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 8 }}>
+                      {result.hypothesis_assessment.hypothesis}
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                      fontSize: 10,
+                      color: 'var(--text-secondary)',
+                      fontFamily: 'var(--font-mono)',
+                    }}>
+                      <span style={{
+                        color: confidenceColor(result.hypothesis_assessment.confidence_level),
+                        fontWeight: 700,
+                      }}>
+                        {result.hypothesis_assessment.confidence_level}
+                      </span>
+                      <span>先验 {Math.round(result.hypothesis_assessment.prior_probability * 100)}%</span>
+                      <span>后验 {Math.round(result.hypothesis_assessment.posterior_probability * 100)}%</span>
+                      <span>判定 {result.hypothesis_assessment.verdict}</span>
+                      <span>独立证据源 {result.hypothesis_assessment.independent_source_count}</span>
+                    </div>
+                    {result.hypothesis_assessment.evidence.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+                        {result.hypothesis_assessment.evidence.map(evidence => (
+                          <div
+                            key={evidence.evidence_id}
+                            style={{
+                              paddingTop: 7,
+                              borderTop: '1px solid var(--glass-border)',
+                              fontSize: 10,
+                              lineHeight: 1.6,
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            <div style={{ fontFamily: 'var(--font-mono)' }}>
+                              {evidence.evidence_id} · {evidence.relation}/{evidence.strength}
+                              {' · '}LR {evidence.likelihood_ratio}
+                              {' · '}后验 {Math.round(evidence.posterior_probability * 100)}%
+                            </div>
+                            <div>{evidence.rationale}</div>
+                            <div style={{ color: 'var(--text-tertiary)' }}>{evidence.source}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Rendered analysis blocks */}
                 <div style={{ fontSize: 14, lineHeight: 1.9, color: 'var(--text-primary)' }}>
                   {analysisBlocks.map((block, idx) => {
@@ -566,7 +677,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                     fontFamily: 'var(--font-mono)', letterSpacing: 0.5,
                   }}>
                     <Globe size={12} weight="duotone" color="var(--text-tertiary)" />
-                    网络参考
+                    网络摘要（未验证）
                     <span style={{
                       fontSize: 8, color: 'var(--text-tertiary)', opacity: 0.6,
                       marginLeft: 'auto',
@@ -575,10 +686,13 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                     </span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {result.web_results.slice(0, 8).map((wr, i) => (
+                    {result.web_results.slice(0, 8).map((wr, i) => {
+                      const resultUrl = safeExternalUrl(wr.url)
+                      if (!resultUrl) return null
+                      return (
                       <a
                         key={i}
-                        href={wr.url}
+                        href={resultUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{
@@ -616,7 +730,8 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                           </div>
                         )}
                       </a>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -662,14 +777,13 @@ export default function SuperAnalysisPanel({ onClose, isMobile }: Props) {
                           <span>{item.source}</span>
                           <span style={{ opacity: 0.4 }}>|</span>
                           <span>{item.date}</span>
-                          <span style={{ opacity: 0.4 }}>|</span>
-                          <span style={{
-                            color: item.confidence >= 0.7 ? 'var(--success)' :
-                              item.confidence >= 0.4 ? 'var(--warning)' : 'var(--danger)',
-                            fontWeight: 600,
-                          }}>
-                            {Math.round(item.confidence * 100)}%
-                          </span>
+                        </div>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+                          marginTop: 4, fontSize: 8, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)',
+                        }}>
+                          <span>聚合独立来源 {item.independent_source_count}</span>
+                          <span>文档质量 {Math.round(item.quality_score * 100)}%</span>
                         </div>
                       </div>
                     ))}

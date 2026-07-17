@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { parseAnalysis, generateMarkdown } from '../src/lib/markdown'
+import { parseAnalysis, generateMarkdown, generateHTML } from '../src/lib/markdown'
 
 describe('parseAnalysis', () => {
   test('parses h2 headings', () => {
@@ -66,6 +66,13 @@ describe('generateMarkdown', () => {
     question: '测试问题',
     analysis: '## 分析内容\n\n这是分析结果',
     model: 'test-model',
+    hypothesis_assessment: null,
+    collection_status: 'complete',
+    provider_statuses: {},
+    degraded: false,
+    analysis_status: 'complete',
+    errors: [],
+    request_id: 'request-1234',
     web_results: [
       { title: '网页1', snippet: '摘要1', url: 'https://example.com/1' },
     ],
@@ -75,12 +82,9 @@ describe('generateMarkdown', () => {
         source: '来源A',
         date: '2026-05-20',
         layer: 'military',
-        confidence: 0.85,
-        verdict: 'verified',
-        prior_class: 'medium-credibility',
-        prior_probability: 0.5,
-        evidence_items: [{ name: '证据1', quality: 'high', lr: 2.0, direction: 'support' }],
-        bayesian_trace: [0.5, 0.67, 0.85],
+        quality_score: 0.85,
+        independent_source_count: 2,
+        source_class: 'medium-credibility',
         content_snippet: '这是内容片段',
       },
     ],
@@ -103,21 +107,22 @@ describe('generateMarkdown', () => {
     expect(md).toContain('https://example.com/1')
   })
 
-  test('includes relevant items with confidence', () => {
+  test('includes relevant items with document quality and aggregated sources', () => {
     const md = generateMarkdown(mockResult)
     expect(md).toContain('情报项1')
-    expect(md).toContain('85%')
-    expect(md).toContain('已核实')
+    expect(md).toContain('聚合独立来源: 2')
+    expect(md).toContain('文档质量: 85%')
+    expect(md).toContain('medium-credibility')
   })
 
-  test('includes bayesian trace', () => {
+  test('labels web search snippets as unverified', () => {
     const md = generateMarkdown(mockResult)
-    expect(md).toContain('0.50 → 0.67 → 0.85')
+    expect(md).toContain('网络搜索摘要（未验证）')
   })
 
   test('handles empty web_results', () => {
     const md = generateMarkdown({ ...mockResult, web_results: [] })
-    expect(md).not.toContain('## 网络搜索参考')
+    expect(md).not.toContain('## 网络搜索摘要（未验证）')
   })
 
   test('handles empty relevant_items', () => {
@@ -131,5 +136,71 @@ describe('generateMarkdown', () => {
       web_results: [{ title: '', snippet: 's', url: 'https://x.com' }],
     })
     expect(md).toContain('来源 1')
+  })
+})
+
+describe('generateHTML', () => {
+  const mockResult = {
+    question: '测试 <问题>',
+    analysis: '## 分析内容\n\n这是 **重点 <内容>**。\n\n- 待核查 <script>alert(1)</script>',
+    model: 'test-model',
+    hypothesis_assessment: null,
+    collection_status: 'complete',
+    provider_statuses: {},
+    degraded: false,
+    analysis_status: 'complete',
+    errors: [],
+    request_id: 'request-1234',
+    web_results: [
+      { title: '网页 <1>', snippet: '摘要 <script>alert(2)</script>', url: 'https://example.com/?q=<x>' },
+    ],
+    relevant_items: [
+      {
+        title: '情报项 <1>',
+        source: '来源 <A>',
+        date: '2026-05-20',
+        layer: 'military',
+        quality_score: 0.85,
+        independent_source_count: 2,
+        source_class: 'medium-credibility',
+        content_snippet: '这是内容 <片段>',
+      },
+    ],
+  }
+
+  test('returns a complete HTML document', () => {
+    const html = generateHTML(mockResult)
+
+    expect(html.trim().toLowerCase().startsWith('<!doctype html>')).toBe(true)
+    expect(html).toContain('<html lang="zh-CN">')
+    expect(html).toContain('<head>')
+    expect(html).toContain('<meta charset="UTF-8">')
+    expect(html).toContain('<title>超级分析报告')
+    expect(html).toContain('<style>')
+    expect(html).toContain('<body>')
+    expect(html).toContain('</html>')
+  })
+
+  test('escapes user content while preserving bold markup', () => {
+    const html = generateHTML(mockResult)
+
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).toContain('&lt;问题&gt;')
+    expect(html).toContain('<strong style="color:#0d9488;font-weight:700;">重点 &lt;内容&gt;</strong>')
+  })
+
+  test('drops non-http(s) web result URLs from links', () => {
+    const html = generateHTML({
+      ...mockResult,
+      web_results: [
+        { title: '恶意链接', snippet: 'x', url: 'javascript:alert(1)' },
+        { title: '正常链接', snippet: 'y', url: 'https://example.com/a' },
+      ],
+    })
+
+    expect(html).not.toContain('href="javascript:')
+    expect(html).toContain('href=""')
+    expect(html).toContain('href="https://example.com/a"')
   })
 })

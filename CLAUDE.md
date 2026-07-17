@@ -13,7 +13,7 @@ Three-part system: Python pipeline (`src/`), FastAPI backend (`backend/`), React
 
 ```
 Collection (horizon_loop, every 15 min):
-  RSS/Reddit/HN/GitHub → translate → summarize → LLM classify → dedup → bronze JSON
+  RSS/Reddit/HN/Telegram/GitHub → translate → summarize → LLM classify → bronze JSON
 
 Serving (FastAPI):
   bronze JSON → merger (union-find) → _build_items() → classify + location + bayesian → API
@@ -22,26 +22,25 @@ Frontend (React 19 + Vite):
   polls /api/dashboard every 10s → MessageFeed + MapView + IntelCard + analysis panels
 ```
 
-- **Pipeline**: `./run.sh` → `python -m src.main` — legacy batch pipeline (rarely used directly)
 - **Backend**: `uvicorn backend.main:app --reload --port 8000` — two modes via `OSINT_COLLECTOR` env var: `demo` (regenerates test data every 30s) or `horizon` (default — runs Horizon scrapers every 15min)
 - **Frontend**: `cd frontend && npm run dev` — Vite dev server on `:5173`, proxies `/api` to `:8000`. Build: `npm run build` (= `tsc && vite build`)
 
 Source layout:
-- `src/` — legacy pipeline: `main.py`, `collector/`, `processor/`, `assembler/`, `queue/`, `bronze/`, `models/`
+- `src/` — legacy pipeline utilities: `processor/translator`, `processor/summarizer`, `processor/cleaner`, `bronze/writer`, `models/`
 - `backend/` — API + live collection:
-  - `main.py` — all routes, caching, `horizon_loop()`, `merge_loop()`, `_build_items()`
-  - `models.py` — Pydantic models + `IntelLayer` enum (10 layers)
+  - `main.py` — all routes, caching, `horizon_loop()`, `merge_loop()`, `_build_items()` (1771 lines — oversized)
+  - `models.py` — Pydantic models + `IntelLayer` enum (12 layers) + analysis types
   - `merger.py` — union-find content merge engine, runs daily at 03:00 UTC
   - `collectors/horizon_bridge.py` — wires Horizon scrapers: translate → summarize → LLM classify → write
-  - `processors/classifier.py` — keyword-based layer classifier (fallback)
+  - `collectors/horizon/` — vendored Horizon scraper implementations (RSS, Reddit, HN, Telegram, GitHub)
   - `processors/llm_classifier.py` — LLM-based layer classifier (primary, DeepSeek API)
+  - `processors/classifier.py` — keyword-based layer classifier (fallback, 12 keyword groups)
   - `processors/location.py` — geo extraction
   - `processors/analysis.py` — timeline, entity graph, anomaly detection, risk heatmap
   - `osint_sources.py` — data source catalog with credibility scores
   - `bronze_reader.py` — `scan_bronze()` sync file scanner
-  - `seed_data.py` — demo data generator
-- `frontend/src/` — SPA: `App.tsx`, `api.ts`, `types.ts`, `index.css` (warm beige custom properties), `components/` (panels + `analysis/` subdir), `icons/`, `hooks/`
-- `lib/horizon/` — vendored [Horizon](https://github.com/Thysrael/Horizon) scrapers (RSS, Reddit, HN, Telegram, GitHub)
+  - `seed_data.py` — demo data generator (90+ source templates across 16 categories)
+- `frontend/src/` — SPA: `App.tsx`, `api.ts`, `types.ts`, `index.css` (warm beige custom properties), `components/` (panels + `analysis/` subdir), `icons/` (12 layer SVG icons), `hooks/`
 
 ## Commands
 
@@ -51,6 +50,7 @@ Source layout:
 | Run frontend | `npm run dev` | `frontend/` |
 | Frontend build | `npm run build` (= `tsc && vite build`) | `frontend/` |
 | Frontend test | `npm test` (vitest) | `frontend/` |
+| Frontend single test | `npx vitest run -t "test name pattern"` | `frontend/` |
 | Backend test | `pytest` | root (`.venv` active) |
 | Deploy backend | `source .env && rsync -avz -e "ssh -p 9022" backend/ ubuntu@221.239.50.138:/opt/osint-network/backend/ && ssh osint-server "echo \$SERVER_SUDO_PASSWORD \| sudo -S systemctl restart osint-network.service"` | root |
 | Deploy frontend | `source .env && rsync -avz -e "ssh -p 9022" frontend/dist/ ubuntu@221.239.50.138:/opt/osint-network/frontend/dist/` | root (after `npm run build`) |
@@ -59,30 +59,38 @@ Source layout:
 | Trigger collect | `curl -X POST http://221.239.50.138/api/collect` | — |
 | Health check | `curl http://221.239.50.138/api/health` | — |
 
-Backend test file: `tests/test_*.py`. Frontend test file: `frontend/__tests__/mapview-regression.test.ts`.
+Backend tests: `tests/test_cleaner.py`, `tests/test_summarizer.py`.
+Frontend tests: `frontend/__tests__/api.test.ts`, `mapview-regression.test.ts`, `markdown.test.ts`, `types.test.ts`.
 
-## Intel Layers (10 total)
+## Intel Layers (12 total)
 
-| Layer | Key | Color | Layer | Key | Color |
-|-------|-----|-------|-------|-----|-------|
-| 自然 | nature | `#2ecc71` | 军事 | military | `#e74c3c` |
-| 商业 | commerce | `#3498db` | 航空 | aviation | `#00bcd4` |
-| 金融 | finance | `#f39c12` | 物流 | logistics | `#ff9800` |
-| 人文 | people | `#9b59b6` | 贸易 | trade | `#8bc34a` |
-| AI4S | ai4s | `#7c4dff` | AI热点 | ai | `#ff4081` |
+| Layer | Key | Color | Label |
+|-------|-----|-------|-------|
+| 自然生态 | nature | `#2ecc71` | 自然生态 |
+| 经济产业 | economy | `#3498db` | 经济产业 |
+| 金融 | finance | `#f39c12` | 金融 |
+| 政治外交 | politics | `#9b59b6` | 政治外交 |
+| 军事 | military | `#e74c3c` | 军事 |
+| 民航交通 | aviation | `#607d8b` | 民航交通 |
+| 科技 | technology | `#ff4081` | 科技 |
+| 社会民生 | society | `#e91e63` | 社会民生 |
+| 能源资源 | energy | `#ff5722` | 能源资源 |
+| 农业食品 | agriculture | `#4caf50` | 农业食品 |
+| 公共卫生 | health | `#00bcd4` | 公共卫生 |
+| 网络空间 | cyber | `#1a237e` | 网络空间 |
 
 Layer definitions live in **four** places:
 1. `backend/models.py` — `IntelLayer` enum
-2. `backend/processors/llm_classifier.py` — **primary**: LLM classification via DeepSeek (SYSTEM_PROMPT defines all 10 layers with disambiguation rules)
-3. `backend/processors/classifier.py` — **fallback**: keyword-based classifier
+2. `backend/processors/llm_classifier.py` — **primary**: LLM classification via DeepSeek (SYSTEM_PROMPT defines all 12 layers with disambiguation rules)
+3. `backend/processors/classifier.py` — **fallback**: keyword-based classifier (12 keyword groups)
 4. `frontend/src/types.ts` — TypeScript type + `LAYER_META` (Chinese labels, colors)
 
 Icons in `frontend/src/icons/`, layer panel in `frontend/src/components/LayerPanel.tsx`.
 
 ## Key Implementation Details
 
-- **Python 3.11+**, `.venv` at root. Dependencies in `requirements.txt`
-- **No database** — all data flows through JSON files in `bronze_storage/`, organized by date subdirectories. Currently ~10,500 documents.
+- **Python 3.11+**, `.venv` at root. Dependencies in `requirements.txt` (minimal) + full deps in `.venv`
+- **No database** — all data flows through JSON files in `bronze_storage/`, organized by date subdirectories
 - **No pre-commit, no lint config.** Python uses `from __future__ import annotations` + inline styles in React
 
 ### Layer Classification
@@ -106,6 +114,31 @@ Icons in `frontend/src/icons/`, layer panel in `frontend/src/components/LayerPan
 - `_DEFAULT_RSS_FEEDS` includes international news + Chinese feeds via RSSHub
 - Chinese feeds (Weibo, CLS Telegraph, Zaobao) require RSSHub running on server at `127.0.0.1:1200`
 
+### API Endpoints (all in `backend/main.py`)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/dashboard` | Main dashboard data (paginated, cached 30s) |
+| GET | `/api/health` | Health check |
+| GET | `/api/stats` | Aggregated stats (trends, source matrix, geo, keywords) |
+| GET | `/api/collect/status` | Current collection run status |
+| POST | `/api/collect` | Trigger collection (optional `hours` param) |
+| POST | `/api/merge` | Trigger content merge |
+| POST | `/api/reclassify` | Reclassify all documents with LLM |
+| POST | `/api/ask` | AI Q&A over intel data |
+| POST | `/api/report` | Generate situation report |
+| POST | `/api/intel/super-analysis` | Authenticated hypothesis-level Bayesian analysis + web search |
+| GET | `/api/super-analysis/progress` | Owner-scoped Super Analysis progress |
+| GET | `/api/analysis/timeline` | Timeline analysis (filter by layer, country) |
+| GET | `/api/analysis/entities` | Entity graph extraction |
+| GET | `/api/analysis/corroboration` | Cross-source corroboration matrix |
+| GET | `/api/analysis/anomalies` | Anomaly detection |
+| GET | `/api/analysis/risk-heatmap` | Regional risk heatmap |
+| GET | `/api/analysis/gaps` | Coverage gap analysis |
+| GET | `/api/collect/usgs` | USGS earthquake data collection |
+| GET | `/api/collect/cisa` | CISA alerts collection |
+| GET | `/api/collect/opensky` | OpenSky flight tracking collection |
+
 ### Dashboard Caching
 
 - 30s TTL in `_dashboard_cache`. All scans wrapped in `run_in_executor` to avoid blocking the async event loop
@@ -114,30 +147,33 @@ Icons in `frontend/src/icons/`, layer panel in `frontend/src/components/LayerPan
 
 ### Bayesian Engine
 
-- `compute_bayesian()` in `main.py` — source credibility classes: high/medium/low/kol/unknown
-- Uses `yao-bayesian-skill` odds-update engine from `~/.cc-switch/skills/`
-- Results include prior probabilities, evidence items, and bayesian traces for frontend charts
+- `assess_document_quality()` measures presentation/source quality only; it never emits truth probabilities
+- Super Analysis uses a fixed 0.5 hypothesis prior and deterministic likelihood ratios for explicit `support` / `contradict` / `neutral` evidence relations
+- Reposts and shared original sources are dependency-grouped before L1–L5 classification
+- `/api/intel/super-analysis` is the single authenticated execution route; external search summaries remain neutral until verified
 
 ### LLM Integration
 
 - All LLM calls use DeepSeek API (`deepseek-chat`) via `LLM_API_KEY` + `LLM_BASE_URL` from `.env`
-- Three LLM consumers: translator (`src/processor/translation.py`), summarizer (`src/processor/summarizer.py`), classifier (`backend/processors/llm_classifier.py`)
-- Shared `_llm_chat()` helper in `main.py` for Q&A and report generation
+- LLM consumers include translation, summarization, classification, Q&A/report generation, and Super Analysis relation/final-analysis passes
+- Super Analysis computes probabilities locally; the LLM does not calculate priors or posterior probabilities
 
 ### Frontend
 
 - React 19 + framer-motion + MapLibre GL + CSS custom properties
 - Warm beige palette (`--bg-deep: #f5f2ed`). Fonts: Satoshi/Geist + JetBrains Mono
 - Map tiles via Tianditu (key in `frontend/.env.local`)
-- **Responsive**: `useIsMobile()` hook (breakpoint 767px). Mobile: hamburger menu, horizontal layer strip, full-screen overlays. Mobile CSS in `index.css` with utility classes: `mobile-full-panel`, `mobile-bottom-sheet`, `mobile-layer-strip`, `mobile-menu-overlay`
+- **Responsive**: `useIsMobile()` hook (breakpoint 767px). Mobile: hamburger menu, horizontal layer strip, full-screen overlays
+- Components: `MessageFeed`, `MapView`, `IntelCard`, `LayerPanel`, `AskPanel`, `ReportPanel`, `StatsPanel`, `SourcePanel`, `IntelAnalysisPanel`, `SuperAnalysisPanel`, `SuperAnalysisSidebar`, `MobileMenu`, `StatusDot`
+- Analysis sub-components: `TimelineView`, `EntityGraphView`, `CorroborationView`, `AnomalyView`, `RiskHeatmapView`, `GapAnalysisView`, `AIInterpretBadge`
 
 ## Adding a New Intel Layer
 
 Files to touch (order matters):
 1. `backend/models.py` — add to `IntelLayer` enum
 2. `backend/processors/llm_classifier.py` — add to SYSTEM_PROMPT with disambiguation rules
-3. `backend/processors/classifier.py` — add keyword rules (fallback)
-4. `frontend/src/types.ts` — add to `IntelLayer` type + `LAYER_META`
+3. `backend/processors/classifier.py` — add keyword rules to `_LAYER_RULES` (fallback)
+4. `frontend/src/types.ts` — add to `IntelLayer` type + `LAYER_META` (label + color)
 5. `frontend/src/icons/<NewIcon>.tsx` — create SVG icon component
 6. `frontend/src/components/LayerPanel.tsx` — import and register in `iconMap`
 7. `frontend/src/App.tsx`, `AskPanel.tsx`, `ReportPanel.tsx` — add to `ALL_LAYERS`
@@ -147,10 +183,10 @@ Files to touch (order matters):
 
 ## Performance Notes
 
-- `scan_bronze()` reads 10,500+ JSON files synchronously. Never call it directly in an async handler — always wrap in `run_in_executor` or use `scan_bronze_async()`
+- `scan_bronze()` reads thousands of JSON files synchronously. Never call it directly in an async handler — always wrap in `run_in_executor` or use `scan_bronze_async()`
 - Dashboard is polled every 10s by frontend. The 30s cache prevents repeated full scans
-- `MessageFeed.tsx` uses `LAYER_META` for layer labels, not a hardcoded map
 - The merge index (`_merge_index.json`) reduces per-request computation by pre-computing document groups
+- `backend/main.py` is 1771 lines — well over the 800-line guideline. Consider splitting routes into separate modules under `backend/routes/`
 
 ## Server Deployment
 
@@ -170,9 +206,3 @@ Server stack:
 - `osint-network.service` (systemd) — the FastAPI backend
 - RSSHub Docker container on `:1200` — provides RSS feeds for Weibo, CLS, Zaobao
 - No Node.js on server — frontend must be built locally
-
-## Ongoing: iFairy Reproduction (`ifairy-repro/`)
-
-Training a ComplexLlama model (L8 H1024, 408M params, fp32, FairyQuantizer {±1,±i}) on server **ubuntu@10.13.45.20**. See `ifairy-repro/TRAINING_STATE.md` for full context.
-
-On session start: check if training is still running, report progress. Attach with `tmux attach -t ifairy` on the server.

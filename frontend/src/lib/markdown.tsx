@@ -1,21 +1,6 @@
-import DOMPurify from 'dompurify'
 import type { SuperAnalysisResponse } from '../types'
+import { safeExternalUrl } from '../utils/safeUrl'
 
-// ── Shared constants ──
-
-export const PRIOR_LABELS: Record<string, string> = {
-  'high-credibility': '高可信',
-  'medium-credibility': '中可信',
-  'low-credibility': '低可信',
-  kol: 'KOL',
-  unknown: '未知',
-}
-
-export const VERDICT_LABELS: Record<string, string> = {
-  verified: '已核实',
-  false: '不实',
-  uncertain: '不确定',
-}
 
 // ── Types ──
 
@@ -122,11 +107,24 @@ function renderBlockToHTML(block: Block): string {
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function highlightHTML(text: string): string {
-  return text.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#0d9488;font-weight:700;">$1</strong>')
+  return text
+    .split(/(\*\*[^*]+\*\*)/g)
+    .map(part => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return `<strong style="color:#0d9488;font-weight:700;">${esc(part.slice(2, -2))}</strong>`
+      }
+      return esc(part)
+    })
+    .join('')
 }
 
 export function generateMarkdown(result: SuperAnalysisResponse): string {
@@ -137,12 +135,46 @@ export function generateMarkdown(result: SuperAnalysisResponse): string {
   lines.push(`**问题**: ${result.question}`)
   if (result.model) lines.push(`**模型**: ${result.model}`)
   lines.push('')
+  lines.push('## 执行状态')
+  lines.push('')
+  lines.push(`- 采集状态: ${result.collection_status}`)
+  lines.push(`- 分析状态: ${result.analysis_status}`)
+  lines.push(`- 降级: ${result.degraded ? '是' : '否'}`)
+  const providers = Object.entries(result.provider_statuses)
+    .map(([provider, status]) => `${provider}=${status}`)
+    .join(', ')
+  if (providers) lines.push(`- 数据源: ${providers}`)
+  result.errors.forEach(error => lines.push(`- 错误: ${error}`))
+  lines.push('')
+
+  if (result.hypothesis_assessment) {
+    const assessment = result.hypothesis_assessment
+    lines.push('## 结构化假设评估')
+    lines.push('')
+    lines.push(`- 假设: ${assessment.hypothesis}`)
+    lines.push(`- 先验概率: ${Math.round(assessment.prior_probability * 100)}%`)
+    lines.push(`- 后验概率: ${Math.round(assessment.posterior_probability * 100)}%`)
+    lines.push(`- 判定: ${assessment.verdict}`)
+    lines.push(`- 置信等级: ${assessment.confidence_level}`)
+    lines.push(`- 独立证据源: ${assessment.independent_source_count}`)
+    lines.push('')
+    if (assessment.evidence.length > 0) {
+      lines.push('| 证据ID | 来源 | 关系 | 强度 | LR | 后验 | 理由 |')
+      lines.push('|---|---|---|---|---:|---:|---|')
+      assessment.evidence.forEach(evidence => {
+        lines.push(
+          `| ${evidence.evidence_id} | ${evidence.source} | ${evidence.relation} | ${evidence.strength} | ${evidence.likelihood_ratio} | ${Math.round(evidence.posterior_probability * 100)}% | ${evidence.rationale} |`,
+        )
+      })
+      lines.push('')
+    }
+  }
 
   lines.push(result.analysis)
   lines.push('')
 
   if (result.web_results.length > 0) {
-    lines.push('## 网络搜索参考')
+    lines.push('## 网络搜索摘要（未验证）')
     lines.push('')
     result.web_results.forEach((wr, i) => {
       const label = wr.title || `来源 ${i + 1}`
@@ -158,12 +190,8 @@ export function generateMarkdown(result: SuperAnalysisResponse): string {
       lines.push(`### ${idx + 1}. ${item.title}`)
       lines.push('')
       lines.push(`- 来源: ${item.source} | 日期: ${item.date} | 层级: ${item.layer}`)
-      lines.push(`- 置信度: ${(item.confidence * 100).toFixed(0)}% | 判定: ${VERDICT_LABELS[item.verdict] ?? item.verdict}`)
-      lines.push(`- 先验类别: ${PRIOR_LABELS[item.prior_class] ?? item.prior_class} (${(item.prior_probability * 100).toFixed(0)}%)`)
-      if (item.evidence_items.length > 0) {
-        lines.push(`- 证据项: ${item.evidence_items.map(e => `${e.name} (LR=${e.lr}, ${e.direction})`).join('; ')}`)
-      }
-      lines.push(`- 置信度追踪: ${item.bayesian_trace.map(t => t.toFixed(2)).join(' → ')}`)
+      lines.push(`- 聚合独立来源: ${item.independent_source_count} | 文档质量: ${Math.round(item.quality_score * 100)}%`)
+      lines.push(`- 来源类别: ${item.source_class}`)
       lines.push(`- 内容: ${item.content_snippet}`)
       lines.push('')
     })
@@ -177,12 +205,56 @@ export function generateHTML(result: SuperAnalysisResponse): string {
   const bodyBlocks = blocks.map(b => renderBlockToHTML(b)).join('\n')
 
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
+  const providerSummary = Object.entries(result.provider_statuses)
+    .map(([provider, status]) => `${provider}=${status}`)
+    .join(', ')
+  const statusHTML = `
+    <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:24px 0 12px;">执行状态</h2>
+    <div style="font-size:12px;color:#6b7280;line-height:1.7;">
+      采集状态: ${esc(result.collection_status)}<br>
+      分析状态: ${esc(result.analysis_status)}<br>
+      降级: ${result.degraded ? '是' : '否'}
+      ${providerSummary ? `<br>数据源: ${esc(providerSummary)}` : ''}
+      ${result.errors.map(error => `<br>错误: ${esc(error)}`).join('')}
+    </div>
+  `
+  const hypothesisHTML = result.hypothesis_assessment ? (() => {
+    const assessment = result.hypothesis_assessment
+    const rows = assessment.evidence.map(evidence => `
+      <tr>
+        <td>${esc(evidence.evidence_id)}</td>
+        <td>${esc(evidence.source)}</td>
+        <td>${esc(evidence.relation)}</td>
+        <td>${esc(evidence.strength)}</td>
+        <td>${evidence.likelihood_ratio}</td>
+        <td>${Math.round(evidence.posterior_probability * 100)}%</td>
+        <td>${esc(evidence.rationale)}</td>
+      </tr>
+    `).join('')
+    return `
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">结构化假设评估</h2>
+      <div style="font-size:12px;color:#4b5563;line-height:1.7;">
+        <strong>假设:</strong> ${esc(assessment.hypothesis)}<br>
+        <strong>先验:</strong> ${Math.round(assessment.prior_probability * 100)}% &middot;
+        <strong>后验:</strong> ${Math.round(assessment.posterior_probability * 100)}% &middot;
+        <strong>判定:</strong> ${esc(assessment.verdict)} &middot;
+        <strong>置信等级:</strong> ${esc(assessment.confidence_level)} &middot;
+        <strong>独立证据源:</strong> ${assessment.independent_source_count}
+      </div>
+      ${rows ? `
+        <table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:11px;">
+          <thead><tr><th>证据ID</th><th>来源</th><th>关系</th><th>强度</th><th>LR</th><th>后验</th><th>理由</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : ''}
+    `
+  })() : ''
 
   const webResultsHTML = result.web_results.length > 0 ? `
-    <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">网络搜索参考</h2>
+    <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">网络搜索摘要（未验证）</h2>
     ${result.web_results.map(wr => `
       <div style="margin-bottom:8px;font-size:12px;">
-        <a href="${esc(wr.url)}" style="color:#0d9488;font-weight:600;text-decoration:none;">${esc(wr.title || '来源')}</a>
+        <a href="${esc(safeExternalUrl(wr.url) ?? '')}" style="color:#0d9488;font-weight:600;text-decoration:none;">${esc(wr.title || '来源')}</a>
         <span style="color:#6b7280;margin-left:4px;">${esc(wr.snippet)}</span>
       </div>
     `).join('\n')}
@@ -197,18 +269,10 @@ export function generateHTML(result: SuperAnalysisResponse): string {
           来源: ${esc(item.source)} | 日期: ${esc(item.date)} | 层级: ${esc(item.layer)}
         </div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">
-          置信度: ${(item.confidence * 100).toFixed(0)}% | 判定: ${VERDICT_LABELS[item.verdict] ?? item.verdict}
+          聚合独立来源: ${item.independent_source_count} | 文档质量: ${Math.round(item.quality_score * 100)}%
         </div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">
-          先验类别: ${PRIOR_LABELS[item.prior_class] ?? item.prior_class} (${(item.prior_probability * 100).toFixed(0)}%)
-        </div>
-        ${item.evidence_items.length > 0 ? `
-          <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">
-            证据项: ${item.evidence_items.map(e => esc(`${e.name} (LR=${e.lr}, ${e.direction})`)).join('; ')}
-          </div>
-        ` : ''}
-        <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">
-          置信度追踪: ${item.bayesian_trace.map(t => t.toFixed(2)).join(' → ')}
+          来源类别: ${esc(item.source_class)}
         </div>
         <div style="font-size:12px;color:#4b5563;line-height:1.6;">${esc(item.content_snippet)}</div>
       </div>
@@ -237,11 +301,13 @@ export function generateHTML(result: SuperAnalysisResponse): string {
   问题: ${esc(result.question)} &middot; ${now}${modelSuffix}
 </div>
 <hr style="border:none;border-top:1px solid #e5e7eb;margin-bottom:24px;">
+${statusHTML}
+${hypothesisHTML}
 ${bodyBlocks}
 <hr style="border:none;border-top:1px solid #e5e7eb;margin-top:28px;">
 ${webResultsHTML}
 ${itemsHTML}
 </body>
 </html>`
-  return DOMPurify.sanitize(raw)
+  return raw
 }

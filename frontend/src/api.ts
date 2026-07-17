@@ -21,8 +21,8 @@ import type {
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
 
-async function safeGet<T>(url: string): Promise<T> {
-  const res = await fetch(url)
+async function safeGet<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const res = signal ? await fetch(url, { signal }) : await fetch(url)
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
 }
@@ -54,29 +54,29 @@ async function safePostWithDetail<T>(url: string, body: unknown, fallbackMsg: st
   return res.json()
 }
 
-export async function fetchDashboard(startDate?: string, endDate?: string, page?: number, pageSize?: number, date?: string): Promise<DashboardData> {
+export async function fetchDashboard(startDate?: string, endDate?: string, page?: number, pageSize?: number, date?: string, signal?: AbortSignal): Promise<DashboardData> {
   const params = new URLSearchParams()
   if (startDate) params.set('start_date', startDate)
   if (endDate) params.set('end_date', endDate)
   if (page) params.set('page', String(page))
-  if (pageSize) params.set('page_size', String(pageSize))
+  if (pageSize !== undefined) params.set('page_size', String(pageSize))
   if (date) params.set('date', date)
   const qs = params.toString()
   const url = qs ? `/api/dashboard?${qs}` : '/api/dashboard'
-  return safeGet<DashboardData>(url)
+  return safeGet<DashboardData>(url, signal)
 }
 
 export function askQuestionIntel(req: AskRequest, signal?: AbortSignal): Promise<AskResponse> {
   return safePost<AskResponse>('/api/intel/ask', req, signal)
 }
 
-export function fetchStats(startDate?: string, endDate?: string): Promise<DashboardStats> {
+export function fetchStats(startDate?: string, endDate?: string, signal?: AbortSignal): Promise<DashboardStats> {
   const params = new URLSearchParams()
   if (startDate) params.set('start_date', startDate)
   if (endDate) params.set('end_date', endDate)
   const qs = params.toString()
   const url = qs ? `/api/stats?${qs}` : '/api/stats'
-  return safeGet<DashboardStats>(url)
+  return safeGet<DashboardStats>(url, signal)
 }
 
 export function generateReportIntel(req: ReportRequest, signal?: AbortSignal): Promise<SituationReport> {
@@ -85,10 +85,10 @@ export function generateReportIntel(req: ReportRequest, signal?: AbortSignal): P
 
 // ── Intelligence Analysis ──
 
-async function apiGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+async function apiGet<T>(path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const qs = new URLSearchParams(params || {})
   const url = qs.toString() ? `${path}?${qs}` : path
-  return safeGet<T>(url)
+  return safeGet<T>(url, signal)
 }
 
 export function fetchCorroboration(params?: {
@@ -97,14 +97,14 @@ export function fetchCorroboration(params?: {
   endDate?: string
   layers?: string[]
   country?: string
-}): Promise<CorroborationResult> {
+}, signal?: AbortSignal): Promise<CorroborationResult> {
   const query: Record<string, string> = {}
   if (params?.date) query.date = params.date
   if (params?.startDate) query.start_date = params.startDate
   if (params?.endDate) query.end_date = params.endDate
   if (params?.layers?.length) query.layers = params.layers.join(',')
   if (params?.country) query.country = params.country
-  return apiGet<CorroborationResult>('/api/analysis/corroboration', query)
+  return apiGet<CorroborationResult>('/api/analysis/corroboration', query, signal)
 }
 
 export function fetchGapAnalysis(params?: {
@@ -113,14 +113,14 @@ export function fetchGapAnalysis(params?: {
   endDate?: string
   layers?: string[]
   country?: string
-}): Promise<GapAnalysisResult> {
+}, signal?: AbortSignal): Promise<GapAnalysisResult> {
   const query: Record<string, string> = {}
   if (params?.date) query.date = params.date
   if (params?.startDate) query.start_date = params.startDate
   if (params?.endDate) query.end_date = params.endDate
   if (params?.layers?.length) query.layers = params.layers.join(',')
   if (params?.country) query.country = params.country
-  return apiGet<GapAnalysisResult>('/api/analysis/gaps', query)
+  return apiGet<GapAnalysisResult>('/api/analysis/gaps', query, signal)
 }
 
 export function fetchSituationBrief(params: {
@@ -129,14 +129,14 @@ export function fetchSituationBrief(params: {
   endDate?: string
   layers?: string[]
   country?: string
-}): Promise<SituationBriefResult> {
+}, signal?: AbortSignal): Promise<SituationBriefResult> {
   const query: Record<string, string> = {}
   if (params.date) query.date = params.date
   if (params.startDate) query.start_date = params.startDate
   if (params.endDate) query.end_date = params.endDate
   if (params.layers?.length) query.layers = params.layers.join(',')
   if (params.country) query.country = params.country
-  return apiGet<SituationBriefResult>('/api/analysis/brief', query)
+  return apiGet<SituationBriefResult>('/api/analysis/brief', query, signal)
 }
 
 export function fetchEventClusters(params: {
@@ -145,14 +145,14 @@ export function fetchEventClusters(params: {
   endDate?: string
   layers?: string[]
   country?: string
-}): Promise<EventClusterResult> {
+}, signal?: AbortSignal): Promise<EventClusterResult> {
   const query: Record<string, string> = {}
   if (params.date) query.date = params.date
   if (params.startDate) query.start_date = params.startDate
   if (params.endDate) query.end_date = params.endDate
   if (params.layers?.length) query.layers = params.layers.join(',')
   if (params.country) query.country = params.country
-  return apiGet<EventClusterResult>('/api/analysis/events', query)
+  return apiGet<EventClusterResult>('/api/analysis/events', query, signal)
 }
 
 export function fetchWarningIndicators(params: {
@@ -161,18 +161,18 @@ export function fetchWarningIndicators(params: {
   endDate?: string
   layers?: string[]
   country?: string
-}): Promise<WarningIndicatorResult> {
+}, signal?: AbortSignal): Promise<WarningIndicatorResult> {
   const query: Record<string, string> = {}
   if (params.date) query.date = params.date
   if (params.startDate) query.start_date = params.startDate
   if (params.endDate) query.end_date = params.endDate
   if (params.layers?.length) query.layers = params.layers.join(',')
   if (params.country) query.country = params.country
-  return apiGet<WarningIndicatorResult>('/api/analysis/warnings', query)
+  return apiGet<WarningIndicatorResult>('/api/analysis/warnings', query, signal)
 }
 
-export function interpretAnalysis(req: AnalysisInterpretRequest): Promise<AnalysisInterpretResponse> {
-  return safePost<AnalysisInterpretResponse>('/api/intel/interpret', req)
+export function interpretAnalysis(req: AnalysisInterpretRequest, signal?: AbortSignal): Promise<AnalysisInterpretResponse> {
+  return safePost<AnalysisInterpretResponse>('/api/intel/interpret', req, signal)
 }
 
 export function superAnalyze(req: SuperAnalysisRequest, signal?: AbortSignal): Promise<SuperAnalysisResponse> {
@@ -187,9 +187,13 @@ export interface SuperAnalysisProgress {
   detail: Record<string, unknown>
 }
 
-export async function fetchSuperAnalysisProgress(requestId?: string): Promise<SuperAnalysisProgress> {
+export function shouldApplySuperAnalysisProgress(progress: SuperAnalysisProgress): boolean {
+  return progress.phase !== 'idle'
+}
+
+export async function fetchSuperAnalysisProgress(requestId?: string, signal?: AbortSignal): Promise<SuperAnalysisProgress> {
   const url = requestId ? `/api/super-analysis/progress?request_id=${encodeURIComponent(requestId)}` : '/api/super-analysis/progress'
-  const res = await fetch(url)
+  const res = signal ? await fetch(url, { signal }) : await fetch(url)
   if (!res.ok) throw new Error(`Progress API error: ${res.status}`)
   return res.json()
 }
@@ -248,4 +252,30 @@ export async function fetchAdminStats(): Promise<AdminStats> {
     throw new Error((data as { detail?: string }).detail || '获取统计数据失败')
   }
   return res.json()
+}
+
+// ── Auth helpers ──
+
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const res = await fetch('/api/auth/me/change-password', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail || '修改密码失败')
+  }
+}
+
+export async function resetUserPassword(userId: number, newPassword: string): Promise<void> {
+  const res = await fetch(`/api/admin/users/${userId}/reset-password`, {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail || '重置密码失败')
+  }
 }

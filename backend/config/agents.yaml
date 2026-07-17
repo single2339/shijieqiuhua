@@ -1,0 +1,140 @@
+agents:
+  # ── System ──
+  orchestrator:
+    type: system
+    model: deepseek-v4-flash
+    max_tokens: 4096
+    temperature: 0.3
+
+  merger:
+    type: system
+
+  indexer:
+    type: system
+
+  # ── Collection ──
+  rss_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  reddit_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  hackernews_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  telegram_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  github_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  usgs_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  cisa_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  opensky_collector:
+    type: collection
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  # ── Processing ──
+  translator:
+    type: processing
+    model: deepseek-v4-flash
+    max_tokens: 2048
+    temperature: 0.1
+
+  summarizer:
+    type: processing
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  classifier:
+    type: processing
+    model: deepseek-v4-flash
+    max_tokens: 512
+    temperature: 0.0
+
+  location_extractor:
+    type: processing
+    model: deepseek-v4-flash
+    max_tokens: 512
+    temperature: 0.0
+
+  document_quality:
+    type: processing
+
+  collection_pipeline:
+    type: processing
+    model: deepseek-v4-flash
+    max_tokens: 1024
+    temperature: 0.3
+
+  # ── Analysis ──
+  timeline:
+    type: analysis
+
+  entity_graph:
+    type: analysis
+
+  corroboration:
+    type: analysis
+
+  anomaly_detector:
+    type: analysis
+
+  risk_heatmap:
+    type: analysis
+
+  gap_analyzer:
+    type: analysis
+
+  # ── Intelligence ──
+  qa_analyst:
+    type: intelligence
+    model: deepseek-v4-flash
+    max_tokens: 4096
+    temperature: 0.3
+
+  report_writer:
+    type: intelligence
+    model: deepseek-v4-flash
+    max_tokens: 4096
+    temperature: 0.3
+
+  super_analyst:
+    type: intelligence
+    model: deepseek-v4-flash
+    max_tokens: 16384
+    temperature: 0.3
+
+  interpretation:
+    type: intelligence
+    model: deepseek-v4-flash
+    max_tokens: 2048
+    temperature: 0.3

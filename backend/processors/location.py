@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Optional, Any
 
 _LATIN_RE = re.compile(r"[a-zA-Z]")
+
+
+@lru_cache(maxsize=None)
+def _latin_variant_pattern(variant: str) -> re.Pattern[str]:
+    return re.compile(r"\b" + re.escape(variant) + r"\b")
 
 
 def _variant_pos(text: str, variant: str) -> int | None:
@@ -14,7 +20,7 @@ def _variant_pos(text: str, variant: str) -> int | None:
     for CJK variants since \\b doesn't work with Chinese characters.
     """
     if _LATIN_RE.search(variant):
-        m = re.search(r"\b" + re.escape(variant) + r"\b", text)
+        m = _latin_variant_pattern(variant).search(text)
         return m.start() if m else None
     idx = text.find(variant)
     return idx if idx != -1 else None

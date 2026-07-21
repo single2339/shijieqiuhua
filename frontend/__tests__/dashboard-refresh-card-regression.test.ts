@@ -27,12 +27,23 @@ describe('dashboard refresh and intel card usability regressions', () => {
     expect(appContent).toContain('const mapItems = useMemo(() => feedItems.filter')
   })
 
+  test('layer filtering is computed once for map and feed consumers', () => {
+    expect(appContent).toContain('const feedFilteredItems = mapItems')
+    expect(appContent.match(/feedItems\.filter/g)).toHaveLength(1)
+  })
+
   test('map module waits for browser idle time after data loads', () => {
     expect(appContent).toContain('requestIdleCallback')
     expect(appContent).toContain('globalThis.setTimeout')
     expect(appContent).toContain('cancelIdleCallback')
     expect(appContent).toContain('globalThis.clearTimeout')
     expect(appContent).toContain('!loading && mapReady')
+  })
+
+  test('map module download starts before the idle render window', () => {
+    expect(appContent).toContain("const loadMapView = () => import('./components/MapView')")
+    expect(appContent).toContain('const MapView = lazy(loadMapView)')
+    expect(appContent).toContain('void loadMapView()')
   })
 
   test('desktop intel card remains compact and scrollable', () => {

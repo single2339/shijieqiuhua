@@ -14,7 +14,8 @@ import { BRIEF_WORKSPACE_STORAGE_KEY, getUserStorageKey } from './utils/userStor
 import LayerPanel from './components/LayerPanel'
 import StatusDot from './components/StatusDot'
 
-const MapView = lazy(() => import('./components/MapView'))
+const loadMapView = () => import('./components/MapView')
+const MapView = lazy(loadMapView)
 const IntelCard = lazy(() => import('./components/IntelCard'))
 const MessageFeed = lazy(() => import('./components/MessageFeed'))
 const AskPanel = lazy(() => import('./components/AskPanel'))
@@ -273,7 +274,7 @@ function Dashboard() {
   }, [])
 
   const mapItems = useMemo(() => feedItems.filter(i => activeLayers.has(i.layer)), [feedItems, activeLayers])
-  const feedFilteredItems = useMemo(() => feedItems.filter(i => activeLayers.has(i.layer)), [feedItems, activeLayers])
+  const feedFilteredItems = mapItems
   const activeLayerList = useMemo(() => Array.from(activeLayers), [activeLayers])
   const analysisFocusDate = selectedItem?.captured_at?.slice(0, 10) || analysisFocus?.item.captured_at?.slice(0, 10) || ''
   const analysisContext = useAnalysisContext(
@@ -284,6 +285,10 @@ function Dashboard() {
     showFeeds || selectedItem !== null || activePanel === 'analysis',
     analysisFocusDate,
   )
+
+  useEffect(() => {
+    if (!loading) void loadMapView().catch(() => undefined)
+  }, [loading])
 
   useEffect(() => {
     if (loading || mapReady) return

@@ -236,7 +236,7 @@ async def lifespan(app: FastAPI):
     _collection_queue_task: asyncio.Task | None = None
 
     if should_prewarm_api_cache():
-        loop.run_in_executor(None, _prewarm_dashboard_cache)
+        loop.run_in_executor(None, _prewarm_api_caches)
 
         async def _cache_refresh_loop():
             interval = max(DASHBOARD_CACHE_TTL // 2, 60)
@@ -558,7 +558,8 @@ _analysis_snapshot_locks: dict[str, asyncio.Lock] = {}
 _cache_lock = threading.RLock()
 _MAX_SNAPSHOT_LOCKS = 512  # bound the per-cache-key lock registry
 DASHBOARD_CACHE_TTL = 300  # seconds — long enough to absorb a full scan (102s) + buffer
-DASHBOARD_CACHE_MAX_SIZE = 256  # prevent unbounded growth
+DASHBOARD_CACHE_MAX_SIZE = int(os.environ.get("DASHBOARD_CACHE_MAX_SIZE", "64"))
+MASTER_LIST_CACHE_MAX_SIZE = int(os.environ.get("MASTER_LIST_CACHE_MAX_SIZE", "8"))
 DASHBOARD_MAX_FULL_PAGE_ITEMS = int(os.environ.get("DASHBOARD_MAX_FULL_PAGE_ITEMS", "5000"))
 
 
@@ -639,7 +640,7 @@ def _get_or_build_items(start_date: str, end_date: str, date: str) -> list:
     items = _build_items(start_date=s_date, end_date=e_date)
     with _cache_lock:
         _evict_expired_cache()
-        if len(_master_list_cache) >= DASHBOARD_CACHE_MAX_SIZE:
+        if len(_master_list_cache) >= MASTER_LIST_CACHE_MAX_SIZE:
             oldest = min(_master_list_cache.items(), key=lambda x: x[1][0])
             del _master_list_cache[oldest[0]]
         _master_list_cache[key] = (_time.time(), items)
@@ -724,6 +725,15 @@ def _prewarm_dashboard_cache() -> None:
             log.info("Dashboard page cache prewarmed: key=%s", cache_key)
     except Exception:
         log.exception("Failed to pre-warm dashboard page cache")
+
+
+def _prewarm_api_caches() -> None:
+    """Warm API request-path caches in the background after startup."""
+    _prewarm_dashboard_cache()
+    from backend.agents.intelligence.super_analyst import prewarm_super_analysis
+
+    statuses = prewarm_super_analysis(STORAGE)
+    log.info("Super-analysis caches prewarmed: %s", statuses)
 
 
 def _resolve_source_name(doc) -> str:
@@ -1180,7 +1190,7 @@ def _build_items(
         return items
 
     # Try loading merge index for multi-source grouping
-    merge_index = load_merge_index(STORAGE)
+    merge_index = load_merge_index(STORAGE) if use_merge_groups else None
     use_merge = use_merge_groups and merge_index is not None and merge_index.groups
 
     def _make_item(

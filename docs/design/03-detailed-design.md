@@ -765,6 +765,18 @@ server {
     root /opt/osint-network/frontend/dist;
     index index.html;
 
+    gzip on;
+    gzip_static on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    location ~* \\.(?:css|js)$ {
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;

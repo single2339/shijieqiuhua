@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from backend.agents.intelligence._bayesian import (
 )
 from backend.agents.models import AgentTask
 from backend.agents.registry import AgentRegistry
+from backend.bronze_catalog import BronzeCatalog
 from backend.bronze_reader import scan_bronze
 from backend.config.osint_methodology import count_independent_sources, render_methodology
 from backend.llm_config import get_llm_client, get_plain_http_client
@@ -52,6 +54,10 @@ log = logging.getLogger(__name__)
 
 BING_API_KEY = os.getenv("BING_API_KEY", "")
 _UNINDEXED_FALLBACK_LIMIT = int(os.getenv("SUPER_ANALYSIS_UNINDEXED_FALLBACK_LIMIT", "200"))
+_embedding_index_cache: dict[str, EmbeddingIndex] = {}
+_embedding_index_lock = threading.RLock()
+_bronze_catalog_cache: dict[str, BronzeCatalog] = {}
+_bronze_catalog_lock = threading.RLock()
 
 # Browser-like headers are used only for fixed search-provider result pages.
 # Never reuse get_llm_client(): it injects the LLM Authorization header.
@@ -177,14 +183,94 @@ def _load_embedding_candidates(
     storage: Path,
     question: str,
 ) -> tuple[dict[str, float], set[str], int]:
-    index = EmbeddingIndex(storage, index_dir="embedding_index")
-    index.load()
-    if not index.is_loaded:
-        return {}, set(), 0
-    indexed_hashes = set(getattr(index, "doc_hashes", []))
-    if not indexed_hashes:
-        indexed_hashes = set(getattr(index, "_doc_hashes", []))
-    return dict(index.search(question, top_k=100)), indexed_hashes, index.size
+    cache_key = str(storage.resolve())
+    with _embedding_index_lock:
+        index = _embedding_index_cache.get(cache_key)
+        if index is None:
+            index = EmbeddingIndex(storage, index_dir="embedding_index")
+            _embedding_index_cache[cache_key] = index
+        if not index.is_loaded:
+            index.load()
+        if not index.is_loaded:
+            return {}, set(), 0
+        indexed_hashes = set(getattr(index, "doc_hashes", []))
+        if not indexed_hashes:
+            indexed_hashes = set(getattr(index, "_doc_hashes", []))
+        return dict(index.search(question, top_k=100)), indexed_hashes, index.size
+
+
+def prewarm_super_analysis(storage: str | Path) -> dict[str, str]:
+    """Warm reusable catalogue and semantic resources without failing startup."""
+    storage_path = Path(storage)
+    cache_key = str(storage_path.resolve())
+    statuses: dict[str, str] = {}
+
+    try:
+        with _bronze_catalog_lock:
+            catalog = _bronze_catalog_cache.get(cache_key)
+            if catalog is None:
+                catalog = BronzeCatalog(storage_path)
+                _bronze_catalog_cache[cache_key] = catalog
+            catalog.ensure()
+        statuses["catalog"] = "ready"
+    except Exception as exc:
+        log.warning("super-analysis catalogue prewarm failed: %s", exc)
+        statuses["catalog"] = "error"
+
+    try:
+        with _embedding_index_lock:
+            index = _embedding_index_cache.get(cache_key)
+            if index is None:
+                index = EmbeddingIndex(storage_path, index_dir="embedding_index")
+                _embedding_index_cache[cache_key] = index
+            if not index.is_loaded:
+                index.load()
+            statuses["embedding"] = "ready" if index.prewarm() else "empty"
+    except Exception as exc:
+        log.warning("super-analysis embedding prewarm failed: %s", exc)
+        statuses["embedding"] = "error"
+
+    return statuses
+
+
+def _load_catalog_documents(
+    storage: Path,
+    question: str,
+    start_date: str | None,
+    end_date: str | None,
+    embedding_hits: dict[str, float],
+) -> tuple[list, int]:
+    """Select candidate IDs from the catalogue, then hydrate only those bodies."""
+    cache_key = str(storage.resolve())
+    with _bronze_catalog_lock:
+        catalog = _bronze_catalog_cache.get(cache_key)
+        if catalog is None:
+            catalog = BronzeCatalog(storage)
+            _bronze_catalog_cache[cache_key] = catalog
+        catalog.ensure()
+        candidate_hashes = list(embedding_hits)
+        candidate_hashes.extend(
+            body_hash
+            for body_hash in catalog.search_tokens(
+                question,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if body_hash not in embedding_hits
+        )
+        if not candidate_hashes:
+            return [], catalog.size
+
+        entries = catalog.entries_for(candidate_hashes)
+        in_scope: list[str] = []
+        for body_hash in candidate_hashes:
+            captured = str(entries.get(body_hash, {}).get("captured_at") or "")[:10]
+            if start_date and captured < start_date:
+                continue
+            if end_date and captured > end_date:
+                continue
+            in_scope.append(body_hash)
+        return catalog.hydrate(in_scope), catalog.size
 
 
 def _score_internal_candidates(
@@ -573,20 +659,32 @@ class SuperAnalysisAgent(BaseAgent):
         errors: list[str] = []
         provider_statuses: dict[str, str] = {}
         try:
-            docs = await asyncio.to_thread(scan_bronze, self._storage)
-            provider_statuses["internal"] = "success" if docs else "empty"
+            embedding_hits, _indexed_hashes, index_size = await asyncio.to_thread(
+                _load_embedding_candidates,
+                self._storage,
+                question,
+            )
         except Exception as exc:
-            log.exception("internal intelligence scan failed")
-            docs = []
-            provider_statuses["internal"] = "error"
-            errors.append("internal_scan_failed")
-        total_docs = len(docs)
+            embedding_hits, index_size = {}, 0
+            log.warning("embedding index unavailable: %s", exc)
 
         try:
-            doc_to_sources = await asyncio.to_thread(
-                _load_doc_to_sources,
+            docs, total_docs = await asyncio.to_thread(
+                _load_catalog_documents,
                 self._storage,
+                question,
+                start_date,
+                end_date,
+                embedding_hits,
             )
+        except Exception as exc:
+            log.exception("internal intelligence catalogue lookup failed")
+            docs, total_docs = [], 0
+            provider_statuses["internal"] = "error"
+            errors.append("internal_catalog_failed")
+
+        try:
+            doc_to_sources = await asyncio.to_thread(_load_doc_to_sources, self._storage)
         except Exception as exc:
             doc_to_sources = {}
             log.warning("merge index unavailable: %s", exc)
@@ -604,15 +702,6 @@ class SuperAnalysisAgent(BaseAgent):
             end_date,
         )
 
-        try:
-            embedding_hits, indexed_hashes, index_size = await asyncio.to_thread(
-                _load_embedding_candidates,
-                self._storage,
-                question,
-            )
-        except Exception as exc:
-            embedding_hits, indexed_hashes, index_size = {}, set(), 0
-            log.warning("embedding index unavailable: %s", exc)
         if index_size:
             _sp(
                 "collecting",
@@ -621,32 +710,17 @@ class SuperAnalysisAgent(BaseAgent):
                 total_docs=index_size,
             )
 
-        if embedding_hits:
-            candidate_hashes = set(embedding_hits)
-            if start_date or end_date:
-                candidate_hashes |= set(hash_to_doc)
-            elif indexed_hashes and len(indexed_hashes) < len(hash_to_doc):
-                candidate_hashes |= await asyncio.to_thread(
-                    _select_unindexed_fallback_hashes,
-                    question,
-                    hash_to_doc,
-                    indexed_hashes,
-                    candidate_hashes,
-                )
-        else:
-            candidate_hashes = set(hash_to_doc)
-
         candidates = await asyncio.to_thread(
             _score_internal_candidates,
             question,
-            candidate_hashes,
+            set(hash_to_doc),
             hash_to_doc,
             embedding_hits,
             doc_to_sources,
         )
         top_items = _rank_relevant_items(candidates)
         provider_statuses["internal"] = "success" if top_items else (
-            "error" if provider_statuses["internal"] == "error" else "empty"
+            "error" if provider_statuses.get("internal") == "error" else "empty"
         )
         _sp(
             "collecting",

@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: { port: 5173, proxy: { '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true, proxyTimeout: 300_000 } } },
   build: {
+    // MapLibre is isolated behind a lazy import and transport-compressed after build.
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks: {

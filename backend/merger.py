@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -106,6 +107,10 @@ class MergeIndex:
     total_groups: int
     groups: list[MergedGroup]
     orphaned_doc_ids: set[str] = field(default_factory=set)
+
+
+_merge_index_cache: dict[str, tuple[int, int, MergeIndex]] = {}
+_merge_index_cache_lock = threading.RLock()
 
 
 # ── build ──
@@ -322,6 +327,15 @@ def load_merge_index(storage_root: str | Path) -> Optional[MergeIndex]:
     if not index_path.exists():
         return None
     try:
+        stat = index_path.stat()
+    except OSError:
+        return None
+    cache_key = str(index_path.resolve())
+    with _merge_index_cache_lock:
+        cached = _merge_index_cache.get(cache_key)
+        if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2]
+    try:
         data = json.loads(index_path.read_text(encoding="utf-8"))
         groups = [
             MergedGroup(
@@ -335,12 +349,15 @@ def load_merge_index(storage_root: str | Path) -> Optional[MergeIndex]:
             )
             for g in data.get("groups", [])
         ]
-        return MergeIndex(
+        result = MergeIndex(
             generated_at=data["generated_at"],
             total_docs=data["total_docs"],
             total_groups=data["total_groups"],
             groups=groups,
             orphaned_doc_ids=set(data.get("orphaned_doc_ids", [])),
         )
+        with _merge_index_cache_lock:
+            _merge_index_cache[cache_key] = (stat.st_mtime_ns, stat.st_size, result)
+        return result
     except (json.JSONDecodeError, KeyError, OSError):
         return None

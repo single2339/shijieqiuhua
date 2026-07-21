@@ -40,6 +40,26 @@ const result: SuperAnalysisResponse = {
       rationale: '有限支持',
     }],
   },
+  investigation: {
+    playbook: 'event',
+    scope: { target: '示例港口事件' },
+    plan: { playbook: 'event', target: '示例港口事件', collection_steps: ['检索内部情报'], verification_steps: ['交叉验证'] },
+    evidence: [{
+      id: 'LI1', kind: 'internal_intelligence', title: '港口延误通报', source: 'Reuters',
+      provenance: 'bronze://doc-1', collected_at: '2026-07-20T00:00:00Z', verification_status: 'collected',
+      summary: '港口出现延误', source_url: 'https://example.com/original', content_sha256: '', data: {},
+    }],
+    relationship_graph: {
+      nodes: [{ id: 'target:港口', label: '示例港口事件', type: 'target' }],
+      edges: [{ source: 'evidence:LI1', target: 'target:港口', relation: 'reports_on', evidence_ids: ['LI1'] }],
+    },
+    timeline: [{ date: '2026-07-20', evidence_ids: ['LI1'], summary: '一条记录' }],
+    pending_verification: [{ id: 'PV1', question: '核验原始来源', priority: 'high', related_evidence_ids: ['LI1'] }],
+    alternative_explanations: [{ id: 'ALT1', explanation: '可能来自同一首发材料', indicators: [] }],
+    recommended_next_steps: [{ priority: 'high', task: '取得原始来源', rationale: '确认来源链', query: '示例港口事件' }],
+    analyst_review: { status: 'pending', reviewer_id: null, reviewed_at: '', notes: '' },
+    errors: [],
+  },
   collection_status: 'partial',
   provider_statuses: { bing_cn: 'error', duckduckgo: 'success' },
   degraded: true,
@@ -77,6 +97,10 @@ describe('super analysis response contract', () => {
     expect(html).toContain('support/weak')
     expect(html).toContain('聚合独立来源 1')
     expect(html).toContain('文档质量 82%')
+    expect(html).toContain('调查证据与复核')
+    expect(html).toContain('批准结论')
+    expect(html).toContain('需要补证')
+    expect(html).toContain('驳回结论')
   })
 
   test('renders degraded collection and analysis status with errors', () => {
@@ -145,6 +169,24 @@ describe('super analysis response contract', () => {
 
       expect(JSON.parse(fetchMock.mock.calls[0][1].body).request_id).toBe('request-1234')
       expect(fetchMock.mock.calls[1][0]).toBe('/api/super-analysis/progress?request_id=request-1234')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('submits an owner-scoped analyst review for the request', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'approved', reviewer_id: 7, reviewed_at: '2026-07-21T00:00:00Z', notes: '已核验' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const review = await api.submitSuperAnalysisReview('request-1234', { status: 'approved', notes: '已核验' })
+
+      expect(review.status).toBe('approved')
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/intel/super-analysis/request-1234/review')
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ status: 'approved', notes: '已核验' })
     } finally {
       vi.unstubAllGlobals()
     }

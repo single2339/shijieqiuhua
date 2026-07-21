@@ -3,7 +3,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
-import { fetchDashboard, fetchStats, askQuestion, superAnalyze } from '../src/api'
+import { fetchCorroboration, fetchDashboard, fetchEventClusters, fetchGapAnalysis, fetchStats, fetchWarningIndicators, askQuestionIntel, generateReportIntel, superAnalyze } from '../src/api'
 
 function mockResponse(data: unknown, ok = true, status = 200) {
   mockFetch.mockResolvedValueOnce({
@@ -34,6 +34,13 @@ describe('fetchDashboard', () => {
     expect(url).toContain('end_date=2026-01-31')
   })
 
+  test('passes abort signal to the dashboard request', async () => {
+    mockResponse({ intel_items: [], sources: [], layers: [], total_items: 0, updated_at: '' })
+    const controller = new AbortController()
+    await fetchDashboard(undefined, undefined, 1, 200, undefined, controller.signal)
+    expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal)
+  })
+
   test('throws on non-ok response', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 })
     await expect(fetchDashboard()).rejects.toThrow('API error: 500')
@@ -54,10 +61,63 @@ describe('fetchStats', () => {
   })
 })
 
-describe('askQuestion', () => {
-  test('posts question to /api/ask', async () => {
+describe('fetchEventClusters', () => {
+  test('calls /api/analysis/events with scoped params', async () => {
+    mockResponse({ total_items: 0, total_clusters: 0, unclustered_count: 0, clusters: [] })
+    await fetchEventClusters({ date: '2026-06-01', layers: ['military', 'cyber'] })
+    const url = mockFetch.mock.calls[0][0] as string
+    expect(url).toContain('/api/analysis/events?')
+    expect(url).toContain('date=2026-06-01')
+    expect(url).toContain('layers=military%2Ccyber')
+  })
+
+  test('passes abort signal to the analysis request', async () => {
+    mockResponse({ total_items: 0, total_clusters: 0, unclustered_count: 0, clusters: [] })
+    const controller = new AbortController()
+    await fetchEventClusters({ date: '2026-06-01' }, controller.signal)
+    expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal)
+  })
+})
+
+describe('fetchCorroboration', () => {
+  test('calls /api/analysis/corroboration with scoped params', async () => {
+    mockResponse({ sources: [], matrix: [], top_pairs: [], event_count: 0, claim_count: 0, methodology: '' })
+    await fetchCorroboration({ startDate: '2026-06-01', endDate: '2026-06-02', layers: ['military'] })
+    const url = mockFetch.mock.calls[0][0] as string
+    expect(url).toContain('/api/analysis/corroboration?')
+    expect(url).toContain('start_date=2026-06-01')
+    expect(url).toContain('end_date=2026-06-02')
+    expect(url).toContain('layers=military')
+  })
+})
+
+describe('fetchGapAnalysis', () => {
+  test('calls /api/analysis/gaps with scoped params', async () => {
+    mockResponse({ gaps: [], coverage_stats: {} })
+    await fetchGapAnalysis({ startDate: '2026-06-01', endDate: '2026-06-02', layers: ['military', 'cyber'] })
+    const url = mockFetch.mock.calls[0][0] as string
+    expect(url).toContain('/api/analysis/gaps?')
+    expect(url).toContain('start_date=2026-06-01')
+    expect(url).toContain('end_date=2026-06-02')
+    expect(url).toContain('layers=military%2Ccyber')
+  })
+})
+
+describe('fetchWarningIndicators', () => {
+  test('calls /api/analysis/warnings with scoped params', async () => {
+    mockResponse({ total_items: 0, overall_level: 'normal', active_indicator_count: 0, indicators: [], collection_requirements: [], methodology: '' })
+    await fetchWarningIndicators({ date: '2026-06-01', layers: ['military', 'cyber'] })
+    const url = mockFetch.mock.calls[0][0] as string
+    expect(url).toContain('/api/analysis/warnings?')
+    expect(url).toContain('date=2026-06-01')
+    expect(url).toContain('layers=military%2Ccyber')
+  })
+})
+
+describe('askQuestionIntel', () => {
+  test('posts question to /api/intel/ask', async () => {
     mockResponse({ answer: '答案', references: [], model: 'test' })
-    const result = await askQuestion({ question: '测试?' })
+    const result = await askQuestionIntel({ question: '测试?' })
     expect(result.answer).toBe('答案')
     const [, init] = mockFetch.mock.calls[0]
     expect(init.method).toBe('POST')
@@ -65,17 +125,49 @@ describe('askQuestion', () => {
   })
 
   test('throws on API error', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 400 })
-    await expect(askQuestion({ question: '' })).rejects.toThrow('API error: 400')
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: () => Promise.resolve(''),
+    })
+    await expect(askQuestionIntel({ question: '' })).rejects.toThrow('API error 400')
+  })
+})
+
+describe('generateReportIntel', () => {
+  test('posts selected brief workspace materials to /api/intel/report', async () => {
+    mockResponse({ title: '简报', generated_at: '', summary: '完成', sections: [], item_count: 1, source_count: 1 })
+    await generateReportIntel({
+      topic: '能源态势',
+      source_materials: [
+        {
+          id: 'item-1',
+          type: 'item',
+          title: '港口能源供应异常',
+          summary: '多源报道显示供应链受阻',
+          source: 'bbc',
+          sources: ['bbc'],
+          date: '2026-06-01',
+          layer: 'energy',
+          country: '中国',
+        },
+      ],
+    })
+    const [url, init] = mockFetch.mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(url).toBe('/api/intel/report')
+    expect(init.method).toBe('POST')
+    expect(body.source_materials).toHaveLength(1)
+    expect(body.source_materials[0].type).toBe('item')
   })
 })
 
 describe('superAnalyze', () => {
-  test('posts to /api/super-analysis', async () => {
+  test('posts to /api/intel/super-analysis', async () => {
     mockResponse({ question: '测试', analysis: '结果', relevant_items: [], web_results: [], model: 'm' })
     await superAnalyze({ question: '测试' })
     const [url, init] = mockFetch.mock.calls[0]
-    expect(url).toBe('/api/super-analysis')
+    expect(url).toBe('/api/intel/super-analysis')
     expect(init.method).toBe('POST')
   })
 

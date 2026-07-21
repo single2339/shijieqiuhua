@@ -1,0 +1,71 @@
+# 人员调查 Pipeline
+# 固定执行路径，减少 LLM 决策不确定性和花销
+name: person-investigation
+description: 端到端人员调查 — 多平台搜索 → 交叉关联 → 验证 → 报告
+version: "1.0"
+
+params:
+  - name: target_name
+    type: string
+    required: true
+    description: 目标姓名或用户名
+  - name: known_phone
+    type: string
+    required: false
+    description: 已知手机号
+  - name: known_email
+    type: string
+    required: false
+    description: 已知邮箱
+
+steps:
+  # Phase 1: 并行多平台搜索
+  - id: search_platforms
+    description: 在多个平台并行搜索目标
+    parallel: true
+    tools:
+      - mcp: osint-weibo
+        tool: weibo_search
+        args: {query: "$target_name", max_results: 20}
+        on_fail: skip
+
+      - mcp: osint-collect
+        tool: web_search_bing
+        args: {query: "$target_name", top_n: 10}
+        on_fail: skip
+
+  # Phase 2: IP 属地验证（如有IP）
+  - id: ip_verification
+    description: 如获取到IP地址，查询归属地
+    condition: "$has_ip"
+    tools:
+      - mcp: osint-geo
+        tool: ip_lookup
+        args: {ip: "$target_ip"}
+
+  # Phase 3: 跨平台身份关联
+  - id: identity_linking
+    description: 分析跨平台信号，判断是否同一人
+    depends_on: [search_platforms]
+    rules:
+      - "相同用户名 → ★★★★★ 极强关联"
+      - "相同邮箱/手机 → ★★★★★ 极强关联"
+      - "相同头像 → ★★★★ 强关联"
+      - "相同简介 → ★★★ 中关联"
+
+  # Phase 4: 生成报告
+  - id: generate_report
+    description: 汇总所有发现，生成人员调查简报
+    depends_on: [search_platforms, ip_verification, identity_linking]
+    template: person_brief
+    sections:
+      - 基本信息（姓名/用户名/平台账号）
+      - 社会关系（关联人物/组织）
+      - 地理位置（IP属地/社交打卡）
+      - 活动时间线
+      - 可信度评级（L1-L4）
+      - 待确认项
+
+output:
+  format: markdown
+  save_to: "analysis/person_$target_name_$timestamp.md"

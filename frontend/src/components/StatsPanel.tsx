@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { X, ChartBar, Globe, Hash, Stack } from '@phosphor-icons/react'
 import { fetchStats } from '../api'
 import type { DashboardStats } from '../types'
 import { LAYER_META } from '../types'
+import { useFloatingPanel } from '../hooks/useFloatingPanel'
+import { isAbortError } from '../utils/request'
 
 interface Props { onClose: () => void; isMobile?: boolean }
 
@@ -49,9 +51,29 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const requestGenerationRef = useRef(0)
+  const floating = useFloatingPanel({
+    enabled: !isMobile,
+    width: 600,
+    height: 520,
+    anchor: 'bottom-center',
+  })
 
   useEffect(() => {
-    fetchStats().then(d => { setStats(d); setLoading(false) }).catch(e => { setError(e instanceof Error ? e.message : '加载失败'); setLoading(false) })
+    const requestGeneration = ++requestGenerationRef.current
+    const controller = new AbortController()
+    fetchStats(undefined, undefined, controller.signal)
+      .then(d => {
+        if (controller.signal.aborted || requestGeneration !== requestGenerationRef.current) return
+        setStats(d)
+        setLoading(false)
+      })
+      .catch(e => {
+        if (isAbortError(e) || requestGeneration !== requestGenerationRef.current) return
+        setError(e instanceof Error ? e.message : '加载失败')
+        setLoading(false)
+      })
+    return () => controller.abort()
   }, [])
 
   const containerVariants = {
@@ -76,19 +98,25 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
         bottom: isMobile ? 0 : 16,
         left: isMobile ? 0 : '50%',
         transform: isMobile ? 'none' : 'translateX(-50%)',
-        width: isMobile ? '100%' : 660,
+        width: isMobile ? '100%' : 600,
         maxWidth: isMobile ? '100%' : '94vw',
-        maxHeight: isMobile ? '100%' : '80vh',
+        height: isMobile ? '100%' : 'min(520px, 74vh)',
+        maxHeight: isMobile ? '100%' : '74vh',
         borderRadius: isMobile ? 0 : 'var(--radius-lg)',
         zIndex: 'var(--z-panel)', overflow: 'hidden',
         boxShadow: 'var(--shadow-diffuse)',
         fontFamily: 'var(--font-ui)',
+        display: 'flex',
+        flexDirection: 'column',
+        ...floating.panelStyle,
       }}
     >
       {/* Header */}
-      <div style={{
+      <div {...floating.dragHandleProps} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '14px 18px', borderBottom: '1px solid var(--glass-border)',
+        flexShrink: 0,
+        ...floating.dragHandleStyle,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ChartBar size={16} weight="duotone" color="var(--accent)" />
@@ -113,7 +141,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
       </div>
 
       {/* Content */}
-      <div style={{ padding: '14px 18px', overflowY: 'auto', maxHeight: 'calc(80vh - 52px)' }}>
+      <div style={{ padding: '12px 16px', overflowY: 'auto', flex: 1, minHeight: 0 }}>
         {loading && (
           <div style={{ padding: '4px 0', display: 'flex', flexDirection: 'column', gap: 20 }}>
             {/* Skeleton summary cards */}
@@ -121,7 +149,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
               <div style={{
                 height: 80, borderRadius: 'var(--radius-md)',
                 background: 'var(--bg-deep)',
-                backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(236,230,218,0.035) 50%, var(--bg-deep) 75%)',
                 backgroundSize: '200% 100%',
                 animation: 'shimmer 1.5s ease-in-out infinite',
               }} />
@@ -130,7 +158,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
                   <div key={i} style={{
                     flex: 1, borderRadius: 'var(--radius-md)',
                     background: 'var(--bg-deep)',
-                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(236,230,218,0.035) 50%, var(--bg-deep) 75%)',
                     backgroundSize: '200% 100%',
                     animation: 'shimmer 1.5s ease-in-out infinite',
                     animationDelay: `${i * 0.15}s`,
@@ -149,15 +177,15 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
                 animation: 'shimmer 1.5s ease-in-out infinite',
               }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {[...Array(6)].map((_, i) => (
+                {[76, 92, 68, 84, 62, 72].map((width, i) => (
                   <div key={i} style={{
                     height: 6, borderRadius: 3,
                     background: 'var(--bg-deep)',
-                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(236,230,218,0.035) 50%, var(--bg-deep) 75%)',
                     backgroundSize: '200% 100%',
                     animation: 'shimmer 1.5s ease-in-out infinite',
                     animationDelay: `${i * 0.08}s`,
-                    width: `${60 + Math.random() * 40}%`,
+                    width: `${width}%`,
                   }} />
                 ))}
               </div>
@@ -170,7 +198,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
                   <div style={{
                     width: 70, height: 10, borderRadius: 99, marginBottom: 10,
                     background: 'var(--bg-deep)',
-                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(236,230,218,0.035) 50%, var(--bg-deep) 75%)',
                     backgroundSize: '200% 100%',
                     animation: 'shimmer 1.5s ease-in-out infinite',
                     animationDelay: `${i * 0.1}s`,
@@ -178,7 +206,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
                   <div style={{
                     height: 120, borderRadius: 'var(--radius-sm)',
                     background: 'var(--bg-deep)',
-                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(0,0,0,0.03) 50%, var(--bg-deep) 75%)',
+                    backgroundImage: 'linear-gradient(90deg, var(--bg-deep) 25%, rgba(236,230,218,0.035) 50%, var(--bg-deep) 75%)',
                     backgroundSize: '200% 100%',
                     animation: 'shimmer 1.5s ease-in-out infinite',
                     animationDelay: `${i * 0.15}s`,
@@ -393,7 +421,7 @@ export default function StatsPanel({ onClose, isMobile }: Props) {
                         animate={{ opacity: op, scale: 1 }}
                         transition={{ delay: i * 0.02 }}
                         style={{
-                          fontSize: size, color: `rgba(13,148,136,${op})`,
+                          fontSize: size, color: `rgba(200,164,93,${op})`,
                           fontFamily: 'var(--font-mono)',
                           padding: '1px 6px',
                           cursor: 'default',

@@ -1,5 +1,5 @@
 interface Props { size?: number; color?: string }
-export default function FinanceIcon({ size = 24, color = '#f39c12' }: Props) {
+export default function FinanceIcon({ size = 24, color = '#c8a45d' }: Props) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <polyline points="2,18 7,13 12,15 18,6 22,8" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>

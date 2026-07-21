@@ -3,9 +3,12 @@ import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { IntelItem } from '../types'
 import { LAYER_META } from '../types'
+import { safeExternalUrl } from '../utils/safeUrl'
 
 const TIANDITU_KEY = import.meta.env.VITE_TIANDITU_KEY as string | undefined
 const HAS_TIANDITU = Boolean(TIANDITU_KEY)
+const TIANDITU_URL = safeExternalUrl('https://www.tianditu.gov.cn/') ?? ''
+const TIANDITU_ATTRIBUTION = `&copy; <a href="${TIANDITU_URL}">天地图</a>`
 
 type TileSource = 'carto' | 'tianditu'
 
@@ -21,13 +24,13 @@ function tiandituStyle(key: string) {
         type: 'raster' as const,
         tiles: Array.from({ length: 8 }, (_, i) => tileUrl(i, 'vec')),
         tileSize: 256,
-        attribution: '&copy; <a href="https://www.tianditu.gov.cn/">天地图</a>',
+        attribution: TIANDITU_ATTRIBUTION,
       },
       tdt_label: {
         type: 'raster' as const,
         tiles: Array.from({ length: 8 }, (_, i) => tileUrl(i, 'cva')),
         tileSize: 256,
-        attribution: '&copy; <a href="https://www.tianditu.gov.cn/">天地图</a>',
+        attribution: TIANDITU_ATTRIBUTION,
       },
     },
     layers: [
@@ -93,12 +96,12 @@ function createPinImage(color: string): ImageData {
   ctx.closePath()
   ctx.fillStyle = color
   ctx.fill()
-  ctx.strokeStyle = '#1e1b18'
+  ctx.strokeStyle = '#121416'
   ctx.lineWidth = 1.5
   ctx.stroke()
   ctx.beginPath()
   ctx.arc(17, 12, 2.5, 0, Math.PI * 2)
-  ctx.fillStyle = '#faf8f5'
+  ctx.fillStyle = '#f2eee6'
   ctx.fill()
   return ctx.getImageData(0, 0, 34, 44)
 }
@@ -138,22 +141,22 @@ export default function MapView({ items, onSelect }: Props) {
         paint: {
           'circle-radius': 14,
           'circle-color': ['match', ['get', 'layer'],
-            'nature', '#2ecc71', 'economy', '#3498db',
-            'finance', '#f39c12', 'politics', '#9b59b6',
-            'military', '#e74c3c', 'aviation', '#607d8b',
-            'technology', '#ff4081', 'society', '#e91e63',
-            'energy', '#ff5722', 'agriculture', '#4caf50',
-            'health', '#00bcd4', 'cyber', '#1a237e', '#fff'],
-          'circle-opacity': 0.15, 'circle-blur': 2,
+            'nature', LAYER_META.nature.color, 'economy', LAYER_META.economy.color,
+            'finance', LAYER_META.finance.color, 'politics', LAYER_META.politics.color,
+            'military', LAYER_META.military.color, 'aviation', LAYER_META.aviation.color,
+            'technology', LAYER_META.technology.color, 'society', LAYER_META.society.color,
+            'energy', LAYER_META.energy.color, 'agriculture', LAYER_META.agriculture.color,
+            'health', LAYER_META.health.color, 'cyber', LAYER_META.cyber.color, '#c8a45d'],
+          'circle-opacity': 0.18, 'circle-blur': 1.8,
         },
       },
       {
         id: 'clusters', type: 'circle', source: 'intel-points',
         filter: ['has', 'point_count'],
         paint: {
-          'circle-color': '#ffffff',
+          'circle-color': '#202428',
           'circle-radius': ['step', ['get', 'point_count'], 18, 10, 22, 50, 30],
-          'circle-stroke-width': 2, 'circle-stroke-color': '#2d2520', 'circle-opacity': 0.92,
+          'circle-stroke-width': 1.5, 'circle-stroke-color': '#c8a45d', 'circle-opacity': 0.94,
         },
       },
       {
@@ -164,7 +167,7 @@ export default function MapView({ items, onSelect }: Props) {
           'text-size': 11,
           'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
         },
-        paint: { 'text-color': '#2d2520', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
+        paint: { 'text-color': '#f2eee6', 'text-halo-color': '#121416', 'text-halo-width': 1.5 },
       },
       {
         id: 'unclustered-point', type: 'symbol', source: 'intel-points',
@@ -191,7 +194,8 @@ export default function MapView({ items, onSelect }: Props) {
         if (!src) return
         try {
           const z = await src.getClusterExpansionZoom(id)
-          const coords = (f[0]!.geometry as GeoJSON.Point).coordinates as [number, number]
+          if (!f[0]) return
+          const coords = (f[0].geometry as GeoJSON.Point).coordinates as [number, number]
           map.flyTo({ center: coords, zoom: z + 1 })
         } catch { /* ignore */ }
       })
@@ -279,8 +283,8 @@ export default function MapView({ items, onSelect }: Props) {
     <div style={{ position: 'absolute', inset: 0 }}>
       <div ref={container} style={{ width: '100%', height: '100%' }} />
       {HAS_TIANDITU && (
-        <div style={{
-          position: 'absolute', top: 54, right: 12, zIndex: 10,
+        <div className="tile-source-switcher" style={{
+          position: 'absolute', top: 54, right: 12, zIndex: 'var(--z-map-controls)',
           display: 'flex', gap: 2,
           background: 'var(--glass-bg)', backdropFilter: 'blur(12px)',
           border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-sm)',
@@ -291,7 +295,7 @@ export default function MapView({ items, onSelect }: Props) {
               style={{
                 padding: '4px 8px', fontSize: 9, fontFamily: 'var(--font-mono)',
                 background: styleKey === k ? 'var(--accent)' : 'transparent',
-                color: styleKey === k ? '#fff' : 'var(--text-secondary)',
+                color: styleKey === k ? 'var(--bg-deep)' : 'var(--text-secondary)',
                 border: 'none', borderRadius: 3, cursor: 'pointer',
                 fontWeight: 600, letterSpacing: 0.5,
                 transition: 'all 0.15s ease', whiteSpace: 'nowrap',

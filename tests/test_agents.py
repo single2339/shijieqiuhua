@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from backend.agents.base import (
     AgentCallbacks,
@@ -410,28 +412,21 @@ async def test_super_analysis_date_window_falls_back_when_embedding_hits_are_out
 
     from backend.agents.intelligence import super_analyst
     from backend.agents.models import AgentTask
-    from backend.bronze_reader import BronzeDocument
 
     old_text = "旧情报：港口物流扰动，已经过期。"
     current_text = "当前情报：港口物流扰动持续，货运延迟扩大。"
     old_hash = hashlib.md5(old_text.encode()).hexdigest()
 
-    docs = [
-        BronzeDocument({
-            "raw_document_id": "old-doc",
-            "body_inline": old_text,
-            "source_system": "bbc",
-            "captured_at": "2026-05-01T00:00:00Z",
-            "extensions": {"horizon_metadata": {"layer": "logistics"}},
-        }),
-        BronzeDocument({
-            "raw_document_id": "current-doc",
-            "body_inline": current_text,
-            "source_system": "bbc",
-            "captured_at": "2026-06-20T00:00:00Z",
-            "extensions": {"horizon_metadata": {"layer": "logistics"}},
-        }),
-    ]
+    (tmp_path / "old.json").write_text(json.dumps({
+        "raw_document_id": "old-doc", "body_inline": old_text, "source_system": "bbc",
+        "captured_at": "2026-05-01T00:00:00Z",
+        "extensions": {"horizon_metadata": {"layer": "logistics"}},
+    }), encoding="utf-8")
+    (tmp_path / "current.json").write_text(json.dumps({
+        "raw_document_id": "current-doc", "body_inline": current_text, "source_system": "bbc",
+        "captured_at": "2026-06-20T00:00:00Z",
+        "extensions": {"horizon_metadata": {"layer": "logistics"}},
+    }), encoding="utf-8")
 
     class _FakeIndex:
         is_loaded = True
@@ -446,7 +441,6 @@ async def test_super_analysis_date_window_falls_back_when_embedding_hits_are_out
         def search(self, *_args, **_kwargs):
             return [(old_hash, 0.95)]
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", lambda _storage: docs)
     monkeypatch.setattr(super_analyst, "EmbeddingIndex", _FakeIndex)
     monkeypatch.setattr(super_analyst, "_web_search", lambda _question: None)
 
@@ -476,28 +470,21 @@ async def test_super_analysis_includes_unindexed_relevant_docs_when_embedding_in
 
     from backend.agents.intelligence import super_analyst
     from backend.agents.models import AgentTask
-    from backend.bronze_reader import BronzeDocument
 
     indexed_text = "旧索引情报：港口物流。"
     unindexed_text = "新增情报：港口物流扰动扩大，集装箱延误显著增加。"
     indexed_hash = hashlib.md5(indexed_text.encode()).hexdigest()
 
-    docs = [
-        BronzeDocument({
-            "raw_document_id": "indexed-doc",
-            "body_inline": indexed_text,
-            "source_system": "bbc",
-            "captured_at": "2026-05-20T00:00:00Z",
-            "extensions": {"horizon_metadata": {"layer": "logistics"}},
-        }),
-        BronzeDocument({
-            "raw_document_id": "unindexed-doc",
-            "body_inline": unindexed_text,
-            "source_system": "bbc",
-            "captured_at": "2026-06-30T00:00:00Z",
-            "extensions": {"horizon_metadata": {"layer": "logistics"}},
-        }),
-    ]
+    (tmp_path / "indexed.json").write_text(json.dumps({
+        "raw_document_id": "indexed-doc", "body_inline": indexed_text, "source_system": "bbc",
+        "captured_at": "2026-05-20T00:00:00Z",
+        "extensions": {"horizon_metadata": {"layer": "logistics"}},
+    }), encoding="utf-8")
+    (tmp_path / "unindexed.json").write_text(json.dumps({
+        "raw_document_id": "unindexed-doc", "body_inline": unindexed_text, "source_system": "bbc",
+        "captured_at": "2026-06-30T00:00:00Z",
+        "extensions": {"horizon_metadata": {"layer": "logistics"}},
+    }), encoding="utf-8")
 
     class _FakeIndex:
         is_loaded = True
@@ -512,7 +499,6 @@ async def test_super_analysis_includes_unindexed_relevant_docs_when_embedding_in
         def search(self, *_args, **_kwargs):
             return [(indexed_hash, 0.2)]
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", lambda _storage: docs)
     monkeypatch.setattr(super_analyst, "EmbeddingIndex", _FakeIndex)
     monkeypatch.setattr(super_analyst, "_web_search", lambda _question: None)
 

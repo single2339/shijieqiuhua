@@ -1,5 +1,5 @@
 interface Props { size?: number; color?: string }
-export default function SocietyIcon({ size = 24, color = '#e91e63' }: Props) {
+export default function SocietyIcon({ size = 24, color = '#b47670' }: Props) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <circle cx="7" cy="7" r="2.5" stroke={color} strokeWidth="1.5" fill={color} opacity="0.15"/>

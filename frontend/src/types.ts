@@ -450,13 +450,20 @@ export interface SuperAnalysisRequest {
   question: string
   start_date?: string
   end_date?: string
+  investigation_type?: InvestigationPlaybook
+  target?: string
+  purpose?: string
+  authorized?: boolean
+  verification_depth?: 'standard' | 'deep'
   skills?: string[]
   request_id?: string
 }
 
+export type InvestigationPlaybook = 'general' | 'person' | 'website' | 'image' | 'identity' | 'event' | 'threat'
 export type SuperAnalysisConfidenceLevel = 'L1' | 'L2' | 'L3' | 'L4' | 'L5'
 
 export interface BayesianIntelItem {
+  document_id?: string
   title: string
   source: string
   date: string
@@ -465,6 +472,7 @@ export interface BayesianIntelItem {
   independent_source_count: number
   source_class: string
   content_snippet: string
+  source_url?: string
 }
 
 export interface HypothesisEvidenceAssessment {
@@ -493,12 +501,82 @@ export interface WebResult {
   url: string
 }
 
+export interface InvestigationPlan {
+  playbook: InvestigationPlaybook
+  target: string
+  collection_steps: string[]
+  verification_steps: string[]
+}
+
+export interface InvestigationEvidence {
+  id: string
+  kind: string
+  title: string
+  source: string
+  provenance: string
+  collected_at: string
+  verification_status: 'collected' | 'captured' | 'corroborated' | 'failed' | 'unverified'
+  summary: string
+  source_url: string
+  content_sha256: string
+  data: Record<string, unknown>
+}
+
+export interface InvestigationRelationshipNode {
+  id: string
+  label: string
+  type: string
+}
+
+export interface InvestigationRelationshipEdge {
+  source: string
+  target: string
+  relation: string
+  evidence_ids: string[]
+}
+
+export interface InvestigationTimelineEntry {
+  date: string
+  evidence_ids: string[]
+  summary: string
+}
+
+export interface InvestigationAnalystReview {
+  status: 'pending' | 'approved' | 'needs_follow_up' | 'rejected'
+  reviewer_id: number | null
+  reviewed_at: string
+  notes: string
+}
+
+export interface InvestigationReviewRequest {
+  status: 'approved' | 'needs_follow_up' | 'rejected'
+  notes: string
+}
+
+export interface InvestigationResult {
+  playbook: InvestigationPlaybook
+  scope: Record<string, unknown>
+  plan: InvestigationPlan
+  evidence: InvestigationEvidence[]
+  relationship_graph: {
+    nodes: InvestigationRelationshipNode[]
+    edges: InvestigationRelationshipEdge[]
+  }
+  timeline: InvestigationTimelineEntry[]
+  pending_verification: PendingVerification[]
+  alternative_explanations: AlternativeExplanation[]
+  recommended_next_steps: CollectionTask[]
+  analyst_review: InvestigationAnalystReview
+  errors: string[]
+}
+
 export interface SuperAnalysisResponse {
   question: string
   analysis: string
   relevant_items: BayesianIntelItem[]
   web_results: WebResult[]
   hypothesis_assessment: HypothesisAssessment | null
+  investigation?: InvestigationResult | null
   collection_status: 'complete' | 'empty' | 'partial' | 'unavailable'
   provider_statuses: Record<string, 'success' | 'empty' | 'error' | 'disabled'>
   degraded: boolean

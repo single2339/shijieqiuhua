@@ -59,6 +59,45 @@ def test_nonmerged_analysis_does_not_load_merge_index(monkeypatch):
     assert [item.id for item in items] == ["doc-1"]
 
 
+def test_dashboard_excludes_quarantined_and_unclassified_documents(monkeypatch):
+    quarantined = BronzeDocument({
+        "raw_document_id": "doc-quarantined",
+        "body_inline": "A long generic tutorial with no warning indicator or intelligence value.",
+        "source_system": "generic-blog",
+        "captured_at": "2026-07-21T00:00:00Z",
+        "extensions": {"intelligence_admission": {"status": "quarantined"}},
+    })
+    unclassified = BronzeDocument({
+        "raw_document_id": "doc-unclassified",
+        "body_inline": "A practical CSS layout guide.",
+        "source_system": "legacy-blog",
+        "captured_at": "2026-07-21T00:00:00Z",
+        "extensions": {},
+    })
+
+    class FakeIndexer:
+        def query(self, **_kwargs):
+            return [quarantined, unclassified]
+
+    monkeypatch.setattr(main, "_get_indexer", lambda: FakeIndexer())
+    monkeypatch.setattr(main, "extract_location_with_fallback", lambda *_args: ("", "", 0.0, 0.0))
+    monkeypatch.setattr(main, "_get_layer", lambda _doc: IntelLayer.UNCLASSIFIED)
+
+    assert main._build_items(use_merge_groups=False) == []
+
+
+def test_dashboard_layer_summary_does_not_expose_internal_unclassified_bucket(monkeypatch):
+    class FakeIndexer:
+        def get_available_dates(self):
+            return []
+
+    monkeypatch.setattr(main, "_get_indexer", lambda: FakeIndexer())
+
+    dashboard = main._build_dashboard_data([], page=1, page_size=100)
+
+    assert IntelLayer.UNCLASSIFIED not in {summary.layer for summary in dashboard.layers}
+
+
 def test_master_item_cache_has_a_small_independent_bound(monkeypatch):
     main._master_list_cache.clear()
     monkeypatch.setattr(main, "MASTER_LIST_CACHE_MAX_SIZE", 2, raising=False)

@@ -1,0 +1,88 @@
+# 网站/机构调查 Pipeline
+# 固定执行路径
+name: website-investigation
+description: 端到端网站/机构调查 — WHOIS → DNS → ICP → 关联网站 → 报告
+version: "1.0"
+
+params:
+  - name: target_domain
+    type: string
+    required: true
+    description: 目标域名
+  - name: target_name
+    type: string
+    required: false
+    description: 组织名称
+
+steps:
+  # Phase 1: 并行域名情报采集
+  - id: domain_intel
+    description: 并行查询 WHOIS、DNS、ICP
+    parallel: true
+    tools:
+      - mcp: osint-whois
+        tool: whois_lookup
+        args: {domain: "$target_domain"}
+
+      - mcp: osint-whois
+        tool: dns_all_records
+        args: {domain: "$target_domain"}
+
+      - mcp: osint-whois
+        tool: icp_lookup
+        args: {domain: "$target_domain"}
+
+  # Phase 2: 关联网站发现（依赖 DNS A 记录）
+  - id: related_domains
+    description: 查询同 IP 托管的其他域名
+    depends_on: [domain_intel]
+    condition: "$dns_records.summary.A exists"
+    tools:
+      - mcp: osint-whois
+        tool: reverse_ip_lookup
+        args: {ip_or_domain: "$target_domain"}
+
+  # Phase 3: 服务器 IP 地理定位
+  - id: server_location
+    description: 查询服务器 IP 地理位置
+    condition: "$dns_records.summary.A exists"
+    tools:
+      - mcp: osint-geo
+        tool: ip_lookup
+        args: {ip: "$dns_records.summary.A[0]"}
+
+  # Phase 4: 页面内容抓取
+  - id: content_analysis
+    description: 提取 GA/AdSense ID、版权信息、作者信息
+    depends_on: [domain_intel]
+    tools:
+      - type: WebFetch
+        args: {url: "https://$target_domain"}
+        prompt: "提取: 标题、关于页、版权声明、GA ID (UA-/G-)、AdSense ID (pub-)、百度统计 ID、作者/联系方式、隐私政策链接"
+
+  # Phase 5: 交叉关联分析
+  - id: correlation
+    description: 关联分析 WHOIS/DNS/ICP/页面，发现关联实体
+    depends_on: [domain_intel, related_domains, content_analysis]
+    checkpoints:
+      - "WHOIS 邮箱关联其他域名 → 同一注册人"
+      - "ICP 主体多网站 → 同一机构"
+      - "GA/AdSense ID 关联 → 同一控制人"
+      - "DNS MX/NS 关联 → 同一服务商"
+
+  # Phase 6: 生成报告
+  - id: generate_report
+    description: 汇总生成网站调查报告
+    depends_on: [domain_intel, related_domains, server_location, content_analysis, correlation]
+    template: website_report
+    sections:
+      - 基本信息（域名/WHOIS/ICP/DNS）
+      - 服务器信息（IP/CDN/地理位置）
+      - 关联网站
+      - 组织信息
+      - 风险指标
+      - 可信度评级
+
+output:
+  format: markdown
+  save_to: "analysis/website_$target_domain_$timestamp.md"

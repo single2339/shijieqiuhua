@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Warning, WarningCircle, Globe, Clock, LinkBreak, Hash } from '@phosphor-icons/react'
 import type { GapAnalysisResult } from '../../types'
 import { fetchGapAnalysis } from '../../api'
 import AIInterpretBadge from './AIInterpretBadge'
+import type { IntelLayer } from '../../types'
+import { isAbortError } from '../../utils/request'
 
 const GAP_ICONS: Record<string, typeof Warning> = {
   region: Globe,
@@ -26,16 +28,40 @@ const SEVERITY_CONFIG: Record<string, { color: string; bg: string; label: string
   low: { color: '#a3a3a3', bg: 'rgba(163,163,163,0.06)', label: '低' },
 }
 
-export default function GapAnalysisView() {
+interface Props {
+  selectedDate: string
+  startDate?: string
+  endDate?: string
+  activeLayers: IntelLayer[]
+}
+
+export default function GapAnalysisView({ selectedDate, startDate = '', endDate = '', activeLayers }: Props) {
   const [data, setData] = useState<GapAnalysisResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const requestGenerationRef = useRef(0)
+
+  const date = startDate || endDate ? '' : selectedDate
+  const layersKey = activeLayers.join(',')
 
   useEffect(() => {
-    fetchGapAnalysis()
-      .then(d => { setData(d); setLoading(false) })
-      .catch(e => { setError(e instanceof Error ? e.message : '加载失败'); setLoading(false) })
-  }, [])
+    const requestGeneration = ++requestGenerationRef.current
+    const controller = new AbortController()
+    setLoading(true)
+    setError(null)
+    fetchGapAnalysis({ date, startDate, endDate, layers: activeLayers }, controller.signal)
+      .then(d => {
+        if (controller.signal.aborted || requestGeneration !== requestGenerationRef.current) return
+        setData(d)
+        setLoading(false)
+      })
+      .catch(e => {
+        if (isAbortError(e) || requestGeneration !== requestGenerationRef.current) return
+        setError(e instanceof Error ? e.message : '加载失败')
+        setLoading(false)
+      })
+    return () => controller.abort()
+  }, [date, startDate, endDate, layersKey])
 
   if (loading) {
     return (

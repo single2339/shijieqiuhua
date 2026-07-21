@@ -1,5 +1,5 @@
 interface Props { size?: number; color?: string }
-export default function HealthIcon({ size = 24, color = '#00bcd4' }: Props) {
+export default function HealthIcon({ size = 24, color = '#6ea6a0' }: Props) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <rect x="6" y="3" width="12" height="18" rx="3" stroke={color} strokeWidth="1.5" fill={color} opacity="0.1"/>

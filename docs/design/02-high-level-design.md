@@ -17,7 +17,7 @@
 │  翻译/摘要/LLM分类/关键词分类/地理定位/贝叶斯评分/Union-Find合并     │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Layer 1: 数据层 (Data)                                              │
-│  Bronze JSON (按日期分区) — SQLite 索引 — Merge Index — 嵌入索引     │
+│  原始证据 JSON（按日期分区）— SQLite 索引 — 合并索引 — 嵌入索引      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -30,7 +30,7 @@ backend/
 ├── main.py                    # FastAPI 入口 — 生命周期、中间件、全部路由、缓存
 ├── models.py                  # Pydantic 数据模型 — 50+ 类型定义
 ├── llm_config.py              # LLM 客户端配置（DeepSeek API）
-├── bronze_reader.py           # Bronze JSON 文件扫描器
+├── bronze_reader.py           # 原始证据 JSON 文件扫描器
 ├── indexer.py                 # SQLite 全文索引（增量和全量构建）
 ├── merger.py                  # Union-Find 内容合并引擎
 ├── seed_data.py               # Demo 数据生成器（90+ 模板）
@@ -115,7 +115,7 @@ frontend/src/
 │   ├── MobileMenu.tsx         # 移动端汉堡菜单（< 767px）
 │   ├── StatusDot.tsx          # 系统状态指示灯（绿/黄/红）
 │   ├── IntelAnalysisPanel.tsx # 情报分析面板容器（Tab 切换 7 种视图）
-│   ├── SuperAnalysisPanel.tsx # 超级分析面板（贝叶斯+网络搜索）
+│   ├── SuperAnalysisPanel.tsx # 超级分析面板（贝叶斯、调查剧本、证据账本与人工签核）
 │   ├── SuperAnalysisSidebar.tsx
 │   ├── LoginPage.tsx          # 登录页面
 │   ├── RegisterPage.tsx       # 注册页面
@@ -165,7 +165,7 @@ frontend/src/
 | GET | `/api/analysis/gaps` | 否 | 覆盖缺口分析（主题缺口/地区缺口/时间缺口/单源占比） |
 | GET | `/api/analysis/brief` | 否 | 结构化态势简报（核心发现+确认事实+替代解释+待核查项） |
 | GET | `/api/analysis/events` | 否 | 事件聚类（基于 Token Jaccard + 国家/图层/时间相似度） |
-| GET | `/api/analysis/warnings` | 否 | 预警指标（I&W 框架，按严重度排序） |
+| GET | `/api/analysis/warnings` | 否 | 指标与预警（按严重度排序） |
 | POST | `/api/analysis/interpret` | 否 | AI 解读分析结果 |
 | GET | `/api/collect/usgs` | 是 | USGS 地震数据采集（M2.5+，7天内） |
 | GET | `/api/collect/cisa` | 是 | CISA 已知被利用漏洞列表 |
@@ -182,6 +182,8 @@ frontend/src/
 | POST | `/api/intel/ask` | 是 | 情报问答（OpenCode Agent + 本地回退） |
 | POST | `/api/intel/report` | 是 | 情报报告（OpenCode Agent + 本地回退） |
 | POST | `/api/intel/super-analysis` | 是 | 超级分析（关系分类→固定 LR 贝叶斯更新→结论生成） |
+| GET | `/api/intel/super-analysis/{request_id}/review` | 是 | 获取当前用户的超级分析人工复核状态 |
+| POST | `/api/intel/super-analysis/{request_id}/review` | 是 | 提交当前用户的批准、补证或驳回应答 |
 | POST | `/api/intel/interpret` | 是 | AI 解读（OpenCode Agent + 本地回退） |
 | POST | `/api/intel/build-embedding-index` | 是 | 构建嵌入向量索引 |
 | POST | `/api/auth/register` | 否 | 用户注册 |
@@ -291,7 +293,7 @@ class ConfidenceAssessment(BaseModel):
 ### 5.1 内容合并 (Union-Find, merger.py)
 
 ```
-输入: Bronze JSON 文档列表
+输入：原始证据 JSON 文档列表
 输出: MergeIndex (group_id → [doc_ids] + sources[] + source_url)
 
 算法:
@@ -462,20 +464,21 @@ _collect_item(text) 或 _build_items(doc)
 ### 7.2 超级分析请求流
 
 ```
-POST /api/super-analysis {question, start_date, end_date, skills}
+POST /api/intel/super-analysis {question, start_date, end_date, investigation_type, target, verification_depth}
   │
   ├── init_progress(request_id) → 进度追踪
   │
   ├── SuperAnalystAgent.run()
-  │     ├── 搜索相关 IntelItem → 贝叶斯评分
+  │     ├── BronzeCatalog 候选检索 → 按需水合相关 IntelItem
   │     ├── Web 搜索（可选）
+  │     ├── 调查剧本（通用/人员/网站/图片/身份/事件/威胁）
+  │     │     └── 受控采集与 MCP 查询 → 证据账本、关系、时间线、待核验项
   │     ├── LLM 深度推理 → 结构化分析报告
-  │     └── 返回 {analysis, relevant_items, web_results}
+  │     └── 返回 {analysis, relevant_items, web_results, investigation}
   │
-  ├── [intel 变体] → _run_local_super_analysis_enhancement()
-  │     └── osint-core skill 二次复核 → 附加增强段
+  ├── 创建按 owner_id 隔离的人工复核案件（pending）
   │
-  └── 返回 SuperAnalysisResponse
+  └── 返回 SuperAnalysisResponse；分析师可提交 approved / needs_follow_up / rejected
 ```
 
 ### 7.3 WebSocket 实时推送

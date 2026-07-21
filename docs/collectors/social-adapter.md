@@ -3,8 +3,8 @@
 ## 职责边界
 
 - **输入**：`channel=social`，`target` 含官方 API 凭证引用（密钥由密钥管理服务解析）、或**已授权**的公开页面列表。
-- **输出**：`RawDocument`，`mime_type` 常为 `application/json`（API）或 `text/html`（页面）。
-- **不负责**：情感分析、话题建模（可放在 Silver/Gold 或独立特征管道）。
+- **输出**：原始证据文档（`RawDocument`），`mime_type` 常为 `application/json`（API）或 `text/html`（页面）。
+- **不负责**：情感分析、话题建模（可放在标准证据层、情报产品层或独立特征管道）。
 
 ## 组件
 

@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -87,8 +88,13 @@ async def fetch_feed(name: str, url: str, client: httpx.AsyncClient, since: date
         if not content:
             continue
         title = entry.get("title", "Untitled")
+        entry_key = (
+            entry.get("id")
+            or entry.get("link")
+            or f"{title}|{published.isoformat()}|{content}"
+        )
         items.append({
-            "id": f"{name}:{hash(entry.get('id', entry.get('link', '')))}",
+            "id": f"{name}:{hashlib.sha256(str(entry_key).encode('utf-8')).hexdigest()}",
             "title": title,
             "url": entry.get("link", url),
             "content": clean_text(content),
@@ -141,33 +147,38 @@ async def summarize_if_possible(text: str) -> str:
 
 def to_raw_document(item: dict) -> RawDocument:
     content = item.get("content", "") or ""
+    content_bytes = content.encode("utf-8")
+    content_sha256 = hashlib.sha256(content_bytes).hexdigest()
+    item_id = str(item.get("id", ""))
     captured_at = (
         item["published_at"].isoformat()
         if item.get("published_at")
         else datetime.now(timezone.utc).isoformat()
     )
-    source_system = item.get("author", item.get("source_type", "unknown"))
+    source_system = item.get("author") or item.get("source_type", "unknown")
     return RawDocument(
-        raw_document_id=hashlib.md5(content.encode()).hexdigest(),
-        job_id=f"rss-{item['id']}",
+        raw_document_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"osint:raw:{item_id}")),
+        job_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"osint:job:{item_id}")),
         channel="web",
         mime_type="text/plain",
         encoding="utf-8",
-        body_inline=content if len(content.encode("utf-8")) < 65536 else None,
-        body_ref=None,
+        body_inline=content if len(content_bytes) < 65536 else None,
+        body_ref=None if len(content_bytes) < 65536 else f"bronze://{content_sha256}",
         headers_summary={"collector": "rss-collector"},
         captured_at=captured_at,
         collector_id=f"rss-{item['source_type']}",
-        collector_version="1.0",
+        collector_version="1.0.0",
         source_url=item.get("url", ""),
         source_system=source_system,
-        content_sha256=hashlib.sha256(content.encode()).hexdigest(),
-        tenant_id="",
+        content_sha256=content_sha256,
+        tenant_id="default",
+        body=content,
         extensions={
             "summary": item.get("ai_summary", ""),
             "summarized": bool(item.get("ai_summary")),
             "rss_title": item.get("title", ""),
         },
+        ext_schema_version="1.0.0",
     )
 
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import calendar
+import hashlib
 import logging
 import os
 import re
@@ -50,7 +51,11 @@ class RSSScraper(BaseScraper):
             List[ContentItem]: Fetched content items
         """
         sources = [s for s in self.config["sources"] if s.enabled]
-        sem = asyncio.Semaphore(5)
+        try:
+            concurrency = max(1, int(os.environ.get("OSINT_RSS_CONCURRENCY", "10")))
+        except ValueError:
+            concurrency = 10
+        sem = asyncio.Semaphore(concurrency)
 
         async def _fetch_one(source: RSSSourceConfig) -> List[ContentItem]:
             async with sem:
@@ -101,16 +106,18 @@ class RSSScraper(BaseScraper):
                 if published_at < since:
                     continue
 
-                # Generate unique ID from feed URL and entry ID
-                feed_id = str(source.url).split("//")[1].replace("/", "_")
-                entry_id = entry.get("id", entry.get("link", ""))
-                unique_id = f"{feed_id}:{hash(entry_id)}"
-
                 # Extract content
                 content = self._extract_content(entry)
+                feed_id = hashlib.sha256(str(source.url).encode("utf-8")).hexdigest()[:16]
+                entry_id = (
+                    entry.get("id")
+                    or entry.get("link")
+                    or f"{entry.get('title', '')}|{published_at.isoformat()}|{content}"
+                )
+                native_id = hashlib.sha256(str(entry_id).encode("utf-8")).hexdigest()
 
                 item = ContentItem(
-                    id=self._generate_id("rss", feed_id, str(hash(entry_id))),
+                    id=self._generate_id("rss", feed_id, native_id),
                     source_type=SourceType.RSS,
                     title=entry.get("title", "Untitled"),
                     url=entry.get("link", str(source.url)),

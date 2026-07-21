@@ -1,5 +1,5 @@
 interface Props { size?: number; color?: string }
-export default function AgricultureIcon({ size = 24, color = '#4caf50' }: Props) {
+export default function AgricultureIcon({ size = 24, color = '#7e986b' }: Props) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <path d="M7 22V12c0-4 5-6 5-6s5 2 5 6v10" stroke={color} strokeWidth="1.5" fill="none"/>

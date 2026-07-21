@@ -2,7 +2,7 @@
 
 ## 1. 数据存储层
 
-### 1.1 Bronze Storage 文件结构
+### 1.1 原始证据存储文件结构
 
 ```
 bronze_storage/
@@ -19,7 +19,7 @@ bronze_storage/
 └── embedding_index/        # 嵌入向量索引目录
 ```
 
-### 1.2 Bronze JSON 文档格式
+### 1.2 原始证据 JSON 文档格式
 
 ```json
 {
@@ -104,7 +104,7 @@ CREATE INDEX idx_source ON bronze_index(source_system);
 关键方法：
 - `build_index()` — 全量扫描 bronze JSON 文件并写入 SQLite
 - `incremental_update()` — 仅索引新文件（基于 file_path 比对）
-- `query(start_date, end_date, layer, country, limit)` — 条件查询返回 BronzeDocument 列表
+- `query(start_date, end_date, layer, country, limit)` — 条件查询返回原始证据文档列表
 - `get_all()` — 返回全部索引文档
 - `get_available_dates()` — 返回所有有数据的日期
 - `count()` — 返回索引文档总数
@@ -128,7 +128,7 @@ async def run_horizon_collection(hours: int = 48) -> dict:
     #    a. _translate_item() → 非中文内容翻译为中文
     #    b. _summarize_item() → LLM 生成 200 字摘要
     #    c. _classify_item() → LLM 分类 + 地点提取
-    #    d. _to_raw_document() → 转换格式 + 写入 Bronze JSON
+    #    d. _to_raw_document() → 转换格式 + 写入原始证据 JSON
     # 3. 返回统计: {total, translated, classified, written}
 
 async def _translate_item(item: ContentItem) -> str:
@@ -141,7 +141,7 @@ async def _classify_item(title: str, text: str) -> tuple[IntelLayer, str, str]:
     # 调用 classify_with_llm() 返回 (layer, country, city)
 
 def _to_raw_document(item: ContentItem, ...) -> RawDocument:
-    # 构建 RawDocument，包含 extensions.horizon_metadata
+    # 构建原始证据文档，包含 extensions.horizon_metadata
     # 写入 bronze_storage/{date}/{feed_name}/{uuid}.json
 ```
 
@@ -400,7 +400,7 @@ def generate_warning_indicators(
     clusters_result: dict = None,
 ) -> dict:
     """
-    I&W 预警框架:
+    指标与预警框架：
     1. 事件级预警: 高敏感图层 + L1/L2 事件 → 生成预警
     2. 主题集中预警: 单图层占比 ≥ 35% → watch
     3. 单源线索预警: 高敏感单源情报过多 → 建议核查

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, PaperPlaneRight, X, Atom, Download, Globe, LinkSimple } from '@phosphor-icons/react'
 import type { SuperAnalysisProgress } from '../api'
@@ -61,6 +61,28 @@ const detailLabels: Record<string, string> = {
   relevant_count: '相关情报',
   internal_count: '内部数据',
   web_count: '网络数据',
+}
+
+const playbookOptions = [
+  ['general', '通用分析'],
+  ['person', '人员调查'],
+  ['website', '网站/机构'],
+  ['image', '图片取证'],
+  ['identity', '身份关联'],
+  ['event', '事件归因'],
+  ['threat', '威胁/IOC'],
+] as const
+
+const controlStyle = {
+  background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+  color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)',
+  fontSize: 11, fontFamily: 'var(--font-ui)', padding: '7px 9px', outline: 'none',
+}
+
+const reviewButtonStyle = {
+  background: 'var(--accent-dim)', border: '1px solid var(--glass-border)',
+  color: 'var(--text-primary)', borderRadius: 'var(--radius-sm)',
+  fontSize: 10, fontFamily: 'var(--font-ui)', padding: '7px 9px', cursor: 'pointer',
 }
 
 function ProgressDisplay({ progress, displayPercent }: { progress: SuperAnalysisProgress; displayPercent: number }) {
@@ -198,8 +220,10 @@ function ProgressDisplay({ progress, displayPercent }: { progress: SuperAnalysis
 export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', endDate = '' }: Props) {
   const {
     question, setQuestion, loading, result, error, progress, displayPercent,
-    handleSubmit, inputRef,
+    investigationType, setInvestigationType, target, setTarget, purpose, setPurpose,
+    authorized, setAuthorized, verificationDepth, setVerificationDepth, handleSubmit, submitReview, reviewing, inputRef,
   } = useSuperAnalysis({ startDate, endDate })
+  const [reviewNotes, setReviewNotes] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const floating = useFloatingPanel({
@@ -226,6 +250,9 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
   }, [result])
 
   const analysisBlocks: Block[] = result ? parseAnalysis(result.analysis) : []
+  const needsTarget = investigationType !== 'general'
+  const needsAuthorization = investigationType === 'person' || investigationType === 'identity'
+  const submitDisabled = loading || !question.trim() || (needsTarget && !target.trim()) || (needsAuthorization && (!purpose.trim() || !authorized))
 
   return (
     <motion.div
@@ -550,6 +577,83 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
                   </div>
                 )}
 
+                {result.investigation && (
+                  <div style={{
+                    padding: '14px 16px', border: '1px solid var(--glass-border)',
+                    borderRadius: 'var(--radius-sm)', background: 'rgba(13,148,136,0.025)',
+                    display: 'flex', flexDirection: 'column', gap: 12,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                      <div style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 700 }}>调查证据与复核</div>
+                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+                        {result.investigation.plan.playbook} · 分析师复核：{result.investigation.analyst_review.status}
+                      </span>
+                    </div>
+
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>证据账本</div>
+                      {result.investigation.evidence.map(item => (
+                        <div key={item.id} style={{ borderTop: '1px solid var(--glass-border)', padding: '6px 0', fontSize: 10, lineHeight: 1.6 }}>
+                          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{item.id}</span>
+                          <span style={{ color: 'var(--text-primary)', marginLeft: 6 }}>{item.title}</span>
+                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 6 }}>{item.verification_status} · {item.provenance}</span>
+                          {item.summary && <div style={{ color: 'var(--text-secondary)' }}>{item.summary}</div>}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>关系网络</div>
+                        {result.investigation.relationship_graph.edges.length > 0 ? result.investigation.relationship_graph.edges.map((edge, index) => (
+                          <div key={`${edge.source}-${edge.target}-${index}`} style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>
+                            {edge.source} — {edge.relation} → {edge.target}
+                          </div>
+                        )) : <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>暂无可复核关系</div>}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>时间线</div>
+                        {result.investigation.timeline.map(item => (
+                          <div key={item.date} style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>{item.date} · {item.summary}</div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>替代解释</div>
+                        {result.investigation.alternative_explanations.map(item => (
+                          <div key={item.id} style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>• {item.explanation}</div>
+                        ))}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>待核验项</div>
+                        {result.investigation.pending_verification.map(item => (
+                          <div key={item.id} style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>• {item.question}</div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <input
+                        value={reviewNotes}
+                        onChange={event => setReviewNotes(event.target.value)}
+                        placeholder="复核备注（可选）"
+                        style={{ ...controlStyle, flex: 1, minWidth: 180 }}
+                      />
+                      <button type="button" disabled={reviewing} onClick={() => submitReview('approved', reviewNotes)} style={reviewButtonStyle}>
+                        批准结论
+                      </button>
+                      <button type="button" disabled={reviewing} onClick={() => submitReview('needs_follow_up', reviewNotes)} style={reviewButtonStyle}>
+                        需要补证
+                      </button>
+                      <button type="button" disabled={reviewing} onClick={() => submitReview('rejected', reviewNotes)} style={reviewButtonStyle}>
+                        驳回结论
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Rendered analysis blocks */}
                 <div style={{ fontSize: 14, lineHeight: 1.9, color: 'var(--text-primary)' }}>
                   {analysisBlocks.map((block, idx) => {
@@ -796,11 +900,39 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
 
         {/* ── Input bar ── */}
         <div style={{
-          display: 'flex', gap: 8, padding: '10px 14px',
+          display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px',
           borderTop: '1px solid var(--glass-border)',
           flexShrink: 0,
           background: 'rgba(18,20,22,0.72)',
         }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+              调查剧本
+              <select value={investigationType} onChange={e => setInvestigationType(e.target.value as typeof investigationType)} style={{ ...controlStyle, marginLeft: 5 }}>
+                {playbookOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            {needsTarget && (
+              <input value={target} onChange={e => setTarget(e.target.value)} placeholder="调查目标（域名、人物、图片 URL、事件或 IOC）" style={{ ...controlStyle, flex: 1, minWidth: 180 }} />
+            )}
+            <label style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+              验证深度
+              <select value={verificationDepth} onChange={e => setVerificationDepth(e.target.value as typeof verificationDepth)} style={{ ...controlStyle, marginLeft: 5 }}>
+                <option value="standard">标准</option>
+                <option value="deep">深度</option>
+              </select>
+            </label>
+          </div>
+          {needsAuthorization && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input value={purpose} onChange={e => setPurpose(e.target.value)} placeholder="合法调查目的" style={{ ...controlStyle, flex: 1, minWidth: 180 }} />
+              <label style={{ fontSize: 10, color: 'var(--text-secondary)', display: 'flex', gap: 5, alignItems: 'center' }}>
+                <input type="checkbox" checked={authorized} onChange={e => setAuthorized(e.target.checked)} />
+                授权确认：我已获授权且仅处理必要的公开信息
+              </label>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
           <input
             ref={inputRef}
             value={question}
@@ -826,20 +958,20 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
             }}
           />
           <motion.button
-            whileHover={{ scale: loading || !question.trim() ? 1 : 1.02 }}
+            whileHover={{ scale: submitDisabled ? 1 : 1.02 }}
             whileTap={{ scale: loading || !question.trim() ? 1 : 0.96 }}
             onClick={handleSubmit}
-            disabled={loading || !question.trim()}
+            disabled={submitDisabled}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              background: loading || !question.trim() ? 'var(--bg-elevated)' : 'var(--accent)',
+              background: submitDisabled ? 'var(--bg-elevated)' : 'var(--accent)',
               border: 'none',
-              color: loading || !question.trim() ? 'var(--text-tertiary)' : 'var(--bg-deep)',
+              color: submitDisabled ? 'var(--text-tertiary)' : 'var(--bg-deep)',
               padding: '10px 16px', borderRadius: 'var(--radius-sm)',
-              cursor: loading || !question.trim() ? 'default' : 'pointer',
+              cursor: submitDisabled ? 'default' : 'pointer',
               fontSize: 13, fontWeight: 600,
               fontFamily: 'var(--font-mono)',
-              opacity: loading || !question.trim() ? 0.3 : 1,
+              opacity: submitDisabled ? 0.3 : 1,
               transition: 'opacity 0.15s',
             }}
           >
@@ -850,6 +982,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
               </>
             )}
           </motion.button>
+          </div>
         </div>
       </motion.div>
     </motion.div>

@@ -3,8 +3,8 @@
 ## 职责边界
 
 - **输入**：`channel=api`，`target` 描述 OpenAPI 操作、查询参数、分页游标、增量字段。
-- **输出**：`RawDocument`（`application/json` 或 CSV 等）；大响应用 `RawChunk` 分块。
-- **不负责**：业务语义统一（由 Silver 解析器完成）；**负责**忠实保存分页原始页与游标状态。
+- **输出**：原始证据文档（`RawDocument`，格式为 `application/json` 或 CSV 等）；大响应用原始数据分片（`RawChunk`）分块。
+- **不负责**：业务语义统一（由标准证据层解析器完成）；**负责**忠实保存分页原始页与游标状态。
 
 ## 组件
 
@@ -12,7 +12,7 @@
 |------|------|
 | **OpenAPIClient** | 由规范生成或手写；处理鉴权（API Key、OAuth2 client credentials） |
 | **Pagination** | `cursor` / `offset` / `since` 策略可插拔 |
-| **SchemaPin** | 响应 JSON 对已知 `schema_version` 校验；失败写入 Bronze 并打 `parse_error` 扩展标志 |
+| **模式固定器** | 响应 JSON 对已知 `schema_version` 校验；失败写入原始证据层并打 `parse_error` 扩展标志 |
 
 ## 合规与隔离
 

@@ -6,6 +6,19 @@ from typing import Optional, Any
 
 _LATIN_RE = re.compile(r"[a-zA-Z]")
 
+_TAIWAN_COUNTRY = "中国台湾省"
+_TAIWAN_PROVINCE = "台湾省"
+_TAIWAN_LAT = 25.0330
+_TAIWAN_LNG = 121.5654
+_TAIWAN_COUNTRY_ALIASES = {
+    "台湾", "台湾省", "中国台湾", "中国台湾省", "taiwan", "taiwan province",
+}
+_TAIWAN_CITY_NAMES = {
+    "台北", "taipei", "高雄", "kaohsiung", "基隆", "keelung",
+    "新竹", "hsinchu", "台中", "taichung", "嘉义", "chiayi",
+    "台南", "tainan",
+}
+
 
 @lru_cache(maxsize=None)
 def _latin_variant_pattern(variant: str) -> re.Pattern[str]:
@@ -24,6 +37,15 @@ def _variant_pos(text: str, variant: str) -> int | None:
         return m.start() if m else None
     idx = text.find(variant)
     return idx if idx != -1 else None
+
+
+def _normalize_location_result(country: str, city: str, lat: float, lng: float) -> tuple[str, str, float, float]:
+    """Canonicalize Taiwan-related locations as China's Taiwan Province."""
+    country_key = country.strip().lower()
+    city_key = city.strip().lower()
+    if country_key in _TAIWAN_COUNTRY_ALIASES or city_key in _TAIWAN_CITY_NAMES:
+        return (_TAIWAN_COUNTRY, _TAIWAN_PROVINCE, lat or _TAIWAN_LAT, lng or _TAIWAN_LNG)
+    return (country, city, lat, lng)
 
 
 # City-level database: (country, city, variants_list, lat, lng)
@@ -1439,24 +1461,27 @@ def _geocode(country: str, city: str) -> tuple[str, str, float, float]:
     country_lower = country.lower()
     city_lower = city.lower()
 
+    if country_lower in _TAIWAN_COUNTRY_ALIASES and not city:
+        return (_TAIWAN_COUNTRY, _TAIWAN_PROVINCE, _TAIWAN_LAT, _TAIWAN_LNG)
+
     # Try city match in _CITIES (both by variant and by city name)
     if city:
         for c in _CITIES:
             if c["city"].lower() == city_lower:
-                return (c["country"], city, c["lat"], c["lng"])
+                return _normalize_location_result(c["country"], city, c["lat"], c["lng"])
             for v in c["variants"]:
                 if v.lower() == city_lower:
-                    return (c["country"], city, c["lat"], c["lng"])
+                    return _normalize_location_result(c["country"], city, c["lat"], c["lng"])
 
     # Country-level fallback from _COUNTRIES
     for entry in _COUNTRIES:
         for v in entry["variants"]:
             if v.lower() == country_lower:
                 city_name = city if city else entry.get("capital", entry["country"])
-                return (entry["country"], city_name, entry["lat"], entry["lng"])
+                return _normalize_location_result(entry["country"], city_name, entry["lat"], entry["lng"])
 
     # Country not in our database — return as-is with zero coords
-    return (country, city or country, 0.0, 0.0)
+    return _normalize_location_result(country, city or country, 0.0, 0.0)
 
 
 def extract_location(text: str) -> Optional[tuple[str, str, float, float]]:
@@ -1512,7 +1537,7 @@ def extract_location(text: str) -> Optional[tuple[str, str, float, float]]:
     # Sort by priority (0=fastest), then by position in text
     results.sort(key=lambda x: (x[0], x[1]))
     _, _, country, city, lat, lng = results[0]
-    return (country, city, lat, lng)
+    return _normalize_location_result(country, city, lat, lng)
 
 
 def extract_location_with_fallback(text: str, source_system: str = "", doc: Any = None) -> tuple[str, str, float, float]:
@@ -1540,6 +1565,6 @@ def extract_location_with_fallback(text: str, source_system: str = "", doc: Any 
         from backend.osint_sources import lookup_source_country
         src_loc = lookup_source_country(source_system)
         if src_loc is not None:
-            return src_loc
+            return _normalize_location_result(*src_loc)
     # Priority 4: global fallback
     return ("全球", "未识别", 20.0, 0.0)

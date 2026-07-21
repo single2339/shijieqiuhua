@@ -14,6 +14,8 @@ import type {
   ReportRequest,
   SituationReport,
   SituationBriefResult,
+  InvestigationAnalystReview,
+  InvestigationReviewRequest,
   SuperAnalysisRequest,
   SuperAnalysisResponse,
   WarningIndicatorResult,
@@ -177,6 +179,16 @@ export function interpretAnalysis(req: AnalysisInterpretRequest, signal?: AbortS
 
 export function superAnalyze(req: SuperAnalysisRequest, signal?: AbortSignal): Promise<SuperAnalysisResponse> {
   return safePost<SuperAnalysisResponse>('/api/intel/super-analysis', req, signal)
+}
+
+export function submitSuperAnalysisReview(
+  requestId: string,
+  review: InvestigationReviewRequest,
+): Promise<InvestigationAnalystReview> {
+  return safePost<InvestigationAnalystReview>(
+    `/api/intel/super-analysis/${encodeURIComponent(requestId)}/review`,
+    review,
+  )
 }
 
 export interface SuperAnalysisProgress {

@@ -32,6 +32,18 @@ def _build_client_kwargs(timeout: int) -> dict:
     return kwargs
 
 
+def get_plain_http_client(timeout: float = 30.0, *, follow_redirects: bool = True) -> httpx.AsyncClient:
+    """Create a client for non-LLM HTTP APIs without LLM credentials."""
+    kwargs: dict = {
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "headers": {"User-Agent": "osint-network/1.0"},
+    }
+    if PROXY_URL:
+        kwargs["proxy"] = PROXY_URL
+    return httpx.AsyncClient(**kwargs)
+
+
 def get_llm_client(timeout: int = DEFAULT_TIMEOUT) -> httpx.AsyncClient:
     """Return a NEW httpx.AsyncClient for LLM API calls.
 

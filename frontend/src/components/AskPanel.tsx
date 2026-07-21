@@ -4,6 +4,8 @@ import { PaperPlaneRight, ChatCircleDots, FadersHorizontal, X } from '@phosphor-
 import { askQuestionIntel } from '../api'
 import type { AskResponse, IntelLayer } from '../types'
 import { LAYER_META } from '../types'
+import { useFloatingPanel } from '../hooks/useFloatingPanel'
+import { isAbortError } from '../utils/request'
 
 interface Props { onClose: () => void; isMobile?: boolean }
 
@@ -48,24 +50,45 @@ export default function AskPanel({ onClose, isMobile }: Props) {
   const [showFilters, setShowFilters] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const requestControllerRef = useRef<AbortController | null>(null)
+  const requestGenerationRef = useRef(0)
+  const floating = useFloatingPanel({
+    enabled: !isMobile,
+    width: 520,
+    height: 420,
+    anchor: 'bottom-center',
+  })
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   useEffect(() => { if (!loading) inputRef.current?.focus() }, [loading])
+  useEffect(() => () => {
+    requestGenerationRef.current += 1
+    requestControllerRef.current?.abort()
+  }, [])
 
   const handleSubmit = async () => {
     const q = question.trim()
     if (!q || loading) return
+    const requestGeneration = ++requestGenerationRef.current
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     setMessages(prev => [...prev, { role: 'user', content: q }])
     setQuestion('')
     setLoading(true)
     try {
-      const res = await askQuestionIntel({ question: q, start_date: startDate, end_date: endDate, layer })
+      const res = await askQuestionIntel({ question: q, start_date: startDate, end_date: endDate, layer }, controller.signal)
+      if (controller.signal.aborted || requestGeneration !== requestGenerationRef.current) return
       setMessages(prev => [...prev, { role: 'assistant', content: res.answer, refs: res.references }])
-    } catch {
+    } catch (error) {
+      if (isAbortError(error) || requestGeneration !== requestGenerationRef.current) return
       setMessages(prev => [...prev, { role: 'assistant', content: '请求失败，请稍后重试。' }])
     } finally {
-      setLoading(false)
+      if (requestGeneration === requestGenerationRef.current) {
+        setLoading(false)
+        if (requestControllerRef.current === controller) requestControllerRef.current = null
+      }
     }
   }
 
@@ -81,9 +104,9 @@ export default function AskPanel({ onClose, isMobile }: Props) {
         bottom: isMobile ? 0 : 16,
         left: isMobile ? 0 : '50%',
         transform: isMobile ? 'none' : 'translateX(-50%)',
-        width: isMobile ? '100%' : 560,
+        width: isMobile ? '100%' : 520,
         maxWidth: isMobile ? '100%' : '94vw',
-        height: isMobile ? '100%' : 480,
+        height: isMobile ? '100%' : 420,
         maxHeight: isMobile ? '100%' : undefined,
         borderRadius: isMobile ? 0 : 'var(--radius-lg)',
         zIndex: 'var(--z-panel)',
@@ -91,12 +114,14 @@ export default function AskPanel({ onClose, isMobile }: Props) {
         display: 'flex', flexDirection: 'column',
         fontFamily: 'var(--font-ui)',
         overflow: 'hidden',
+        ...floating.panelStyle,
       }}
     >
       {/* Header */}
-      <div style={{
+      <div {...floating.dragHandleProps} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '14px 18px', borderBottom: '1px solid var(--glass-border)',
+        ...floating.dragHandleStyle,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ChatCircleDots size={16} weight="duotone" color="var(--accent)" />
@@ -191,8 +216,8 @@ export default function AskPanel({ onClose, isMobile }: Props) {
             }}
           >
             <div className={m.role === 'assistant' ? 'glass-card' : ''} style={{
-              background: m.role === 'user' ? 'rgba(16,185,129,0.06)' : 'transparent',
-              border: `1px solid ${m.role === 'user' ? 'rgba(16,185,129,0.2)' : 'var(--glass-border)'}`,
+              background: m.role === 'user' ? 'var(--accent-dim)' : 'transparent',
+              border: `1px solid ${m.role === 'user' ? 'rgba(200,164,93,0.22)' : 'var(--glass-border)'}`,
               borderLeft: m.role === 'user' ? '2px solid var(--accent)' : 'none',
               borderRadius: 'var(--radius-md)', padding: '8px 12px',
               fontSize: 12, lineHeight: 1.6, color: 'var(--text-primary)',
@@ -267,7 +292,7 @@ export default function AskPanel({ onClose, isMobile }: Props) {
           disabled={loading || !question.trim()}
           style={{
             background: loading || !question.trim() ? 'var(--bg-elevated)' : 'var(--accent)',
-            border: 'none', color: loading || !question.trim() ? 'var(--text-tertiary)' : '#fff',
+            border: 'none', color: loading || !question.trim() ? 'var(--text-tertiary)' : 'var(--bg-deep)',
             padding: '7px 16px', borderRadius: 'var(--radius-sm)',
             cursor: loading || !question.trim() ? 'default' : 'pointer',
             fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',

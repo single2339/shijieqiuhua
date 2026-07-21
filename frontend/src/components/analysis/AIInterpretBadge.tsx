@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Sparkle } from '@phosphor-icons/react'
 import type { AnalysisInterpretRequest } from '../../types'
 import { interpretAnalysis } from '../../api'
+import { isAbortError } from '../../utils/request'
 
 interface Props {
   analysisType: string
@@ -13,19 +14,32 @@ export default function AIInterpretBadge({ analysisType, context, label = 'AI �
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState('')
   const [error, setError] = useState('')
+  const requestGenerationRef = useRef(0)
+  const requestControllerRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => requestControllerRef.current?.abort(), [])
 
   const handleInterpret = async () => {
+    const requestGeneration = ++requestGenerationRef.current
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     setLoading(true)
     setError('')
     setResult('')
     try {
       const req: AnalysisInterpretRequest = { analysis_type: analysisType, context }
-      const res = await interpretAnalysis(req)
+      const res = await interpretAnalysis(req, controller.signal)
+      if (controller.signal.aborted || requestGeneration !== requestGenerationRef.current) return
       setResult(res.interpretation)
-    } catch {
+    } catch (requestError) {
+      if (isAbortError(requestError) || requestGeneration !== requestGenerationRef.current) return
       setError('AI 解读请求失败，请重试')
     } finally {
-      setLoading(false)
+      if (requestGeneration === requestGenerationRef.current) {
+        setLoading(false)
+        if (requestControllerRef.current === controller) requestControllerRef.current = null
+      }
     }
   }
 

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osint-network.local/schemas/intelligence-point.schema.json",
+  "title": "情报要点",
+  "type": "object",
+  "required": [
+    "point_id",
+    "silver_document_id",
+    "event_id",
+    "event_type",
+    "layer",
+    "statement",
+    "impact",
+    "urgency",
+    "relevance_score",
+    "source_key",
+    "source_reliability",
+    "information_credibility",
+    "independence_group",
+    "pir_ids",
+    "indicator_ids",
+    "created_at"
+  ],
+  "properties": {
+    "point_id": { "type": "string", "format": "uuid" },
+    "silver_document_id": { "type": "string", "format": "uuid" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "minLength": 1 },
+    "layer": {
+      "type": "string",
+      "enum": ["nature", "economy", "finance", "politics", "military", "aviation", "technology", "society", "energy", "agriculture", "health", "cyber"]
+    },
+    "statement": { "type": "string", "minLength": 1 },
+    "impact": { "type": "string", "enum": ["low", "medium", "high"] },
+    "urgency": { "type": "string", "enum": ["low", "medium", "high"] },
+    "relevance_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "source_key": { "type": "string", "minLength": 1 },
+    "source_reliability": { "type": "string", "enum": ["A", "B", "C", "D", "E"] },
+    "information_credibility": { "type": "integer", "minimum": 1, "maximum": 6 },
+    "independence_group": { "type": "string", "minLength": 1 },
+    "pir_ids": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "indicator_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "title": { "type": "string" },
+    "published_at": { "type": "string", "format": "date-time" },
+    "url": { "type": "string" },
+    "author": { "type": "string" }
+  },
+  "additionalProperties": false
+}

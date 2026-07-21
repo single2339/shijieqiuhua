@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class IntelLayer(str, Enum):
+    UNCLASSIFIED = "unclassified"
     NATURE = "nature"
     ECONOMY = "economy"
     FINANCE = "finance"
@@ -223,7 +224,7 @@ class CorroborationResult(BaseModel):
     top_pairs: list[SourcePairOverlap] = Field(default_factory=list)
     event_count: int = 0
     claim_count: int = 0
-    methodology: str = "按事件簇/Claim 计算共同支撑关系，而非按单条情报 ID 直接重合。"
+    methodology: str = "按事件簇和可验证主张计算共同支撑关系，而非按单条情报编号直接重合。"
 
 
 class AnomalyEvent(BaseModel):
@@ -412,7 +413,7 @@ class WarningIndicatorResult(BaseModel):
     total_items: int = 0
     overall_level: str = "normal"
     active_indicator_count: int = 0
-    methodology: str = "I&W: 基于事件簇、L1-L4 可信度、高敏感图层和采集缺口生成可复核预警指标。"
+    methodology: str = "指标与预警：基于事件簇、L1-L4 可信度、高敏感图层和采集缺口生成可复核预警指标。"
     indicators: list[WarningIndicator] = Field(default_factory=list)
     collection_requirements: list[CollectionTask] = Field(default_factory=list)
 
@@ -452,12 +453,28 @@ class AnalysisInterpretResponse(BaseModel):
 # ── Super Analysis ──
 
 SUPER_ANALYSIS_ALLOWED_SKILLS = frozenset({"super-analysis"})
+SUPER_ANALYSIS_PLAYBOOKS = frozenset({
+    "general",
+    "person",
+    "website",
+    "image",
+    "identity",
+    "event",
+    "threat",
+})
 
 
 class SuperAnalysisRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=20000)
     start_date: str = ""
     end_date: str = ""
+    investigation_type: Literal[
+        "general", "person", "website", "image", "identity", "event", "threat"
+    ] = "general"
+    target: str = Field(default="", max_length=2048)
+    purpose: str = Field(default="", max_length=500)
+    authorized: bool = False
+    verification_depth: Literal["standard", "deep"] = "standard"
     skills: list[str] = Field(default_factory=list, max_length=20)
     request_id: str = Field(
         default="",
@@ -473,8 +490,20 @@ class SuperAnalysisRequest(BaseModel):
             raise ValueError(f"unsupported super-analysis skills: {', '.join(invalid)}")
         return skills
 
+    @model_validator(mode="after")
+    def validate_investigation_scope(self) -> "SuperAnalysisRequest":
+        if self.investigation_type != "general" and not self.target.strip():
+            raise ValueError("target is required for a targeted investigation")
+        if self.investigation_type in {"person", "identity"}:
+            if not self.authorized:
+                raise ValueError("authorized=true is required for person and identity investigations")
+            if not self.purpose.strip():
+                raise ValueError("purpose is required for person and identity investigations")
+        return self
+
 
 class BayesianIntelItem(BaseModel):
+    document_id: str = ""
     title: str
     source: str
     date: str
@@ -489,6 +518,7 @@ class BayesianIntelItem(BaseModel):
         "unknown",
     ]
     content_snippet: str = ""
+    source_url: str = ""
 
 
 class HypothesisEvidenceAssessment(BaseModel):
@@ -517,12 +547,91 @@ class WebResult(BaseModel):
     url: str = ""
 
 
+class InvestigationPlan(BaseModel):
+    playbook: str
+    target: str
+    collection_steps: list[str] = Field(default_factory=list)
+    verification_steps: list[str] = Field(default_factory=list)
+
+
+class InvestigationEvidence(BaseModel):
+    id: str
+    kind: str
+    title: str
+    source: str
+    provenance: str
+    collected_at: str
+    verification_status: Literal["collected", "captured", "corroborated", "failed", "unverified"]
+    summary: str = ""
+    source_url: str = ""
+    content_sha256: str = ""
+    data: dict = Field(default_factory=dict)
+
+
+class InvestigationRelationshipNode(BaseModel):
+    id: str
+    label: str
+    type: str
+
+
+class InvestigationRelationshipEdge(BaseModel):
+    source: str
+    target: str
+    relation: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class InvestigationRelationshipGraph(BaseModel):
+    nodes: list[InvestigationRelationshipNode] = Field(default_factory=list)
+    edges: list[InvestigationRelationshipEdge] = Field(default_factory=list)
+
+
+class InvestigationTimelineEntry(BaseModel):
+    date: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class InvestigationPendingVerification(BaseModel):
+    id: str
+    question: str
+    priority: Literal["high", "medium", "low"] = "medium"
+    related_evidence_ids: list[str] = Field(default_factory=list)
+
+
+class InvestigationAnalystReview(BaseModel):
+    status: Literal["pending", "approved", "needs_follow_up", "rejected"] = "pending"
+    reviewer_id: int | None = None
+    reviewed_at: str = ""
+    notes: str = ""
+
+
+class InvestigationReviewRequest(BaseModel):
+    status: Literal["approved", "needs_follow_up", "rejected"]
+    notes: str = Field(default="", max_length=4000)
+
+
+class InvestigationResult(BaseModel):
+    playbook: str
+    scope: dict = Field(default_factory=dict)
+    plan: InvestigationPlan
+    evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    relationship_graph: InvestigationRelationshipGraph = Field(default_factory=InvestigationRelationshipGraph)
+    timeline: list[InvestigationTimelineEntry] = Field(default_factory=list)
+    pending_verification: list[InvestigationPendingVerification] = Field(default_factory=list)
+    alternative_explanations: list[AlternativeExplanation] = Field(default_factory=list)
+    recommended_next_steps: list[CollectionTask] = Field(default_factory=list)
+    analyst_review: InvestigationAnalystReview = Field(default_factory=InvestigationAnalystReview)
+    errors: list[str] = Field(default_factory=list)
+
+
 class SuperAnalysisResponse(BaseModel):
     question: str
     analysis: str
     relevant_items: list[BayesianIntelItem] = Field(default_factory=list)
     web_results: list[WebResult] = Field(default_factory=list)
     hypothesis_assessment: HypothesisAssessment | None = None
+    investigation: InvestigationResult | None = None
     collection_status: Literal["complete", "empty", "partial", "unavailable"] = "complete"
     provider_statuses: dict[
         str,

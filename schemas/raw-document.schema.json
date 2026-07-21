@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://osint-network.local/schemas/raw-document.schema.json",
-  "title": "RawDocument",
+  "title": "原始证据文档",
   "type": "object",
   "required": [
     "raw_document_id",
@@ -15,41 +15,36 @@
     "content_sha256"
   ],
   "properties": {
-    "raw_document_id": { "type": "string", "format": "uuid" },
-    "job_id": { "type": "string", "format": "uuid" },
-    "channel": {
-      "type": "string",
-      "enum": ["web", "social", "api", "app"]
-    },
+    "$schema": { "type": "string" },
+    "raw_document_id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "channel": { "type": "string", "minLength": 1 },
     "mime_type": { "type": "string", "minLength": 1 },
-    "encoding": { "type": "string", "default": "utf-8" },
+    "encoding": { "type": "string", "minLength": 1, "default": "utf-8" },
     "body_ref": {
       "type": "string",
-      "description": "Object storage URI or logical pointer to Bronze blob"
+      "minLength": 1,
+      "description": "指向原始证据层内容对象的存储 URI 或逻辑引用"
     },
     "body_inline": {
       "type": "string",
-      "description": "Small payloads only; size limits enforced by service"
+      "description": "仅用于小型载荷；大小限制由服务端执行"
     },
     "headers_summary": { "type": "object", "additionalProperties": true },
     "captured_at": { "type": "string", "format": "date-time" },
     "collector_id": { "type": "string", "minLength": 1 },
-    "collector_version": {
-      "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-.]+)?$"
-    },
-    "source_url": { "type": "string", "format": "uri" },
+    "collector_version": { "type": "string", "minLength": 1 },
+    "source_url": { "type": "string" },
     "source_system": { "type": "string", "minLength": 1 },
     "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "classification": {
-      "type": "string",
-      "enum": ["PUBLIC_AGG", "PUBLIC_DOC", "SENSITIVE_METADATA", "PII", "RESTRICTED"]
-    },
+    "classification": { "type": "string" },
     "extensions": {
       "type": "object",
       "additionalProperties": true
     },
-    "ext_schema_version": { "type": "string" }
+    "ext_schema_version": { "type": "string" },
+    "tenant_id": { "type": "string" },
+    "ingested_at": { "type": "string", "format": "date-time" }
   },
   "oneOf": [
     { "required": ["body_ref"] },

@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import List
+from urllib.parse import unquote, urlparse
 
 
 QUEUE_DB_FILENAME = "queue.db"
@@ -11,8 +12,9 @@ MERGE_INDEX_FILENAME = "_merge_index.json"
 
 
 class BronzeDocument:
-    def __init__(self, raw: dict) -> None:
+    def __init__(self, raw: dict, storage_root: str | Path | None = None) -> None:
         self.raw = raw
+        self._storage_root = Path(storage_root) if storage_root is not None else None
         self.raw_document_id: str = raw.get("raw_document_id", "")
         self.body_inline: str = raw.get("body_inline") or ""
         self.body_ref: str | None = raw.get("body_ref")
@@ -27,7 +29,44 @@ class BronzeDocument:
 
     @property
     def text(self) -> str:
-        return self.body_inline or ""
+        if self.raw.get("body_inline") is not None:
+            return self.raw.get("body_inline") or ""
+        return self.read_body()
+
+    def read_body(self) -> str:
+        """Read a referenced body, retaining inline/legacy compatibility."""
+        if self.raw.get("body_inline") is not None:
+            return self.raw.get("body_inline") or ""
+        path = self._resolve_body_ref()
+        if path is None:
+            return ""
+        try:
+            return path.read_text(encoding=self.raw.get("encoding") or "utf-8")
+        except (OSError, UnicodeError):
+            return ""
+
+    def _resolve_body_ref(self) -> Path | None:
+        if not self.body_ref:
+            return None
+        parsed = urlparse(self.body_ref)
+        if parsed.scheme == "bronze":
+            if self._storage_root is None:
+                return None
+            key = unquote(parsed.netloc + parsed.path).lstrip("/")
+            if not key or Path(key).name != key:
+                return None
+            candidates = (
+                self._storage_root / "_blobs" / key,
+                self._storage_root / key,
+            )
+            return next((candidate for candidate in candidates if candidate.is_file()), None)
+        if parsed.scheme == "file":
+            # 原始证据读取器不得把数据中提供的引用转换为任意本地文件读取。
+            return None
+        if self._storage_root is None:
+            return None
+        ref_path = Path(self.body_ref)
+        return ref_path if ref_path.is_absolute() else self._storage_root / ref_path
 
 
 def scan_bronze(storage_root: str | Path) -> List[BronzeDocument]:
@@ -42,7 +81,7 @@ def scan_bronze(storage_root: str | Path) -> List[BronzeDocument]:
             continue
         try:
             data = json.loads(json_file.read_text(encoding="utf-8"))
-            docs.append(BronzeDocument(data))
+            docs.append(BronzeDocument(data, storage_root=root))
         except (json.JSONDecodeError, OSError):
             continue
 
@@ -50,5 +89,5 @@ def scan_bronze(storage_root: str | Path) -> List[BronzeDocument]:
 
 
 async def scan_bronze_async(storage_root: str | Path) -> List[BronzeDocument]:
-    """Async wrapper: runs scan_bronze in a thread pool to avoid blocking the event loop."""
+    """异步包装：在线程池执行扫描，避免阻塞事件循环。"""
     return await asyncio.to_thread(scan_bronze, storage_root)

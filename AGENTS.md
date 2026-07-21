@@ -21,6 +21,13 @@ Three-part system: Python collector pipeline (`src/`), FastAPI backend (`backend
 
 Python deps in `requirements.txt`, frontend deps in `frontend/package.json`.
 
+## Remote Server
+
+- **Name**: `osint-server`
+- **SSH**: `ssh osint-server` (`ubuntu@221.239.50.138:9022`)
+- **Public HTTP**: `http://221.239.50.138:9323/`
+- **Deploy frontend**: build locally with `cd frontend && npm run build`, then sync `frontend/dist/` to `osint-server:/opt/osint-network/frontend/dist/`
+
 ## Key Details
 
 - **Python 3.11+** required. `.venv` already exists at root.
@@ -34,12 +41,3 @@ Python deps in `requirements.txt`, frontend deps in `frontend/package.json`.
 - **No pre-commit, no lint config** detected. Style is standard Python (`from __future__ import annotations` at top of many files) + React with framer-motion animations + CSS custom properties (warm beige palette)
 - **Frontend test file**: `frontend/__tests__/mapview-regression.test.ts` (vitest)
 - **Backend test files**: `tests/test_*.py` (pytest)
-
-## Ongoing Tasks: iFairy Reproduction (`ifairy-repro/`)
-
-Training a ComplexLlama model (L8 H1024, 408M params, fp32, FairyQuantizer {±1,±i}) on server **ubuntu@10.13.45.20**. See `ifairy-repro/TRAINING_STATE.md` for full context.
-
-**On session start**: check if training is still running, report progress, and continue debugging.
-- SSH: `sshpass -p 'zhangnanxin' ssh -o BindInterface=en0 ubuntu@10.13.45.20`
-- Check: `tail -5 /tmp/train.log`
-- Attach: `tmux attach -t ifairy`

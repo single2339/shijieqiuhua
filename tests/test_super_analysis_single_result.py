@@ -6,7 +6,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from backend import main
-from backend.models import SuperAnalysisRequest
+from backend.agents.intelligence.review_store import InvestigationReviewStore
+from backend.models import InvestigationReviewRequest, SuperAnalysisRequest
 from backend.processors import progress
 
 
@@ -75,6 +76,91 @@ async def test_super_analysis_preserves_client_request_id_and_owner(monkeypatch)
     assert captured_task.params["owner_id"] == 7
 
 
+@pytest.mark.asyncio
+async def test_super_analysis_forwards_targeted_investigation_scope(monkeypatch):
+    captured_task = None
+
+    class _CapturingAgent(_FakeSuperAgent):
+        async def run(self, task):
+            nonlocal captured_task
+            captured_task = task
+            return await super().run(task)
+
+    monkeypatch.setattr(main.AgentRegistry, "create", lambda *_a, **_k: _CapturingAgent())
+    monkeypatch.setattr(main, "record_activity", lambda *_a, **_k: None)
+
+    await main.intel_super_analysis(
+        SuperAnalysisRequest(
+            question="该网站与哪些实体有关？",
+            investigation_type="website",
+            target="example.com",
+            verification_depth="deep",
+        ),
+        SimpleNamespace(client=SimpleNamespace(host="127.0.0.1")),
+        {"id": 9},
+    )
+
+    assert captured_task.params["investigation_type"] == "website"
+    assert captured_task.params["target"] == "example.com"
+    assert captured_task.params["verification_depth"] == "deep"
+
+
+@pytest.mark.asyncio
+async def test_super_analysis_creates_owner_scoped_pending_review_case(monkeypatch, tmp_path):
+    class _InvestigationAgent(_FakeSuperAgent):
+        async def run(self, _task):
+            result = await super().run(_task)
+            result.data["investigation"] = {
+                "playbook": "event",
+                "scope": {"target": "示例事件"},
+                "plan": {"playbook": "event", "target": "示例事件"},
+            }
+            return result
+
+    store = InvestigationReviewStore(tmp_path / "reviews.db")
+    monkeypatch.setattr(main, "_super_analysis_review_store", store, raising=False)
+    monkeypatch.setattr(main.AgentRegistry, "create", lambda *_a, **_k: _InvestigationAgent())
+    monkeypatch.setattr(main, "record_activity", lambda *_a, **_k: None)
+
+    response = await main.intel_super_analysis(
+        SuperAnalysisRequest(question="示例事件是否影响运输？", request_id="review-case-001"),
+        SimpleNamespace(client=SimpleNamespace(host="127.0.0.1")),
+        {"id": 11},
+    )
+
+    assert response.investigation.analyst_review.status == "pending"
+    assert store.get_review("review-case-001", owner_id=11).status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_super_analysis_review_submission_is_owner_scoped(monkeypatch, tmp_path):
+    store = InvestigationReviewStore(tmp_path / "reviews.db")
+    store.create_case("review-case-002", owner_id=11, playbook="event")
+    monkeypatch.setattr(main, "_super_analysis_review_store", store, raising=False)
+    monkeypatch.setattr(main, "record_activity", lambda *_a, **_k: None)
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+
+    review = await main.submit_super_analysis_review(
+        "review-case-002",
+        InvestigationReviewRequest(status="needs_follow_up", notes="需补充原始来源"),
+        request,
+        {"id": 11},
+    )
+
+    assert review.status == "needs_follow_up"
+    assert review.reviewer_id == 11
+    assert review.notes == "需补充原始来源"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await main.submit_super_analysis_review(
+            "review-case-002",
+            InvestigationReviewRequest(status="approved", notes="越权复核"),
+            request,
+            {"id": 12},
+        )
+    assert exc_info.value.status_code == 403
+
+
 def test_progress_is_namespaced_by_owner():
     progress.init_progress("shared-public-id", owner_id=1)
     progress.init_progress("shared-public-id", owner_id=2)
@@ -106,6 +192,17 @@ def test_super_analysis_skills_reject_unapproved_names():
         SuperAnalysisRequest(
             question="测试",
             skills=["../../../.opencode/config"],
+        )
+
+
+def test_sensitive_investigation_requires_authorization_and_purpose():
+    with pytest.raises(ValidationError):
+        SuperAnalysisRequest(
+            question="调查目标公开活动",
+            investigation_type="person",
+            target="示例目标",
+            purpose="",
+            authorized=False,
         )
 
 

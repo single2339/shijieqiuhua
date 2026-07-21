@@ -23,10 +23,10 @@ from backend.agents.intelligence._bayesian import (
     source_prior_class,
     update_hypothesis,
 )
+from backend.agents.intelligence.investigation import InvestigationExecutor
 from backend.agents.models import AgentTask
 from backend.agents.registry import AgentRegistry
 from backend.bronze_catalog import BronzeCatalog
-from backend.bronze_reader import scan_bronze
 from backend.config.osint_methodology import count_independent_sources, render_methodology
 from backend.llm_config import get_llm_client, get_plain_http_client
 from backend.models import IntelLayer, SUPER_ANALYSIS_ALLOWED_SKILLS
@@ -313,6 +313,7 @@ def _score_internal_candidates(
         independent_source_count = count_independent_sources(sources_for_count)
 
         candidates.append((relevance, {
+            "document_id": doc.raw_document_id,
             "title": title.split("\n")[0],
             "source": ", ".join(merged_sources) if merged_sources else doc.source_system,
             "_sources": sources_for_count,
@@ -322,6 +323,7 @@ def _score_internal_candidates(
             "independent_source_count": independent_source_count,
             "source_class": quality["source_class"],
             "content_snippet": text[:200],
+            "source_url": doc.source_url,
         }))
     return candidates
 
@@ -641,6 +643,11 @@ class SuperAnalysisAgent(BaseAgent):
         start_date = task.params.get("start_date")
         end_date = task.params.get("end_date")
         enable_web_search = task.params.get("web_search", True)
+        investigation_type = task.params.get("investigation_type", "general")
+        target = task.params.get("target", "")
+        purpose = str(task.params.get("purpose") or "").strip()
+        authorized = task.params.get("authorized", False) is True
+        verification_depth = task.params.get("verification_depth", "standard")
         request_id = task.params.get("request_id", "")
         owner_id = task.params.get("owner_id")
 
@@ -655,6 +662,28 @@ class SuperAnalysisAgent(BaseAgent):
                     owner_id=owner_id,
                     **detail,
                 )
+
+        if investigation_type in {"person", "identity"} and (not authorized or not purpose):
+            _sp(
+                "error",
+                "人员和身份调查需要合法目的与明确授权",
+                percent=0,
+            )
+            return {
+                "question": question,
+                "analysis": "人员和身份调查需要填写合法目的并确认已获授权；本次未启动任何本地或外部采集。",
+                "relevant_items": [],
+                "web_results": [],
+                "hypothesis_assessment": None,
+                "investigation": None,
+                "collection_status": "unavailable",
+                "provider_statuses": {"investigation": "error"},
+                "degraded": False,
+                "analysis_status": "unavailable",
+                "errors": ["sensitive_investigation_not_authorized"],
+                "model": self.model,
+                "request_id": request_id,
+            }
 
         errors: list[str] = []
         provider_statuses: dict[str, str] = {}
@@ -738,19 +767,60 @@ class SuperAnalysisAgent(BaseAgent):
             provider_statuses.update(web_payload["provider_statuses"])
             errors.extend(web_payload["errors"])
 
+        public_top_items = [
+            {key: value for key, value in item.items() if key != "_sources"}
+            for item in top_items
+        ]
+
+        investigation = None
+        investigation_evidence = []
+        if investigation_type in {"general", "person", "website", "image", "identity", "event", "threat"}:
+            _sp(
+                "collecting",
+                f"第1步·情报整理：执行 {investigation_type} 调查剧本...",
+                percent=30,
+                playbook=investigation_type,
+            )
+            try:
+                investigation = await InvestigationExecutor().run(
+                    playbook=investigation_type,
+                    target=target or question,
+                    question=question,
+                    verification_depth=verification_depth,
+                    internal_items=public_top_items,
+                    web_results=web_results,
+                )
+                investigation_evidence = [
+                    item for item in investigation.evidence
+                    if item.verification_status != "failed"
+                    and item.kind not in {"internal_intelligence", "web_search_lead"}
+                ]
+                failed_items = [
+                    item for item in investigation.evidence
+                    if item.verification_status == "failed"
+                ]
+                provider_statuses["investigation"] = (
+                    "success" if investigation_evidence and not failed_items
+                    else "error" if failed_items
+                    else "empty"
+                )
+                errors.extend(
+                    item.data.get("error", "investigation_tool_failed")
+                    for item in failed_items
+                )
+            except Exception as exc:
+                log.warning("investigation playbook failed: %s", exc)
+                provider_statuses["investigation"] = "error"
+                errors.append("investigation_playbook_failed")
+
         provider_failed = any(status == "error" for status in provider_statuses.values())
-        has_collection = bool(top_items or web_results)
+        has_collection = bool(top_items or web_results or investigation_evidence)
         collection_status = (
             "partial" if provider_failed and has_collection
             else "unavailable" if provider_failed
             else "empty" if not has_collection
             else "complete"
         )
-        public_top_items = [
-            {key: value for key, value in item.items() if key != "_sources"}
-            for item in top_items
-        ]
-
         def _result(
             analysis: str,
             analysis_status: str,
@@ -763,6 +833,7 @@ class SuperAnalysisAgent(BaseAgent):
                 "relevant_items": public_top_items,
                 "web_results": web_results,
                 "hypothesis_assessment": hypothesis_assessment,
+                "investigation": investigation.model_dump() if investigation else None,
                 "collection_status": collection_status,
                 "provider_statuses": provider_statuses,
                 "degraded": provider_failed or llm_failed,
@@ -828,6 +899,21 @@ class SuperAnalysisAgent(BaseAgent):
             }
             for index, result in enumerate(web_results)
         ]
+        playbook_records = [
+            {
+                "evidence_id": f"P{index + 1}",
+                "date": item.collected_at[:10],
+                "source": item.source,
+                "sources": [item.provenance],
+                "layer": "investigation",
+                "document_quality": 0.5,
+                "independent_sources": 1,
+                "title": item.title,
+                "summary": item.summary[:300],
+                "verification_status": item.verification_status,
+            }
+            for index, item in enumerate(investigation_evidence)
+        ]
         evidence_sources = {
             record["evidence_id"]: record["sources"]
             for record in internal_records
@@ -836,9 +922,14 @@ class SuperAnalysisAgent(BaseAgent):
             record["evidence_id"]: [record["url"] or record["title"] or record["evidence_id"]]
             for record in web_records
         })
+        evidence_sources.update({
+            record["evidence_id"]: record["sources"]
+            for record in playbook_records
+        })
         context_payload = {
             "internal_intelligence": internal_records,
             "external_search_summaries_unverified": web_records,
+            "playbook_evidence_collected": playbook_records,
             "topical_links_not_evidence": topical_links,
         }
         context_json = json.dumps(context_payload, ensure_ascii=False, separators=(",", ":"))

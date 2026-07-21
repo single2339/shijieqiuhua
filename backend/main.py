@@ -49,6 +49,8 @@ from backend.models import (
     GeoPoint,
     IntelItem,
     IntelLayer,
+    InvestigationAnalystReview,
+    InvestigationReviewRequest,
     LayerSummary,
     ReportRequest,
     ReportSection,
@@ -78,6 +80,8 @@ from backend.opencode_adapter import (
     OpenCodeAdapter,
     is_empty_agent_output,
 )
+from backend.intelligence.presentation import build_event_cluster_result, build_warning_indicator_result
+from backend.intelligence.store import IntelligenceStore
 
 ANALYSIS_REALTIME_ITEM_LIMIT = int(os.environ.get("ANALYSIS_REALTIME_ITEM_LIMIT", "3000"))
 STATS_DEFAULT_DAYS = int(os.environ.get("STATS_DEFAULT_DAYS", "14"))
@@ -164,6 +168,7 @@ from backend.auth.routes import router as auth_router, get_current_user, require
 from backend.auth.admin_routes import router as admin_router
 from backend.auth.tracking import record_activity
 from backend.task_queue import CollectionJobQueue
+from backend.agents.intelligence.review_store import InvestigationReviewStore
 
 # Import agent modules so they self-register via AgentRegistry
 import backend.agents.collectors.api_collectors  # noqa: F401
@@ -392,6 +397,7 @@ _CACHE_RULES: dict[str, str] = {
     "/api/stats": "public, max-age=10",
     "/api/health": "no-cache",
     "/api/analysis/": "private, max-age=60",
+    "/api/intelligence/": "private, max-age=30",
 }
 
 
@@ -449,6 +455,7 @@ _PUBLIC_PREFIXES = (
     "/api/dashboard",
     "/api/stats",
     "/api/analysis/",
+    "/api/intelligence/",
 )
 
 
@@ -522,6 +529,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
 STORAGE = Path(__file__).resolve().parent.parent / "bronze_storage"
 _indexer: Indexer | None = None
+_super_analysis_review_store = InvestigationReviewStore(STORAGE / "super_analysis_reviews.db")
 
 
 def _get_indexer() -> Indexer:
@@ -664,7 +672,9 @@ def _build_dashboard_data(all_items: list, page: int, page_size: int) -> Dashboa
             if last > source_map[src_name]["last"]:
                 source_map[src_name]["last"] = last
 
-    layer_counts: dict[IntelLayer, list[float]] = {l: [] for l in IntelLayer}
+    layer_counts: dict[IntelLayer, list[float]] = {
+        layer: [] for layer in IntelLayer if layer is not IntelLayer.UNCLASSIFIED
+    }
     for item in all_items:
         layer_counts[item.layer].append(item.confidence)
 
@@ -1214,13 +1224,17 @@ def _build_items(
         title = ext.get("summary", text[:80]).split("\n")[0] or f"Intel from {sources[0] if sources else doc.source_system}"
         summary = ext.get("summary") or text[:300]
 
-        country, loc_name, lat, lng = extract_location_with_fallback(text, _resolve_source_name(doc), doc)
-
+        admission = ext.get("intelligence_admission", {})
+        if isinstance(admission, dict) and admission.get("status") not in {None, "", "accepted"}:
+            return None
         layer = _get_layer(doc)
+        if layer is IntelLayer.UNCLASSIFIED:
+            return None
         src_name = sources[0] if sources else (doc.source_system or doc.collector_id)
 
         if layer_values and layer.value not in layer_values:
             return None
+        country, loc_name, lat, lng = extract_location_with_fallback(text, _resolve_source_name(doc), doc)
         if country_filter and country_filter.lower() not in (country or "").lower():
             return None
 
@@ -1420,6 +1434,14 @@ async def _load_realtime_verification_snapshot(
     )
 
 
+def _load_persisted_event_clusters(scope: dict, *, limit: int = 50) -> dict | None:
+    """读取情报产品层事件，并避免在只读请求期间创建数据库。"""
+    database = STORAGE / "_intelligence.db"
+    if not database.exists() or scope.get("country"):
+        return None
+    return build_event_cluster_result(IntelligenceStore(database), scope=scope, limit=limit)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 5 — Intelligence Analysis Endpoints
 # ═══════════════════════════════════════════════════════════════
@@ -1492,6 +1514,17 @@ async def analysis_events(
     layers: str = "",
     country: str = "",
 ):
+    requested_layers = [layer.strip() for layer in layers.split(",") if layer.strip()]
+    scope = {
+        "date": date,
+        "start_date": start_date,
+        "end_date": end_date,
+        "layers": requested_layers,
+        "country": country,
+    }
+    persisted = await asyncio.to_thread(_load_persisted_event_clusters, scope)
+    if persisted and persisted["total_clusters"]:
+        return EventClusterResult(**persisted)
     events, _warnings = await _load_realtime_verification_snapshot(
         date=date,
         start_date=start_date,
@@ -1502,6 +1535,71 @@ async def analysis_events(
     return events
 
 
+@app.get("/api/intelligence/events", response_model=EventClusterResult)
+async def intelligence_events(
+    date: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    layers: str = "",
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    scope = {
+        "date": date,
+        "start_date": start_date,
+        "end_date": end_date,
+        "layers": [layer.strip() for layer in layers.split(",") if layer.strip()],
+        "country": "",
+    }
+    payload = await asyncio.to_thread(_load_persisted_event_clusters, scope, limit=limit)
+    return EventClusterResult(**(payload or {"scope": scope}))
+
+
+@app.get("/api/intelligence/warnings", response_model=WarningIndicatorResult)
+async def intelligence_warnings(
+    date: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    layers: str = "",
+):
+    scope = {
+        "date": date,
+        "start_date": start_date,
+        "end_date": end_date,
+        "layers": [layer.strip() for layer in layers.split(",") if layer.strip()],
+        "country": "",
+    }
+    events = await asyncio.to_thread(_load_persisted_event_clusters, scope)
+    return WarningIndicatorResult(**build_warning_indicator_result(events or {"scope": scope}))
+
+
+@app.get("/api/intelligence/points")
+async def intelligence_points(limit: int = Query(default=100, ge=1, le=500)):
+    database = STORAGE / "_intelligence.db"
+    if not database.exists():
+        return {"total": 0, "points": []}
+    points = await asyncio.to_thread(IntelligenceStore(database).list_points, limit=limit)
+    return {"total": len(points), "points": points}
+
+
+@app.get("/api/intelligence/quality")
+async def intelligence_quality():
+    database = STORAGE / "_intelligence.db"
+    if not database.exists():
+        return {
+            "total_decisions": 0,
+            "accepted": 0,
+            "quarantined": 0,
+            "rejected": 0,
+            "acceptance_rate": 0.0,
+            "source_tiers": {},
+            "intelligence_points": 0,
+            "events": 0,
+            "claims": 0,
+            "events_by_confidence": {},
+        }
+    return await asyncio.to_thread(IntelligenceStore(database).quality_summary)
+
+
 @app.get("/api/analysis/warnings", response_model=WarningIndicatorResult)
 async def analysis_warnings(
     date: str = "",
@@ -1510,6 +1608,17 @@ async def analysis_warnings(
     layers: str = "",
     country: str = "",
 ):
+    requested_layers = [layer.strip() for layer in layers.split(",") if layer.strip()]
+    scope = {
+        "date": date,
+        "start_date": start_date,
+        "end_date": end_date,
+        "layers": requested_layers,
+        "country": country,
+    }
+    persisted = await asyncio.to_thread(_load_persisted_event_clusters, scope)
+    if persisted and persisted["total_clusters"]:
+        return WarningIndicatorResult(**build_warning_indicator_result(persisted))
     _events, warnings = await _load_realtime_verification_snapshot(
         date=date,
         start_date=start_date,
@@ -2046,7 +2155,11 @@ async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user
         record_activity(
             owner_id,
             "super_analysis",
-            {"question": req.question[:200]},
+            {
+                "question": req.question[:200],
+                "investigation_type": req.investigation_type,
+                "target_present": bool(req.target),
+            },
             ip_address=_ip,
         )
         init_progress(request_id, owner_id)
@@ -2056,6 +2169,11 @@ async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user
                 "question": req.question,
                 "start_date": req.start_date,
                 "end_date": req.end_date,
+                "investigation_type": req.investigation_type,
+                "target": req.target,
+                "purpose": req.purpose,
+                "authorized": req.authorized,
+                "verification_depth": req.verification_depth,
                 "request_id": request_id,
                 "owner_id": owner_id,
             }, skills=req.skills)
@@ -2075,6 +2193,7 @@ async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user
                     for web_result in data.get("web_results", [])
                 ],
                 hypothesis_assessment=data.get("hypothesis_assessment"),
+                investigation=data.get("investigation"),
                 collection_status=data.get("collection_status", "complete"),
                 provider_statuses=data.get("provider_statuses", {}),
                 degraded=data.get("degraded", False),
@@ -2083,6 +2202,12 @@ async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user
                 model=data.get("model") or getattr(agent, "model", "unknown"),
                 request_id=request_id,
             )
+            if response.investigation is not None:
+                response.investigation.analyst_review = _super_analysis_review_store.create_case(
+                    request_id,
+                    owner_id=owner_id,
+                    playbook=response.investigation.playbook,
+                )
         except asyncio.CancelledError:
             mark_error(request_id, "分析已取消", owner_id)
             raise
@@ -2103,6 +2228,48 @@ async def intel_super_analysis(req: SuperAnalysisRequest, request: Request, user
     finally:
         _super_analysis_semaphore.release()
         _super_analysis_inflight.discard(owner_id)
+
+
+@app.get(
+    "/api/intel/super-analysis/{request_id}/review",
+    response_model=InvestigationAnalystReview,
+)
+async def get_super_analysis_review(request_id: str, user: dict = Depends(get_current_user)):
+    review = _super_analysis_review_store.get_review(request_id, owner_id=user["id"])
+    if review is None:
+        raise HTTPException(status_code=404, detail="分析任务不存在或无权访问")
+    return review
+
+
+@app.post(
+    "/api/intel/super-analysis/{request_id}/review",
+    response_model=InvestigationAnalystReview,
+)
+async def submit_super_analysis_review(
+    request_id: str,
+    req: InvestigationReviewRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        review = _super_analysis_review_store.submit_review(
+            request_id,
+            owner_id=user["id"],
+            reviewer_id=user["id"],
+            status=req.status,
+            notes=req.notes,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="分析任务不存在")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="无权复核该分析任务")
+    record_activity(
+        user["id"],
+        "review_super_analysis",
+        {"request_id": request_id, "status": req.status},
+        ip_address=request.client.host if request.client else "",
+    )
+    return review
 
 
 @app.post("/api/intel/build-embedding-index")

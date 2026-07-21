@@ -1,5 +1,5 @@
 interface Props { size?: number; color?: string }
-export default function EconomyIcon({ size = 24, color = '#3498db' }: Props) {
+export default function EconomyIcon({ size = 24, color = '#7894a3' }: Props) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <rect x="4" y="10" width="16" height="12" rx="1" stroke={color} strokeWidth="1.5" fill={color} opacity="0.15"/>

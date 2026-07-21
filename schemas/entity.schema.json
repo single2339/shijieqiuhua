@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://osint-network.local/schemas/entity.schema.json",
-  "title": "Entity",
+  "title": "情报实体",
   "type": "object",
   "required": ["entity_id", "entity_type", "canonical_name"],
   "properties": {

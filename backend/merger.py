@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -118,6 +119,54 @@ _merge_index_cache_lock = threading.RLock()
 import time as _time
 
 _MERGE_LOCK_TTL = 300  # 5 minutes — if lock is older than this, assume stale
+_MERGE_LOCK_WAIT = 30
+
+
+def _acquire_merge_lock(lock_path: Path, token: str) -> bool:
+    """Acquire the lock or wait for its owner to publish an index."""
+    deadline = _time.monotonic() + _MERGE_LOCK_WAIT
+    waited_for_owner = False
+    while True:
+        if waited_for_owner and not lock_path.exists():
+            if load_merge_index(lock_path.parent) is not None:
+                return False
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(token)
+                handle.flush()
+                os.fsync(handle.fileno())
+            return True
+        except FileExistsError:
+            waited_for_owner = True
+            try:
+                lock_age = _time.time() - lock_path.stat().st_mtime
+            except OSError:
+                continue
+            if lock_age >= _MERGE_LOCK_TTL:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    pass
+                continue
+
+            existing = load_merge_index(lock_path.parent)
+            if existing is not None:
+                return False
+            if _time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting for merge lock: {lock_path}")
+            _time.sleep(0.05)
+
+
+def _release_merge_lock(lock_path: Path, token: str) -> None:
+    """Remove only the lock file owned by this build."""
+    try:
+        if lock_path.read_text(encoding="utf-8") == token:
+            lock_path.unlink()
+    except (FileNotFoundError, OSError):
+        pass
 
 
 def build_merge_index(
@@ -138,36 +187,20 @@ def build_merge_index(
     loading, e.g. via Indexer). Otherwise falls back to scan_bronze().
     """
     root = Path(storage_root)
+    root.mkdir(parents=True, exist_ok=True)
     lock_path = root / "_merge.lock"
-
-    # Check for recent lock file first
-    try:
-        lock_age = _time.time() - lock_path.stat().st_mtime
-        if lock_age < _MERGE_LOCK_TTL:
-            existing = load_merge_index(root)
-            if existing is not None:
-                return existing
-    except OSError:
-        pass
-
-    # Atomic lock acquisition via O_CREAT|O_EXCL
-    try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(_time.time()).encode())
-        os.close(fd)
-    except FileExistsError:
+    token = f"{os.getpid()}:{uuid.uuid4()}"
+    acquired = _acquire_merge_lock(lock_path, token)
+    if not acquired:
         existing = load_merge_index(root)
         if existing is not None:
             return existing
-        lock_path.write_text(str(_time.time()))
+        raise RuntimeError("merge lock released without publishing an index")
 
     try:
         return _build_merge_index(root, docs)
     finally:
-        try:
-            lock_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _release_merge_lock(lock_path, token)
 
 
 def _build_merge_index(
@@ -257,7 +290,7 @@ def _build_merge_index(
                 break
 
         groups.append(MergedGroup(
-            group_id=str(uuid.uuid4())[:12],
+            group_id=hashlib.sha256("|".join(sorted(component)).encode("utf-8")).hexdigest()[:12],
             primary_doc_id=primary.raw_document_id or component[0],
             title=_best_title(primary),
             summary=(
@@ -285,37 +318,43 @@ def _build_merge_index(
         orphaned_doc_ids=orphaned,
     )
 
-    # Atomic write: temp file → rename
+    # Atomic write: unique temp file → fsync → rename. A shared temp filename
+    # would allow a stale/recovered builder to replace another builder's data.
     index_path = root / "_merge_index.json"
-    tmp_path = root / "_merge_index.json.tmp"
-    tmp_path.write_text(
-        json.dumps(
+    payload = {
+        "generated_at": index.generated_at,
+        "generator_version": "1.0",
+        "total_docs": index.total_docs,
+        "total_groups": index.total_groups,
+        "orphaned_count": len(orphaned),
+        "groups": [
             {
-                "generated_at": index.generated_at,
-                "generator_version": "1.0",
-                "total_docs": index.total_docs,
-                "total_groups": index.total_groups,
-                "orphaned_count": len(orphaned),
-                "groups": [
-                    {
-                        "group_id": g.group_id,
-                        "primary_doc_id": g.primary_doc_id,
-                        "title": g.title,
-                        "summary": g.summary,
-                        "source_url": g.source_url,
-                        "sources": g.sources,
-                        "documents": g.documents,
-                    }
-                    for g in groups
-                ],
-                "orphaned_doc_ids": sorted(orphaned),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+                "group_id": g.group_id,
+                "primary_doc_id": g.primary_doc_id,
+                "title": g.title,
+                "summary": g.summary,
+                "source_url": g.source_url,
+                "sources": g.sources,
+                "documents": g.documents,
+            }
+            for g in groups
+        ],
+        "orphaned_doc_ids": sorted(orphaned),
+    }
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=".merge_index.", suffix=".tmp", dir=root
     )
-    os.replace(tmp_path, index_path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, index_path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
     return index
 

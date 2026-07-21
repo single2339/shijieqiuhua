@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://osint-network.local/schemas/event.schema.json",
-  "title": "Event",
+  "title": "情报事件",
   "type": "object",
   "required": ["event_id", "event_type", "event_time", "source_silver_document_ids"],
   "properties": {
@@ -17,7 +17,17 @@
       "type": "array",
       "items": { "type": "string", "format": "uuid" },
       "minItems": 1
-    }
+    },
+    "event_key": { "type": "string" },
+    "layer": { "type": "string" },
+    "title": { "type": "string" },
+    "first_seen": { "type": "string", "format": "date-time" },
+    "last_seen": { "type": "string", "format": "date-time" },
+    "confidence_level": { "type": "string", "enum": ["L1", "L2", "L3", "L4"] },
+    "independent_source_count": { "type": "integer", "minimum": 0 },
+    "evidence_count": { "type": "integer", "minimum": 0 },
+    "impact": { "type": "string", "enum": ["low", "medium", "high"] },
+    "urgency": { "type": "string", "enum": ["low", "medium", "high"] }
   },
   "additionalProperties": true
 }

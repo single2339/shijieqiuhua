@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://osint-network.local/schemas/silver-document.schema.json",
-  "title": "SilverDocument",
+  "title": "标准证据文档",
   "type": "object",
   "required": [
     "silver_document_id",

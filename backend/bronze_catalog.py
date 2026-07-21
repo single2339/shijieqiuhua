@@ -1,8 +1,7 @@
-"""Disk-backed retrieval catalogue for Bronze documents.
+"""原始证据文档的磁盘检索目录。
 
-The Bronze JSON files remain the source of truth.  This catalogue stores the
-small metadata/excerpt subset needed by super-analysis in SQLite so a large
-corpus is never materialised as a Python dictionary.
+原始证据层 JSON 文件仍是事实源。本目录仅在 SQLite 中存储“超级分析”需要的
+少量元数据和摘要，避免将大型语料库完整加载为 Python 字典。
 """
 
 from __future__ import annotations

@@ -38,6 +38,8 @@ class RawDocument:
     extensions: dict = field(default_factory=dict)
     ext_schema_version: Optional[str] = None
     tenant_id: str = "default"
+    # Transient source body used by BronzeWriter for body_ref-backed payloads.
+    body: Optional[str] = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_body(
@@ -76,4 +78,5 @@ class RawDocument:
             source_system=source_system,
             content_sha256=sha256,
             tenant_id=tenant_id,
+            body=body,
         )

@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import type { CorroborationResult, SourcePairOverlap } from '../../types'
+import type { CorroborationResult, IntelLayer, SourcePairOverlap } from '../../types'
 import { fetchCorroboration } from '../../api'
 import AIInterpretBadge from './AIInterpretBadge'
+import { isAbortError } from '../../utils/request'
+
+interface Props {
+  selectedDate: string
+  startDate?: string
+  endDate?: string
+  activeLayers: IntelLayer[]
+}
 
 function heatColor(score: number): string {
   if (score >= 0.8) return '#10b981'
@@ -12,18 +20,36 @@ function heatColor(score: number): string {
   return '#064e3b'
 }
 
-export default function CorroborationView() {
+export default function CorroborationView({ selectedDate, startDate = '', endDate = '', activeLayers }: Props) {
   const [data, setData] = useState<CorroborationResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedPair, setSelectedPair] = useState<SourcePairOverlap | null>(null)
   const [hoverCell, setHoverCell] = useState<{ i: number; j: number } | null>(null)
+  const requestGenerationRef = useRef(0)
+
+  const date = startDate || endDate ? '' : selectedDate
+  const layersKey = activeLayers.join(',')
 
   useEffect(() => {
-    fetchCorroboration()
-      .then(d => { setData(d); setLoading(false) })
-      .catch(e => { setError(e instanceof Error ? e.message : '加载失败'); setLoading(false) })
-  }, [])
+    const requestGeneration = ++requestGenerationRef.current
+    const controller = new AbortController()
+    setLoading(true)
+    setError(null)
+    fetchCorroboration({ date, startDate, endDate, layers: activeLayers }, controller.signal)
+      .then(d => {
+        if (controller.signal.aborted || requestGeneration !== requestGenerationRef.current) return
+        setData(d)
+        setSelectedPair(d.top_pairs[0] ?? null)
+        setLoading(false)
+      })
+      .catch(e => {
+        if (isAbortError(e) || requestGeneration !== requestGenerationRef.current) return
+        setError(e instanceof Error ? e.message : '加载失败')
+        setLoading(false)
+      })
+    return () => controller.abort()
+  }, [date, startDate, endDate, layersKey])
 
   if (loading) {
     return (
@@ -54,6 +80,19 @@ export default function CorroborationView() {
 
   return (
     <div>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+        gap: 8, marginBottom: 12,
+      }}>
+        <Metric label="事件簇" value={data.event_count ?? 0} />
+        <Metric label="可验证主张" value={data.claim_count ?? 0} />
+        <Metric label="信源" value={sources.length} />
+      </div>
+
+      <div style={{ fontSize: 10, lineHeight: 1.6, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+        {data.methodology}
+      </div>
+
       <div style={{ overflow: 'auto', borderRadius: 'var(--radius-md)', background: 'var(--bg-deep)', marginBottom: 12 }}>
         <svg width={n * cellSize + 100} height={n * cellSize + 100} style={{ display: 'block' }}>
           {/* Y-axis labels */}
@@ -138,17 +177,34 @@ export default function CorroborationView() {
           <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
             {selectedPair.source_a} ↔ {selectedPair.source_b}
           </div>
-          <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--font-mono)', fontSize: 10 }}>
-            <span>共享主题: <b style={{ color: 'var(--accent)' }}>{selectedPair.shared_topics}</b></span>
+          <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--font-mono)', fontSize: 10, flexWrap: 'wrap' }}>
+            <span>共享事件: <b style={{ color: 'var(--accent)' }}>{selectedPair.shared_events ?? selectedPair.shared_topics}</b></span>
+            <span>高可信: <b style={{ color: 'var(--success)' }}>{selectedPair.high_confidence_events ?? 0}</b></span>
             <span>一致度: <b style={{ color: heatColor(selectedPair.agreement_score) }}>{(selectedPair.agreement_score * 100).toFixed(0)}%</b></span>
           </div>
+          <div style={{ fontSize: 10, lineHeight: 1.6, color: 'var(--text-tertiary)', marginTop: 6 }}>
+            {selectedPair.verification_summary}
+          </div>
+          {selectedPair.shared_event_titles.length > 0 && (
+            <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+              {selectedPair.shared_event_titles.map((title, i) => (
+                <div key={`${title}-${i}`} style={{
+                  padding: '5px 7px', background: 'var(--bg-deep)',
+                  border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-sm)',
+                  fontSize: 9, color: 'var(--text-secondary)', lineHeight: 1.45,
+                }}>
+                  {selectedPair.shared_event_ids[i] ? `${selectedPair.shared_event_ids[i]} · ` : ''}{title}
+                </div>
+              ))}
+            </div>
+          )}
         </motion.div>
       )}
 
       {/* Top pairs list */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
-          TOP 10 信源对一致度
+          TOP 10 事件级交叉验证
         </div>
         {data.top_pairs.slice(0, 10).map((p, i) => (
           <motion.div
@@ -161,13 +217,16 @@ export default function CorroborationView() {
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '3px 8px', cursor: 'pointer',
               borderRadius: 'var(--radius-sm)',
-              background: selectedPair === p ? 'rgba(16,185,129,0.08)' : 'transparent',
+              background: selectedPair === p ? 'var(--accent-dim)' : 'transparent',
               fontSize: 10,
             }}
           >
             <span style={{ color: 'var(--text-secondary)', flex: 1 }}>{p.source_a} ↔ {p.source_b}</span>
             <span style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>
-              共享 {p.shared_topics}
+              共享 {p.shared_events ?? p.shared_topics}
+            </span>
+            <span style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>
+              L1/L2 {p.high_confidence_events ?? 0}
             </span>
             <span style={{
               color: heatColor(p.agreement_score),
@@ -181,8 +240,24 @@ export default function CorroborationView() {
 
       <AIInterpretBadge
         analysisType="corroboration"
-        context={{ source_count: sources.length, top_pair_score: data.top_pairs[0]?.agreement_score ?? 0 }}
+        context={{
+          source_count: sources.length,
+          event_count: data.event_count,
+          top_pair_score: data.top_pairs[0]?.agreement_score ?? 0,
+        }}
       />
+    </div>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={{
+      padding: '9px 11px', background: 'var(--bg-deep)',
+      border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)',
+    }}>
+      <div style={{ fontSize: 8, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 16, color: 'var(--text-primary)', fontFamily: 'var(--font-display)', fontWeight: 700 }}>{value}</div>
     </div>
   )
 }

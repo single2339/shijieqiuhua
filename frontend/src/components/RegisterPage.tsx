@@ -51,11 +51,8 @@ export default function RegisterPage() {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       minHeight: '100dvh', background: 'var(--bg-deep)', padding: '24px',
     }}>
-      <div style={{
+      <div className="command-panel" style={{
         width: '100%', maxWidth: 400, padding: '40px 32px',
-        background: 'var(--glass-bg)', backdropFilter: 'blur(20px)',
-        borderRadius: 'var(--radius-lg)', border: '1px solid var(--glass-border)',
-        boxShadow: 'var(--shadow-diffuse)',
       }}>
         <h1 style={{
           fontSize: 24, fontWeight: 700, color: 'var(--accent)',
@@ -104,7 +101,7 @@ export default function RegisterPage() {
               width: '100%', padding: '12px', fontSize: 14, fontWeight: 600,
               borderRadius: 'var(--radius-md)', border: 'none',
               background: loading ? 'var(--accent-dim)' : 'var(--accent)',
-              color: '#fff', cursor: loading ? 'not-allowed' : 'pointer',
+              color: 'var(--bg-deep)', cursor: loading ? 'not-allowed' : 'pointer',
               transition: 'background 0.2s',
             }}
           >

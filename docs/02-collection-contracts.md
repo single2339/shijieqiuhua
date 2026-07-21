@@ -1,19 +1,19 @@
-# 采集平面统一契约：RawDocument、CollectionJob 与队列背压
+# 采集平面统一契约：原始证据文档、采集任务与队列背压
 
 ## 1. 设计目标
 
-- 渠道差异**完全封装**在适配器内；接入层只认 **`RawChunk` 流**与统一的 **`RawDocument`** 组装结果。
+- 渠道差异**完全封装**在适配器内；接入层只认**原始数据分片（`RawChunk`）流**与统一的**原始证据文档（`RawDocument`）**组装结果。
 - 与 [01-compliance-and-data-classification.md](./01-compliance-and-data-classification.md) 中的审计字段一致。
 
 ## 2. 类型关系
 
 ```
-CollectionJob (调度单元)
-    → Collector.collect(job) → stream<RawChunk>
-    → Assembler → RawDocument (入库单元，一条或按大小分片)
+采集任务（CollectionJob）
+    → 采集器.collect(job) → 原始数据分片流（stream<RawChunk>）
+    → 组装器 → 原始证据文档（RawDocument，一条或按大小分片）
 ```
 
-## 3. CollectionJob
+## 3. 采集任务（`CollectionJob`）
 
 表示一次可重试、可幂等的采集任务。
 
@@ -32,7 +32,7 @@ CollectionJob (调度单元)
 
 机器可读定义见 [`../schemas/collection-job.schema.json`](../schemas/collection-job.schema.json)。
 
-## 4. RawChunk
+## 4. 原始数据分片（`RawChunk`）
 
 流式片段，用于大响应或分块下载。
 
@@ -42,9 +42,9 @@ CollectionJob (调度单元)
 | `bytes` | string (base64) | 或二进制管道中的 buffer |
 | `last` | boolean | 是否为最后一块 |
 
-## 5. RawDocument
+## 5. 原始证据文档（`RawDocument`）
 
-写入 Bronze 的**最小入库单元**。
+写入原始证据层的**最小入库单元**。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -54,7 +54,7 @@ CollectionJob (调度单元)
 | `mime_type` | string | 是 | 如 `text/html`, `application/json` |
 | `encoding` | string | 否 | 默认 `utf-8` |
 | `body_ref` | string | 是 | 对象存储 URI 或内联小文本的占位 |
-| `body_inline` | string | 否 | 小于阈值时可直接存（仍算 Bronze） |
+| `body_inline` | string | 否 | 小于阈值时可直接存（仍属于原始证据层） |
 | `headers_summary` | object | 否 | HTTP 头摘要或 API 响应元数据 |
 | `captured_at` | string | 是 | UTC |
 | `collector_id` | string | 是 | 与审计规范一致 |
@@ -90,7 +90,7 @@ interface RawDocumentAssembler {
 |------|------|------|
 | `jobs.pending` | 待调度任务 | 分区键 `tenant_id` |
 | `jobs.running` | 执行中（可选，用于可观测性） | 短 TTL |
-| `raw.ingest` | 已组装的 RawDocument 元数据 | 消费者写 Bronze |
+| `raw.ingest` | 已组装的原始文档元数据 | 消费者写入原始证据层 |
 | `jobs.dlq` | 失败耗尽重试 | 人工与自动重放 |
 
 ### 7.2 背压策略
@@ -100,12 +100,12 @@ interface RawDocumentAssembler {
 | **生产者限流** | 每 `collector_key` + `tenant` 配置 QPS、并发数 |
 | **队列深度告警** | `raw.ingest` 深度 > 阈值触发扩容或降采样 |
 | **拒绝策略** | `jobs.pending` 满时：丢弃低优先级 / 延迟入队 / 返回 429（同步 API 场景） |
-| **批量提交** | RawDocument 按 `batch_size` 或 `linger_ms` 批量写湖仓以降低小文件 |
+| **批量提交** | 原始证据文档按 `batch_size` 或 `linger_ms` 批量写湖仓以降低小文件 |
 
 ### 7.3 幂等与去重
 
 - `dedupe_key` 存在时，调度器在入队前查缓存（Redis）：命中则跳过或更新调度时间。
-- Bronze 层按 `content_sha256` + `source_system` 可选唯一约束，避免重复存储（策略可配置为「允许重复但标记」）。
+- 原始证据层按 `content_sha256` + `source_system` 可选唯一约束，避免重复存储（策略可配置为“允许重复但标记”）。
 
 ## 8. 版本化
 

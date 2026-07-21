@@ -170,6 +170,44 @@ export function generateMarkdown(result: SuperAnalysisResponse): string {
     }
   }
 
+  if (result.investigation) {
+    const investigation = result.investigation
+    lines.push('## 证据账本')
+    lines.push('')
+    lines.push(`- 调查剧本: ${investigation.plan.playbook}`)
+    lines.push(`- 调查目标: ${investigation.plan.target}`)
+    lines.push(`- 分析师复核: ${investigation.analyst_review.status}`)
+    lines.push('')
+    lines.push('| ID | 类型 | 标题 | 验证状态 | 溯源 |')
+    lines.push('|---|---|---|---|---|')
+    investigation.evidence.forEach(item => {
+      lines.push(`| ${item.id} | ${item.kind} | ${item.title} | ${item.verification_status} | ${item.provenance} |`)
+    })
+    lines.push('')
+    lines.push('## 关系网络')
+    lines.push('')
+    investigation.relationship_graph.edges.forEach(edge => {
+      lines.push(`- ${edge.source} — ${edge.relation} → ${edge.target}（${edge.evidence_ids.join(', ')}）`)
+    })
+    lines.push('')
+    lines.push('## 时间线')
+    lines.push('')
+    investigation.timeline.forEach(item => lines.push(`- ${item.date}: ${item.summary}`))
+    lines.push('')
+    lines.push('## 替代解释')
+    lines.push('')
+    investigation.alternative_explanations.forEach(item => lines.push(`- ${item.explanation}`))
+    lines.push('')
+    lines.push('## 待核验项')
+    lines.push('')
+    investigation.pending_verification.forEach(item => lines.push(`- [${item.priority}] ${item.question}`))
+    lines.push('')
+    lines.push('## 下一步核验任务')
+    lines.push('')
+    investigation.recommended_next_steps.forEach(item => lines.push(`- [${item.priority}] ${item.task}: ${item.rationale}`))
+    lines.push('')
+  }
+
   lines.push(result.analysis)
   lines.push('')
 
@@ -250,6 +288,43 @@ export function generateHTML(result: SuperAnalysisResponse): string {
     `
   })() : ''
 
+  const investigationHTML = result.investigation ? (() => {
+    const investigation = result.investigation
+    const evidenceRows = investigation.evidence.map(item => `
+      <tr><td>${esc(item.id)}</td><td>${esc(item.kind)}</td><td>${esc(item.title)}</td><td>${esc(item.verification_status)}</td><td>${esc(item.provenance)}</td></tr>
+    `).join('')
+    const relationshipRows = investigation.relationship_graph.edges.map(edge => (
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">${esc(edge.source)} — ${esc(edge.relation)} → ${esc(edge.target)}</div>`
+    )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无可复核关系</div>'
+    const timelineRows = investigation.timeline.map(item => (
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">${esc(item.date)} · ${esc(item.summary)}</div>`
+    )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无时间线记录</div>'
+    const alternativeRows = investigation.alternative_explanations.map(item => (
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">• ${esc(item.explanation)}</div>`
+    )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无替代解释</div>'
+    const pendingRows = investigation.pending_verification.map(item => (
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">• [${esc(item.priority)}] ${esc(item.question)}</div>`
+    )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无待核验项</div>'
+    const nextStepRows = investigation.recommended_next_steps.map(item => (
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">• [${esc(item.priority)}] ${esc(item.task)}：${esc(item.rationale)}</div>`
+    )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无下一步任务</div>'
+    return `
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">证据账本</h2>
+      <div style="font-size:12px;color:#4b5563;line-height:1.7;">调查剧本: ${esc(investigation.plan.playbook)}<br>调查目标: ${esc(investigation.plan.target)}<br>分析师复核: ${esc(investigation.analyst_review.status)}${investigation.analyst_review.notes ? `<br>复核备注: ${esc(investigation.analyst_review.notes)}` : ''}</div>
+      <table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:11px;"><thead><tr><th>ID</th><th>类型</th><th>标题</th><th>验证状态</th><th>溯源</th></tr></thead><tbody>${evidenceRows}</tbody></table>
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">关系网络</h2>
+      ${relationshipRows}
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">时间线</h2>
+      ${timelineRows}
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">替代解释</h2>
+      ${alternativeRows}
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">待核验项</h2>
+      ${pendingRows}
+      <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">下一步核验任务</h2>
+      ${nextStepRows}
+    `
+  })() : ''
+
   const webResultsHTML = result.web_results.length > 0 ? `
     <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">网络搜索摘要（未验证）</h2>
     ${result.web_results.map(wr => `
@@ -303,6 +378,7 @@ export function generateHTML(result: SuperAnalysisResponse): string {
 <hr style="border:none;border-top:1px solid #e5e7eb;margin-bottom:24px;">
 ${statusHTML}
 ${hypothesisHTML}
+${investigationHTML}
 ${bodyBlocks}
 <hr style="border:none;border-top:1px solid #e5e7eb;margin-top:28px;">
 ${webResultsHTML}

@@ -2,9 +2,9 @@
 
 ## 职责边界
 
-- **输入**：`CollectionJob`，`channel=web`，`target` 含 URL 列表或站点爬取配置（深度、路径前缀、仅允许域名）。
-- **输出**：`RawChunk` 流 → `RawDocument`（`mime_type` 多为 `text/html`）。
-- **不负责**：跨文档实体合并、正文摘要（属 Silver）；**必须**遵守 robots.txt 与速率限制。
+- **输入**：采集任务（`CollectionJob`），`channel=web`，`target` 含 URL 列表或站点爬取配置（深度、路径前缀、仅允许域名）。
+- **输出**：原始数据分片（`RawChunk`）流 → 原始证据文档（`RawDocument`，`mime_type` 多为 `text/html`）。
+- **不负责**：跨文档实体合并、正文摘要（属于标准证据层）；**必须**遵守 robots.txt 与速率限制。
 
 ## 组件
 
@@ -13,7 +13,7 @@
 | **Scheduler** | 从种子 URL 生成任务、去重、优先级 |
 | **Fetcher** | HTTP(S)；可选 ETag/Last-Modified；重试与退避 |
 | **Renderer** | 静态 HTML 直取；复杂 SPA 时**按需**无头浏览器（独立资源池） |
-| **Parser（轻量）** | 仅提取原始 HTML；可选附带 `extracted_links[]` 供调度扩展，**不**写 Silver |
+| **轻量解析器** | 仅提取原始 HTML；可选附带 `extracted_links[]` 供调度扩展，**不**写标准证据层 |
 
 ## 合规与隔离
 

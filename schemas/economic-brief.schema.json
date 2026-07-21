@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://osint-network.local/schemas/economic-brief.schema.json",
-  "title": "EconomicBrief",
+  "title": "经济情报简报",
   "type": "object",
   "required": ["brief_id", "tenant_id", "focus", "scenarios", "limitations"],
   "properties": {

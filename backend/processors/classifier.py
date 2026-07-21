@@ -229,4 +229,4 @@ def classify(text: str) -> IntelLayer:
             if kw.lower() in lower:
                 scores[layer] += 1
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else IntelLayer.POLITICS
+    return best if scores[best] > 0 else IntelLayer.UNCLASSIFIED

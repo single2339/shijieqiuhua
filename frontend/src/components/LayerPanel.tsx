@@ -29,15 +29,10 @@ const iconMap: Record<IntelLayer, typeof NatureIcon> = {
 export default function LayerPanel({ layers, activeLayers, onToggle }: Props) {
   return (
     <motion.div
+      className="command-panel"
       style={{
-        display: 'flex', flexDirection: 'column', gap: 2,
-        background: 'var(--glass-bg)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--glass-border)',
-        boxShadow: 'var(--shadow-diffuse), var(--glass-inner-shadow)',
-        padding: '6px 4px',
+        display: 'flex', flexDirection: 'column', gap: 3,
+        padding: '7px 5px',
       }}
     >
       {layers.map((l, i) => {
@@ -57,7 +52,7 @@ export default function LayerPanel({ layers, activeLayers, onToggle }: Props) {
               position: 'relative',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               width: 36, height: 36,
-              border: 'none',
+              border: isActive ? `1px solid ${meta.color}38` : '1px solid transparent',
               borderRadius: 'var(--radius-md)',
               background: isActive
                 ? `${meta.color}18`
@@ -72,7 +67,7 @@ export default function LayerPanel({ layers, activeLayers, onToggle }: Props) {
                 layoutId="layer-indicator"
                 style={{
                   position: 'absolute', left: 0, top: '50%',
-                  width: 3, height: 16, borderRadius: 2,
+                  width: 3, height: 18, borderRadius: 2,
                   background: meta.color,
                   transform: 'translateY(-50%)',
                 }}
@@ -84,7 +79,7 @@ export default function LayerPanel({ layers, activeLayers, onToggle }: Props) {
               <span style={{
                 position: 'absolute', top: 2, right: 2,
                 background: isActive ? meta.color : 'var(--border-active)',
-                color: isActive ? '#fff' : 'var(--text-tertiary)',
+                color: isActive ? 'var(--bg-deep)' : 'var(--text-tertiary)',
                 fontSize: 7, fontWeight: 700, lineHeight: '12px',
                 minWidth: 12, height: 12,
                 textAlign: 'center', borderRadius: 'var(--radius-full)',

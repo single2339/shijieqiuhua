@@ -18,7 +18,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import sys as _sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
@@ -51,19 +53,72 @@ from backend.collectors.horizon.models import (
 from backend.llm_config import PROXY_URL
 from src.bronze.writer import BronzeWriter  # noqa: E402 (sys.path setup above)
 from src.models.document import RawDocument
-from src.processor.cleaner import clean_text
 from src.processor.summarizer import _summarize_with_llm
 from src.processor.translation import translate_text
 from backend.processors.llm_classifier import classify_with_llm
+from backend.processors.classifier import classify as keyword_classify
+from backend.processors.location import extract_location_with_fallback
+from backend.processors.processing_cache import ProcessingCache
+from backend.processors.processing_policy import deterministic_summary, get_processing_policy
 from backend.bronze_reader import QUEUE_DB_FILENAME
+from backend.intelligence.admission import AdmissionDecision, AdmissionEngine
+from backend.intelligence.source_policy import SourceProfile, SourceRegistry
+from backend.intelligence.store import IntelligenceStore
 
 log = logging.getLogger(__name__)
+
+_BESTBLOGS_OPML_PATH = Path(__file__).resolve().parent.parent / "config" / "BestBlogs_RSS_ALL.opml"
+
+
+def _load_rss_feeds_from_opml(path: Path, category: str) -> list[RSSSourceConfig]:
+    """Load RSSSourceConfig entries from a local OPML subscription file."""
+    if not path.exists():
+        return []
+
+    feeds: list[RSSSourceConfig] = []
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        log.warning("Unable to parse RSS OPML file %s: %s", path, exc)
+        return feeds
+
+    name_counts: dict[str, int] = {}
+    for outline in root.findall(".//outline"):
+        url = outline.attrib.get("xmlUrl") or outline.attrib.get("xmlurl")
+        if not url:
+            continue
+        name = outline.attrib.get("title") or outline.attrib.get("text") or url
+        name = name.strip().replace("/", "_")
+        url = url.strip()
+        if not name or not url:
+            continue
+        name_counts[name] = name_counts.get(name, 0) + 1
+        if name_counts[name] > 1:
+            name = f"{name} ({name_counts[name]})"
+        try:
+            feeds.append(RSSSourceConfig(name=name, url=url, category=category))
+        except Exception as exc:
+            log.warning("Skipping invalid RSS feed from %s: %s (%s)", path.name, name, exc)
+    return feeds
+
+
+def _dedupe_rss_feeds(feeds: list[RSSSourceConfig]) -> list[RSSSourceConfig]:
+    """Keep feed order stable while removing duplicate URLs."""
+    seen: set[str] = set()
+    deduped: list[RSSSourceConfig] = []
+    for feed in feeds:
+        url = str(feed.url).rstrip("/")
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(feed)
+    return deduped
 
 # ---------------------------------------------------------------------------
 # Default scraper configurations
 # ---------------------------------------------------------------------------
 
-_DEFAULT_RSS_FEEDS = [
+_CORE_RSS_FEEDS = [
     # ── Domestic / fast sources (prioritized) ──
     RSSSourceConfig(name="aihot-daily",     url="https://aihot.virxact.com/rss",                  category="ai_hot", enabled=False),
     RSSSourceConfig(name="google-news-ai4s",url="https://news.google.com/rss/search?q=ai%20for%20science&hl=en-US&gl=US&ceid=US:en", category="ai4s"),
@@ -105,8 +160,29 @@ _DEFAULT_RSS_FEEDS = [
     RSSSourceConfig(name="zaobao-china",    url="http://127.0.0.1:1200/zaobao/realtime/china",   category="regional_china"),
 ]
 
+_BESTBLOGS_RSS_FEEDS = _load_rss_feeds_from_opml(_BESTBLOGS_OPML_PATH, category="bestblogs")
+_KNOWLEDGE_CATEGORIES = {"ai4s", "ai_hot", "technology", "crypto", "bestblogs"}
+
+
+def build_default_rss_feeds(include_knowledge: bool | None = None) -> list[RSSSourceConfig]:
+    """Build the operational feed set; general knowledge feeds are opt-in."""
+    if include_knowledge is None:
+        include_knowledge = os.getenv("OSINT_INCLUDE_KNOWLEDGE_FEEDS", "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    feeds = [
+        feed for feed in _CORE_RSS_FEEDS
+        if include_knowledge or feed.category not in _KNOWLEDGE_CATEGORIES
+    ]
+    if include_knowledge:
+        feeds.extend(_BESTBLOGS_RSS_FEEDS)
+    return _dedupe_rss_feeds(feeds)
+
+
+_DEFAULT_RSS_FEEDS = build_default_rss_feeds()
+
 _DEFAULT_HN_CONFIG = HackerNewsConfig(
-    enabled=True,
+    enabled=False,
     fetch_top_stories=30,
     min_score=50,
 )
@@ -134,7 +210,7 @@ _DEFAULT_TELEGRAM_CONFIG = TelegramConfig(
 )
 
 _DEFAULT_GITHUB_SOURCES = [
-    GitHubSourceConfig(type="repo_releases", owner="Thysrael", repo="Horizon", enabled=True),
+    GitHubSourceConfig(type="repo_releases", owner="Thysrael", repo="Horizon", enabled=False),
 ]
 
 async def _translate_item(item: ContentItem) -> None:
@@ -170,6 +246,143 @@ async def _classify_item(item: ContentItem) -> None:
         item.metadata["location_country"] = country
     if city:
         item.metadata["location_city"] = city
+
+
+def _classify_item_deterministic(item: ContentItem) -> None:
+    """Classify and locate without calling an LLM."""
+    title = item.title or ""
+    content = item.content or ""
+    combined = f"{title}\n{content}"
+    layer = keyword_classify(combined)
+    country, city, _lat, _lng = extract_location_with_fallback(combined, item.author or item.source_type.value)
+    item.metadata["layer"] = layer.value
+    if country:
+        item.metadata["location_country"] = country
+    if city:
+        item.metadata["location_city"] = city
+
+
+def _content_hash_for_processing(item: ContentItem) -> str:
+    return hashlib.sha256((item.content or "").encode()).hexdigest()
+
+
+def _apply_cached_processing(item: ContentItem, cached: dict) -> None:
+    translated_title = cached.get("translated_title", "")
+    translated_content = cached.get("translated_content", "")
+    if translated_title:
+        item.title = translated_title
+    if translated_content:
+        item.content = translated_content
+    item.ai_summary = cached.get("summary", "") or item.ai_summary
+    layer = cached.get("layer", "")
+    country = cached.get("country", "")
+    city = cached.get("city", "")
+    if layer:
+        item.metadata["layer"] = layer
+    if country:
+        item.metadata["location_country"] = country
+    if city:
+        item.metadata["location_city"] = city
+
+
+def _cache_mode_is_compatible(cached: dict, requested_mode: str) -> bool:
+    """Only reuse cache entries produced by the same processing policy."""
+    cached_mode = str(cached.get("mode") or "").strip().lower()
+    return cached_mode == requested_mode or (not cached_mode and requested_mode == "fast")
+
+
+async def _process_item_for_storage(item: ContentItem, cache: ProcessingCache | None = None) -> ContentItem:
+    """Apply the configured processing policy before bronze storage."""
+    policy = get_processing_policy()
+    content_hash = _content_hash_for_processing(item)
+    if cache is not None:
+        cached = cache.get(content_hash)
+        if cached is not None and _cache_mode_is_compatible(cached, policy.mode.value):
+            _apply_cached_processing(item, cached)
+            return item
+
+    if policy.use_llm_translation:
+        await _translate_item(item)
+    if policy.use_llm_summary:
+        await _summarize_item(item)
+    else:
+        item.ai_summary = deterministic_summary(item.content or "", item.title)
+    if policy.use_llm_classification:
+        await _classify_item(item)
+    else:
+        _classify_item_deterministic(item)
+    if cache is not None:
+        cache.put(
+            content_hash,
+            translated_title=item.title or "",
+            translated_content=item.content or "",
+            summary=item.ai_summary or "",
+            layer=str(item.metadata.get("layer", "")),
+            country=str(item.metadata.get("location_country", "")),
+            city=str(item.metadata.get("location_city", "")),
+            mode=policy.mode.value,
+            llm_used=policy.use_llm_translation or policy.use_llm_summary or policy.use_llm_classification,
+        )
+    return item
+
+
+async def _prepare_item_for_storage(
+    item: ContentItem,
+    cache: ProcessingCache | None = None,
+) -> tuple[SourceProfile, AdmissionDecision]:
+    """Apply source policy and admission before optional expensive enrichment."""
+    item.metadata.setdefault("_original_title", item.title or "")
+    item.metadata.setdefault("_original_content", item.content or "")
+    profile = SourceRegistry.default().resolve(item)
+    decision = AdmissionEngine().evaluate(item, profile)
+    item.metadata["source_profile"] = {
+        "source_key": profile.source_key,
+        "display_name": profile.display_name,
+        "tier": profile.tier.value,
+        "reliability": profile.reliability,
+        "independence_group": profile.independence_group,
+        "domain": profile.domain,
+        "author": profile.author,
+    }
+    item.metadata["intelligence_admission"] = {
+        "status": decision.status.value,
+        "score": decision.score,
+        "reasons": list(decision.reasons),
+        "pir_ids": list(decision.pir_ids),
+        "indicator_ids": list(decision.indicator_ids),
+        "event_type": decision.event_type,
+        "layer": decision.layer.value,
+        "impact": decision.impact,
+        "urgency": decision.urgency,
+    }
+    item.metadata["layer"] = decision.layer.value
+    if decision.accepted:
+        await _process_item_for_storage(item, cache=cache)
+        # The controlled indicator taxonomy is authoritative for admitted items.
+        item.metadata["layer"] = decision.layer.value
+    return profile, decision
+
+
+def _persist_intelligence_item(
+    item: ContentItem,
+    profile: SourceProfile,
+    decision: AdmissionDecision,
+    *,
+    bronze: BronzeWriter,
+    intelligence_store: IntelligenceStore,
+    existing_hashes: set[str],
+) -> bool:
+    """Write a unique raw document and its auditable intelligence products."""
+    from backend.agents.collectors._utils import content_item_to_document
+
+    document = content_item_to_document(item)
+    dedupe_key = f"{profile.source_key}\0{document.content_sha256}"
+    if dedupe_key in existing_hashes:
+        return False
+    bronze.write(document)
+    intelligence_store.record_document(document.raw_document_id, item, profile, decision)
+    existing_hashes.add(dedupe_key)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +447,12 @@ class HorizonBridge:
     # ------------------------------------------------------------------
 
     async def collect_and_store(self, hours: int = 48) -> dict[str, dict]:
+        from backend.agents.collectors._utils import collection_lock
+
+        with collection_lock(self.storage_root):
+            return await self._collect_and_store_unlocked(hours)
+
+    async def _collect_and_store_unlocked(self, hours: int = 48) -> dict[str, dict]:
         """Run all enabled scrapers and persist new content.
 
         Returns a dict mapping source name to stats::
@@ -246,6 +465,8 @@ class HorizonBridge:
 
         existing_hashes = self._load_existing_hashes()
         bronze = BronzeWriter(self.storage_root)
+        intelligence_store = IntelligenceStore(self.storage_root)
+        processing_cache = ProcessingCache(self.storage_root / "_processing_cache.db")
 
         scrapers: list[tuple[str, object]] = []
 
@@ -263,27 +484,31 @@ class HorizonBridge:
 
         sem = asyncio.Semaphore(3)
 
-        async def _process_one(item: ContentItem) -> bool:
-            """Process a single item through the LLM pipeline. Returns True if stored."""
+        async def _process_one(item: ContentItem) -> tuple[bool, str]:
+            """Admit, optionally enrich, and persist one collected item."""
             async with sem:
-                await _translate_item(item)
-                await _summarize_item(item)
-                await _classify_item(item)
-            doc = self._to_raw_document(item)
-            if doc.content_sha256 in existing_hashes:
-                return False
-            bronze.write(doc)
-            existing_hashes.add(doc.content_sha256)
-            return True
+                profile, decision = await _prepare_item_for_storage(item, cache=processing_cache)
+            stored = _persist_intelligence_item(
+                item,
+                profile,
+                decision,
+                bronze=bronze,
+                intelligence_store=intelligence_store,
+                existing_hashes=existing_hashes,
+            )
+            return stored, decision.status.value
 
         async def _run_scraper(name: str, scraper: object) -> tuple[str, dict]:
             try:
                 items = await scraper.fetch(since)  # type: ignore[union-attr]
                 results = await asyncio.gather(*[_process_one(item) for item in items])
-                stored = sum(1 for r in results if r)
+                stored = sum(1 for was_stored, _status in results if was_stored)
                 skipped = len(results) - stored
                 log.info("Horizon %s: %d fetched, %d new, %d duplicate", name, len(items), stored, skipped)
-                return (name, {"fetched": len(items), "stored": stored, "skipped": skipped})
+                stats = {"fetched": len(items), "stored": stored, "skipped": skipped}
+                for status in ("accepted", "quarantined", "rejected"):
+                    stats[status] = sum(1 for _was_stored, value in results if value == status)
+                return (name, stats)
             except Exception as exc:
                 log.warning("Horizon scraper %r failed: %s", name, exc)
                 return (name, {"error": str(exc)})
@@ -304,10 +529,13 @@ class HorizonBridge:
                 import sqlite3
                 conn = sqlite3.connect(str(index_db))
                 rows = conn.execute(
-                    "SELECT content_sha256 FROM bronze_index WHERE content_sha256 != ''"
+                    """
+                    SELECT source_system, content_sha256 FROM bronze_index
+                    WHERE content_sha256 != ''
+                    """
                 ).fetchall()
                 conn.close()
-                return {r[0] for r in rows}
+                return {f"{source}\0{content_hash}" for source, content_hash in rows}
             except Exception:
                 pass
 
@@ -321,7 +549,7 @@ class HorizonBridge:
                 data = json.loads(p.read_text(encoding="utf-8"))
                 ch = data.get("content_sha256", "")
                 if ch:
-                    hashes.add(ch)
+                    hashes.add(f"{data.get('source_system', 'unknown')}\0{ch}")
             except (json.JSONDecodeError, OSError):
                 continue
         return hashes
@@ -331,36 +559,16 @@ class HorizonBridge:
     # ------------------------------------------------------------------
 
     def _to_raw_document(self, item: ContentItem) -> RawDocument:
-        content = clean_text(item.content or "")
-        captured_at = (
-            item.published_at.isoformat()
-            if item.published_at
-            else datetime.now(timezone.utc).isoformat()
-        )
-        source_system = item.author or item.source_type.value
+        from backend.agents.collectors._utils import content_item_to_document
 
-        return RawDocument(
-            raw_document_id=hashlib.md5(content.encode()).hexdigest(),
-            job_id=f"horizon-{item.source_type.value}-{item.id}",
-            channel=item.source_type.value,
-            mime_type="text/plain",
-            encoding="utf-8",
-            body_inline=content if len(content.encode("utf-8")) < 65536 else None,
-            body_ref=None if len(content.encode("utf-8")) < 65536 else f"bronze://{hashlib.sha256(content.encode()).hexdigest()}",
-            headers_summary={"collector": "horizon-bridge"},
-            captured_at=captured_at,
-            collector_id=f"horizon-{item.source_type.value}",
-            collector_version="1.0",
-            source_url=str(item.url) if item.url else "",
-            source_system=source_system,
-            content_sha256=hashlib.sha256(content.encode()).hexdigest(),
-            tenant_id="",
-            extensions={
-                "horizon_item_id": item.id,
-                "horizon_title": item.title,
-                "horizon_source_type": item.source_type.value,
-                "horizon_metadata": item.metadata,
-                "summary": item.ai_summary or "",
-                "summarized": bool(item.ai_summary),
-            },
-        )
+        return content_item_to_document(item)
+
+
+async def run_horizon_collection(hours: int = 48) -> dict[str, dict]:
+    """Compatibility entry point for MCP and external schedulers."""
+    storage_root = Path(os.getenv("BRONZE_STORAGE", str(_project_root / "bronze_storage")))
+    bridge = HorizonBridge(storage_root)
+    try:
+        return await bridge.collect_and_store(hours=hours)
+    finally:
+        await bridge.close()

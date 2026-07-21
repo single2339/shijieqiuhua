@@ -11,6 +11,7 @@ from backend.agents.intelligence._bayesian import (
     update_hypothesis,
 )
 from backend.agents.models import AgentTask
+from backend.models import InvestigationEvidence, InvestigationPlan, InvestigationResult
 
 
 def test_single_well_formatted_article_is_quality_not_verified_truth():
@@ -277,7 +278,6 @@ async def test_provider_failure_marks_partial_collection_degraded(monkeypatch, t
             "errors": ["bing_cn_unavailable"],
         }
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", lambda _storage: [])
     monkeypatch.setattr(super_analyst, "EmbeddingIndex", _EmptyIndex)
     monkeypatch.setattr(super_analyst, "_web_search", partially_failed_web_search)
 
@@ -314,7 +314,6 @@ async def test_llm_failure_is_unavailable_and_degraded(monkeypatch, tmp_path):
             "errors": [],
         }
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", lambda _storage: [])
     monkeypatch.setattr(super_analyst, "EmbeddingIndex", _EmptyIndex)
     monkeypatch.setattr(super_analyst, "_web_search", one_web_result)
 
@@ -351,7 +350,6 @@ async def test_agent_returns_locally_computed_structured_hypothesis(monkeypatch,
             "errors": [],
         }
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", lambda _storage: [])
     monkeypatch.setattr(super_analyst, "EmbeddingIndex", _EmptyIndex)
     monkeypatch.setattr(super_analyst, "_web_search", one_web_result)
 
@@ -412,13 +410,13 @@ async def test_agent_returns_locally_computed_structured_hypothesis(monkeypatch,
 @pytest.mark.asyncio
 async def test_local_collection_runs_off_event_loop(monkeypatch, tmp_path):
     event_loop_thread = threading.get_ident()
-    scan_threads: list[int] = []
+    lookup_threads: list[int] = []
 
-    def capture_scan(_storage):
-        scan_threads.append(threading.get_ident())
-        return []
+    def capture_lookup(*_args):
+        lookup_threads.append(threading.get_ident())
+        return [], 0
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", capture_scan)
+    monkeypatch.setattr(super_analyst, "_load_catalog_documents", capture_lookup)
     monkeypatch.setattr(
         super_analyst,
         "_load_embedding_candidates",
@@ -432,11 +430,129 @@ async def test_local_collection_runs_off_event_loop(monkeypatch, tmp_path):
         params={"question": "测试", "web_search": False},
     ))
 
-    assert scan_threads
-    assert scan_threads[0] != event_loop_thread
+    assert lookup_threads
+    assert lookup_threads[0] != event_loop_thread
     assert result["collection_status"] == "empty"
     assert result["analysis_status"] == "unavailable"
     assert result["degraded"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_retrieves_catalog_candidates_without_full_bronze_scan(monkeypatch, tmp_path):
+    (tmp_path / "item.json").write_text(json.dumps({
+        "raw_document_id": "item-1",
+        "body_inline": "港口吞吐量上升，集装箱延误正在缓解。",
+        "source_system": "bbc",
+        "captured_at": "2026-07-20T00:00:00Z",
+        "extensions": {"summary": "港口更新"},
+    }), encoding="utf-8")
+
+    def full_scan_is_forbidden(*_args, **_kwargs):
+        raise AssertionError("super analysis must not materialise the complete Bronze corpus")
+
+    monkeypatch.setattr(super_analyst, "scan_bronze", full_scan_is_forbidden, raising=False)
+    monkeypatch.setattr(super_analyst, "EmbeddingIndex", _EmptyIndex)
+
+    agent = super_analyst.SuperAnalysisAgent(storage_root=tmp_path)
+    responses = iter([
+        json.dumps({
+            "hypothesis": "港口吞吐量上升",
+            "evidence": [{
+                "evidence_id": "I1", "relation": "support", "strength": "weak", "rationale": "内部情报",
+            }],
+        }),
+        "最终分析",
+    ])
+
+    async def fake_llm(*_args, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(agent, "_call_llm_with_skills", fake_llm)
+    result = await agent._execute(AgentTask(
+        task_type="super_analysis",
+        params={"question": "港口吞吐量是否上升", "web_search": False},
+    ))
+
+    assert [item["title"] for item in result["relevant_items"]] == ["港口更新"]
+
+
+@pytest.mark.asyncio
+async def test_targeted_playbook_evidence_is_included_in_hypothesis_assessment(monkeypatch, tmp_path):
+    calls = []
+
+    class _FakeExecutor:
+        def __init__(self):
+            pass
+
+        async def run(self, **kwargs):
+            calls.append(kwargs)
+            return InvestigationResult(
+                playbook="website",
+                scope={"target": "example.com"},
+                plan=InvestigationPlan(playbook="website", target="example.com"),
+                evidence=[InvestigationEvidence(
+                    id="E1", kind="dns", title="DNS 记录", source="osint-whois",
+                    provenance="mcp://osint-whois/dns_all_records", collected_at="2026-07-21T00:00:00Z",
+                    verification_status="collected", summary="A=203.0.113.8",
+                )],
+            )
+
+    monkeypatch.setattr(super_analyst, "InvestigationExecutor", _FakeExecutor, raising=False)
+    monkeypatch.setattr(super_analyst, "EmbeddingIndex", _EmptyIndex)
+    agent = super_analyst.SuperAnalysisAgent(storage_root=tmp_path)
+    responses = iter([
+        json.dumps({
+            "hypothesis": "example.com 使用该 DNS 记录",
+            "evidence": [{
+                "evidence_id": "P1", "relation": "support", "strength": "moderate", "rationale": "工具查询结果",
+            }],
+        }),
+        "最终分析",
+    ])
+
+    async def fake_llm(*_args, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(agent, "_call_llm_with_skills", fake_llm)
+    result = await agent._execute(AgentTask(
+        task_type="super_analysis",
+        params={
+            "question": "该网站使用什么 DNS？", "web_search": False,
+            "investigation_type": "website", "target": "example.com", "verification_depth": "deep",
+        },
+    ))
+
+    assert calls == [{
+        "playbook": "website", "target": "example.com", "question": "该网站使用什么 DNS？", "verification_depth": "deep",
+        "internal_items": [], "web_results": [],
+    }]
+    assert result["investigation"]["playbook"] == "website"
+    assert result["hypothesis_assessment"]["evidence"][0]["evidence_id"] == "P1"
+    assert result["hypothesis_assessment"]["posterior_probability"] > 0.5
+
+
+@pytest.mark.asyncio
+async def test_sensitive_playbook_cannot_bypass_authorization_at_agent_boundary(monkeypatch, tmp_path):
+    class _ExecutorMustNotRun:
+        async def run(self, **_kwargs):
+            raise AssertionError("sensitive collection must not start without authorization")
+
+    monkeypatch.setattr(super_analyst, "InvestigationExecutor", _ExecutorMustNotRun, raising=False)
+    agent = super_analyst.SuperAnalysisAgent(storage_root=tmp_path)
+
+    result = await agent._execute(AgentTask(
+        task_type="super_analysis",
+        params={
+            "question": "调查该人员的公开活动", "web_search": True,
+            "investigation_type": "person", "target": "示例目标",
+            "authorized": False, "purpose": "",
+        },
+    ))
+
+    assert result["collection_status"] == "unavailable"
+    assert result["analysis_status"] == "unavailable"
+    assert result["provider_statuses"] == {"investigation": "error"}
+    assert result["errors"] == ["sensitive_investigation_not_authorized"]
 
 
 @pytest.mark.asyncio
@@ -446,7 +562,6 @@ async def test_progress_updates_are_namespaced_by_owner(monkeypatch, tmp_path):
     def capture_progress(request_id, phase, message, percent, *, owner_id=None, **detail):
         calls.append((request_id, phase, owner_id, detail))
 
-    monkeypatch.setattr(super_analyst, "scan_bronze", lambda _storage: [])
     monkeypatch.setattr(super_analyst, "EmbeddingIndex", _EmptyIndex)
     monkeypatch.setattr(super_analyst, "set_progress", capture_progress)
 

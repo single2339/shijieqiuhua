@@ -1,5 +1,5 @@
 interface Props { size?: number; color?: string }
-export default function MilitaryIcon({ size = 24, color = '#e74c3c' }: Props) {
+export default function MilitaryIcon({ size = 24, color = '#bf6f63' }: Props) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <path d="M12 2l-3 7h6l-3-7z" fill={color} opacity="0.9"/>

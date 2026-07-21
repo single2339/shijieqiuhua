@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest'
 import { parseAnalysis, generateMarkdown, generateHTML } from '../src/lib/markdown'
+import type { SuperAnalysisResponse } from '../src/types'
 
 describe('parseAnalysis', () => {
   test('parses h2 headings', () => {
@@ -190,7 +191,7 @@ describe('generateHTML', () => {
     expect(html).toContain('<strong style="color:#0d9488;font-weight:700;">重点 &lt;内容&gt;</strong>')
   })
 
-  test('drops non-http(s) web result URLs from links', () => {
+  test('renders non-http(s) web result URLs without an anchor', () => {
     const html = generateHTML({
       ...mockResult,
       web_results: [
@@ -200,7 +201,104 @@ describe('generateHTML', () => {
     })
 
     expect(html).not.toContain('href="javascript:')
-    expect(html).toContain('href=""')
+    expect(html).not.toContain('href=""')
+    expect(html).toContain('恶意链接')
     expect(html).toContain('href="https://example.com/a"')
+  })
+
+  test('renders safe Markdown links and leaves unsafe links as plain text', () => {
+    const html = generateHTML({
+      ...mockResult,
+      analysis: '查看 [原始来源](https://example.com/source) 并忽略 [危险链接](javascript:alert(1))。',
+    })
+
+    expect(html).toContain('href="https://example.com/source"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).not.toContain('[原始来源](https://example.com/source)')
+    expect(html).not.toContain('href=""')
+    expect(html).not.toContain('href="javascript:')
+    expect(html).toContain('危险链接')
+  })
+
+  test('exports the complete investigation trace and source links', () => {
+    const result: SuperAnalysisResponse = {
+      ...mockResult,
+      relevant_items: [{
+        ...mockResult.relevant_items[0],
+        document_id: 'DOC-001',
+        source_url: 'https://example.com/intel/DOC-001',
+      }],
+      investigation: {
+        playbook: 'event',
+        scope: { target: '示例港口事件' },
+        plan: {
+          playbook: 'event',
+          target: '示例港口事件',
+          collection_steps: ['检索港口公告'],
+          verification_steps: ['交叉核验船期'],
+        },
+        evidence: [{
+          id: 'EV-001',
+          kind: '内部情报',
+          title: '港口延误通报',
+          source: 'Reuters',
+          provenance: 'bronze://doc-1',
+          collected_at: '2026-07-20T00:00:00Z',
+          verification_status: 'corroborated',
+          summary: '港口平均等待时间增加两天',
+          source_url: 'https://example.com/evidence/EV-001',
+          content_sha256: 'abc123',
+          data: {},
+        }],
+        relationship_graph: {
+          nodes: [{ id: 'target:port', label: '示例港口', type: 'target' }],
+          edges: [{ source: 'evidence:EV-001', target: 'target:port', relation: 'reports_on', evidence_ids: ['EV-001'] }],
+        },
+        timeline: [{ date: '2026-07-20', evidence_ids: ['EV-001'], summary: '发布延误通报' }],
+        pending_verification: [{
+          id: 'PV-001',
+          question: '等待时间是否持续增加',
+          priority: 'high',
+          rationale: '需要确认趋势而非单点异常',
+          related_evidence_ids: ['EV-001'],
+        }],
+        alternative_explanations: [{
+          id: 'ALT-001',
+          explanation: '恶劣天气导致短期拥堵',
+          indicators: ['当地气象警报'],
+          related_evidence_ids: ['EV-001'],
+          confidence_level: 'L2',
+        }],
+        recommended_next_steps: [{
+          priority: 'high',
+          task: '获取最新船期',
+          rationale: '确认延误持续性',
+          query: '示例港口 最新船期',
+        }],
+        analyst_review: { status: 'pending', reviewer_id: null, reviewed_at: '', notes: '' },
+        errors: [],
+      },
+    }
+
+    const html = generateHTML(result)
+
+    for (const expected of [
+      '检索港口公告',
+      '交叉核验船期',
+      'Reuters',
+      '港口平均等待时间增加两天',
+      'abc123',
+      'EV-001',
+      '当地气象警报',
+      'L2',
+      '需要确认趋势而非单点异常',
+      '示例港口 最新船期',
+      'DOC-001',
+    ]) {
+      expect(html).toContain(expected)
+    }
+    expect(html).toContain('href="https://example.com/evidence/EV-001"')
+    expect(html).toContain('href="https://example.com/intel/DOC-001"')
   })
 })

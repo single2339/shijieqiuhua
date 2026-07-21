@@ -116,15 +116,32 @@ function esc(s: string): string {
 }
 
 function highlightHTML(text: string): string {
-  return text
-    .split(/(\*\*[^*]+\*\*)/g)
-    .map(part => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return `<strong style="color:#0d9488;font-weight:700;">${esc(part.slice(2, -2))}</strong>`
-      }
-      return esc(part)
-    })
-    .join('')
+  const tokenPattern = /(\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\(([^()\s]*(?:\([^()\s]*\)[^()\s]*)*)\))/g
+  let html = ''
+  let lastIndex = 0
+
+  for (const match of text.matchAll(tokenPattern)) {
+    const index = match.index ?? 0
+    html += esc(text.slice(lastIndex, index))
+    if (match[2] !== undefined) {
+      html += `<strong style="color:#0d9488;font-weight:700;">${esc(match[2])}</strong>`
+    } else {
+      html += externalLinkHTML(match[3], match[4])
+    }
+    lastIndex = index + match[0].length
+  }
+
+  return html + esc(text.slice(lastIndex))
+}
+
+function externalLinkHTML(label: string, url: string | undefined): string {
+  const safeUrl = safeExternalUrl(url)
+  if (!safeUrl) return esc(label)
+  return `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:#0d9488;font-weight:600;text-decoration:underline;text-underline-offset:2px;">${esc(label)}</a>`
+}
+
+function evidenceReferences(ids: string[] | undefined): string {
+  return ids && ids.length > 0 ? esc(ids.join(', ')) : '无'
 }
 
 export function generateMarkdown(result: SuperAnalysisResponse): string {
@@ -290,28 +307,46 @@ export function generateHTML(result: SuperAnalysisResponse): string {
 
   const investigationHTML = result.investigation ? (() => {
     const investigation = result.investigation
-    const evidenceRows = investigation.evidence.map(item => `
-      <tr><td>${esc(item.id)}</td><td>${esc(item.kind)}</td><td>${esc(item.title)}</td><td>${esc(item.verification_status)}</td><td>${esc(item.provenance)}</td></tr>
-    `).join('')
+    const collectionSteps = investigation.plan.collection_steps.map((step, index) => (
+      `<li>${index + 1}. ${esc(step)}</li>`
+    )).join('') || '<li>暂无采集步骤</li>'
+    const verificationSteps = investigation.plan.verification_steps.map((step, index) => (
+      `<li>${index + 1}. ${esc(step)}</li>`
+    )).join('') || '<li>暂无核验步骤</li>'
+    const evidenceRows = investigation.evidence.map(item => {
+      const sourceLabel = item.source || '未知来源'
+      const source = externalLinkHTML(sourceLabel, item.source_url)
+      return `
+        <section style="margin:12px 0;padding:14px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;break-inside:avoid;">
+          <div style="font-size:11px;color:#6b7280;margin-bottom:6px;">证据编号: <strong>${esc(item.id)}</strong> &middot; 类型: ${esc(item.kind)} &middot; 验证状态: ${esc(item.verification_status)}</div>
+          <h3 style="font-size:14px;color:#1f2937;margin:0 0 6px;">${esc(item.title)}</h3>
+          <div style="font-size:12px;color:#4b5563;line-height:1.7;">来源: ${source}<br>摘要: ${esc(item.summary || '无')}<br>采集时间: ${esc(item.collected_at || '未知')}<br>溯源: <code>${esc(item.provenance || '无')}</code>${item.content_sha256 ? `<br>内容 SHA-256: <code>${esc(item.content_sha256)}</code>` : ''}</div>
+        </section>
+      `
+    }).join('') || '<div style="font-size:12px;color:#6b7280;">暂无调查证据</div>'
     const relationshipRows = investigation.relationship_graph.edges.map(edge => (
-      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">${esc(edge.source)} — ${esc(edge.relation)} → ${esc(edge.target)}</div>`
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">${esc(edge.source)} — ${esc(edge.relation)} → ${esc(edge.target)} <span style="color:#6b7280;">（证据: ${evidenceReferences(edge.evidence_ids)}）</span></div>`
     )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无可复核关系</div>'
     const timelineRows = investigation.timeline.map(item => (
-      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">${esc(item.date)} · ${esc(item.summary)}</div>`
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">${esc(item.date)} · ${esc(item.summary)} <span style="color:#6b7280;">（证据: ${evidenceReferences(item.evidence_ids)}）</span></div>`
     )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无时间线记录</div>'
     const alternativeRows = investigation.alternative_explanations.map(item => (
-      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">• ${esc(item.explanation)}</div>`
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;margin-bottom:8px;">• <strong>${esc(item.id)}</strong> [${esc(item.confidence_level || '未评级')}] ${esc(item.explanation)}${item.indicators?.length > 0 ? `<br><span style="color:#6b7280;">核验指标: ${esc(item.indicators.join('；'))}</span>` : ''}<br><span style="color:#6b7280;">相关证据: ${evidenceReferences(item.related_evidence_ids)}</span></div>`
     )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无替代解释</div>'
     const pendingRows = investigation.pending_verification.map(item => (
-      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">• [${esc(item.priority)}] ${esc(item.question)}</div>`
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;margin-bottom:8px;">• <strong>${esc(item.id)}</strong> [${esc(item.priority)}] ${esc(item.question)}${item.rationale ? `<br><span style="color:#6b7280;">理由: ${esc(item.rationale)}</span>` : ''}<br><span style="color:#6b7280;">相关证据: ${evidenceReferences(item.related_evidence_ids)}</span></div>`
     )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无待核验项</div>'
     const nextStepRows = investigation.recommended_next_steps.map(item => (
-      `<div style="font-size:12px;color:#4b5563;line-height:1.7;">• [${esc(item.priority)}] ${esc(item.task)}：${esc(item.rationale)}</div>`
+      `<div style="font-size:12px;color:#4b5563;line-height:1.7;margin-bottom:8px;">• [${esc(item.priority)}] ${esc(item.task)}：${esc(item.rationale)}${item.query ? `<br><span style="color:#6b7280;">建议检索式: <code>${esc(item.query)}</code></span>` : ''}</div>`
     )).join('') || '<div style="font-size:12px;color:#6b7280;">暂无下一步任务</div>'
     return `
       <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">证据账本</h2>
       <div style="font-size:12px;color:#4b5563;line-height:1.7;">调查剧本: ${esc(investigation.plan.playbook)}<br>调查目标: ${esc(investigation.plan.target)}<br>分析师复核: ${esc(investigation.analyst_review.status)}${investigation.analyst_review.notes ? `<br>复核备注: ${esc(investigation.analyst_review.notes)}` : ''}</div>
-      <table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:11px;"><thead><tr><th>ID</th><th>类型</th><th>标题</th><th>验证状态</th><th>溯源</th></tr></thead><tbody>${evidenceRows}</tbody></table>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:14px 0;">
+        <div style="padding:12px 14px;background:#f3f4f6;border-radius:8px;"><strong style="font-size:12px;color:#1f2937;">采集步骤</strong><ol style="margin:6px 0 0;padding:0;list-style:none;font-size:12px;color:#4b5563;line-height:1.7;">${collectionSteps}</ol></div>
+        <div style="padding:12px 14px;background:#f3f4f6;border-radius:8px;"><strong style="font-size:12px;color:#1f2937;">核验步骤</strong><ol style="margin:6px 0 0;padding:0;list-style:none;font-size:12px;color:#4b5563;line-height:1.7;">${verificationSteps}</ol></div>
+      </div>
+      ${evidenceRows}
       <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">关系网络</h2>
       ${relationshipRows}
       <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;">时间线</h2>
@@ -327,22 +362,26 @@ export function generateHTML(result: SuperAnalysisResponse): string {
 
   const webResultsHTML = result.web_results.length > 0 ? `
     <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">网络搜索摘要（未验证）</h2>
-    ${result.web_results.map(wr => `
-      <div style="margin-bottom:8px;font-size:12px;">
-        <a href="${esc(safeExternalUrl(wr.url) ?? '')}" style="color:#0d9488;font-weight:600;text-decoration:none;">${esc(wr.title || '来源')}</a>
-        <span style="color:#6b7280;margin-left:4px;">${esc(wr.snippet)}</span>
-      </div>
-    `).join('\n')}
+    ${result.web_results.map(wr => {
+      const label = wr.title || '来源'
+      return `
+        <div style="margin-bottom:8px;font-size:12px;">
+          ${externalLinkHTML(label, wr.url)}
+          <span style="color:#6b7280;margin-left:4px;">${esc(wr.snippet)}</span>
+        </div>
+      `
+    }).join('\n')}
   ` : ''
 
   const itemsHTML = result.relevant_items.length > 0 ? `
     <h2 style="font-size:18px;font-weight:700;color:#0d9488;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">相关情报项</h2>
     ${result.relevant_items.map((item, idx) => `
       <div style="margin-bottom:18px;padding:14px 16px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
-        <h3 style="font-size:14px;font-weight:600;color:#1f2937;margin:0 0 8px;">${idx + 1}. ${esc(item.title)}</h3>
+        <h3 style="font-size:14px;font-weight:600;color:#1f2937;margin:0 0 8px;">${idx + 1}. ${externalLinkHTML(item.title, item.source_url)}</h3>
         <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">
           来源: ${esc(item.source)} | 日期: ${esc(item.date)} | 层级: ${esc(item.layer)}
         </div>
+        ${item.document_id ? `<div style="font-size:12px;color:#6b7280;margin-bottom:6px;">文档编号: <code>${esc(item.document_id)}</code></div>` : ''}
         <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">
           聚合独立来源: ${item.independent_source_count} | 文档质量: ${Math.round(item.quality_score * 100)}%
         </div>

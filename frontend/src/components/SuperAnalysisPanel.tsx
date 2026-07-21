@@ -6,6 +6,7 @@ import type { SuperAnalysisResponse } from '../types'
 import { useSuperAnalysis } from '../hooks/useSuperAnalysis'
 import { useFloatingPanel } from '../hooks/useFloatingPanel'
 import { parseAnalysis, highlightText, generateHTML } from '../lib/markdown'
+import { downloadTextFile } from '../utils/download'
 import type { Block } from '../lib/markdown'
 import { safeExternalUrl } from '../utils/safeUrl'
 import { confidenceColor } from '../utils/intelDisplay'
@@ -240,13 +241,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
   const handleDownload = useCallback(() => {
     if (!result) return
     const html = generateHTML(result)
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `super-analysis-${Date.now()}.html`
-    a.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    downloadTextFile(`super-analysis-${Date.now()}.html`, html, 'text/html;charset=utf-8')
   }, [result])
 
   const analysisBlocks: Block[] = result ? parseAnalysis(result.analysis) : []
@@ -336,6 +331,7 @@ export default function SuperAnalysisPanel({ onClose, isMobile, startDate = '', 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {result && (
               <motion.button
+                type="button"
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 whileHover={{ scale: 1.03 }}

@@ -81,6 +81,7 @@ from backend.opencode_adapter import (
 
 ANALYSIS_REALTIME_ITEM_LIMIT = int(os.environ.get("ANALYSIS_REALTIME_ITEM_LIMIT", "3000"))
 STATS_DEFAULT_DAYS = int(os.environ.get("STATS_DEFAULT_DAYS", "14"))
+DASHBOARD_DEFAULT_DAYS = int(os.environ.get("DASHBOARD_DEFAULT_DAYS", "1"))
 OSINT_ROLE_VALUES = {"api", "worker", "all"}
 
 
@@ -118,6 +119,14 @@ def resolve_stats_window(start_date: str, end_date: str) -> tuple[str, str]:
     end = datetime.now(timezone.utc).date()
     start = end - timedelta(days=max(STATS_DEFAULT_DAYS, 1) - 1)
     return start.isoformat(), end.isoformat()
+
+
+def resolve_dashboard_window(start_date: str, end_date: str, date: str) -> tuple[str, str, str]:
+    if date or start_date or end_date:
+        return start_date, end_date, date
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=max(DASHBOARD_DEFAULT_DAYS, 1) - 1)
+    return start.isoformat(), end.isoformat(), ""
 
 
 def _atomic_json_write(path: Path, payload: dict) -> None:
@@ -696,7 +705,8 @@ def _prewarm_dashboard_cache() -> None:
     """Build the most-requested dashboard cache entries on startup / periodically."""
     # First, populate the master list cache (the expensive scan)
     try:
-        all_items = _get_or_build_items("", "", "")
+        start_date, end_date, date = resolve_dashboard_window("", "", "")
+        all_items = _get_or_build_items(start_date, end_date, date)
         log.info("Dashboard master cache prewarmed: %d items", len(all_items))
     except Exception:
         log.exception("Failed to pre-warm dashboard master cache")
@@ -750,6 +760,7 @@ async def get_dashboard(
 ):
     import time as _time
 
+    start_date, end_date, date = resolve_dashboard_window(start_date, end_date, date)
     cache_key = f"{start_date}|{end_date}|{date}|{page}|{page_size}"
     cached = _cache_get(cache_key)
     if cached:
@@ -1152,21 +1163,17 @@ def _build_items(
     multi-source ``sources`` lists. Otherwise falls back to 1:1 doc→item.
     """
     layer_values = {value.strip() for value in layer_filter.split(",") if value.strip()}
-    docs = (
-        _get_indexer().get_all()
-        if use_merge_groups
-        else [
-            doc
-            for value in (layer_values or {""})
-            for doc in _get_indexer().query(
-                start_date=start_date,
-                end_date=end_date,
-                layer=value,
-                country=country_filter,
-                limit=limit,
-            )
-        ]
-    )
+    docs = [
+        doc
+        for value in (layer_values or {""})
+        for doc in _get_indexer().query(
+            start_date=start_date,
+            end_date=end_date,
+            layer=value,
+            country=country_filter,
+            limit=limit,
+        )
+    ]
     items: list[IntelItem] = []
 
     if not docs:

@@ -754,6 +754,39 @@ def test_backfill_replays_bronze_without_mutating_raw_documents(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == before
 
 
+def test_backfill_limit_does_not_consume_the_remaining_document_stream(tmp_path, monkeypatch):
+    import backend.intelligence.backfill as backfill_module
+    from backend.bronze_reader import BronzeDocument
+
+    document = BronzeDocument({
+        "raw_document_id": "limited-backfill-1",
+        "body_inline": (
+            "The government imposed an export ban on critical minerals under a new "
+            "regulation effective immediately."
+        ),
+        "source_system": "reuters",
+        "source_url": "https://example.test/limited-backfill",
+        "captured_at": "2026-07-21T08:00:00+00:00",
+        "extensions": {
+            "horizon_title": "Government imposes export ban on critical minerals",
+            "horizon_source_type": "rss",
+            "horizon_metadata": {"feed_name": "reuters", "category": "news_agency"},
+            "published_at": "2026-07-21T08:00:00+00:00",
+        },
+    })
+
+    def document_stream():
+        yield document
+        raise AssertionError("backfill consumed documents beyond its configured limit")
+
+    monkeypatch.setattr(backfill_module, "iter_bronze", lambda _storage: document_stream(), raising=False)
+
+    stats = backfill_module.backfill_intelligence(tmp_path, limit=1)
+
+    assert stats["scanned"] == 1
+    assert stats["accepted"] == 1
+
+
 def test_intelligence_point_contract_accepts_persisted_product(tmp_path):
     import json
     from pathlib import Path

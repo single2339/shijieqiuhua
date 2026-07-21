@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from itertools import islice
 from pathlib import Path
 
-from backend.bronze_reader import BronzeDocument, scan_bronze
+from backend.bronze_reader import BronzeDocument, iter_bronze
 from backend.collectors.horizon.models import ContentItem, SourceType
 from backend.intelligence.admission import AdmissionEngine
 from backend.intelligence.source_policy import SourceRegistry
@@ -65,9 +66,10 @@ def backfill_intelligence(
         "skipped": 0,
         "errors": 0,
     }
-    for document in scan_bronze(storage):
-        if limit and stats["scanned"] >= limit:
-            break
+    documents = iter_bronze(storage)
+    if limit:
+        documents = islice(documents, limit)
+    for document in documents:
         stats["scanned"] += 1
         if document.raw_document_id in existing:
             stats["skipped"] += 1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import List
 from urllib.parse import unquote, urlparse
@@ -69,23 +70,29 @@ class BronzeDocument:
         return ref_path if ref_path.is_absolute() else self._storage_root / ref_path
 
 
-def scan_bronze(storage_root: str | Path) -> List[BronzeDocument]:
+def iter_bronze(
+    storage_root: str | Path,
+    *,
+    sort_paths: bool = False,
+) -> Iterator[BronzeDocument]:
     root = Path(storage_root)
-    docs: list[BronzeDocument] = []
-
     if not root.exists():
-        return docs
+        return
 
-    for json_file in sorted(root.rglob("*.json")):
+    json_files = root.rglob("*.json")
+    paths = sorted(json_files) if sort_paths else json_files
+    for json_file in paths:
         if json_file.name in (QUEUE_DB_FILENAME, MERGE_INDEX_FILENAME):
             continue
         try:
             data = json.loads(json_file.read_text(encoding="utf-8"))
-            docs.append(BronzeDocument(data, storage_root=root))
+            yield BronzeDocument(data, storage_root=root)
         except (json.JSONDecodeError, OSError):
             continue
 
-    return docs
+
+def scan_bronze(storage_root: str | Path) -> List[BronzeDocument]:
+    return list(iter_bronze(storage_root, sort_paths=True))
 
 
 async def scan_bronze_async(storage_root: str | Path) -> List[BronzeDocument]:

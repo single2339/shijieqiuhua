@@ -140,3 +140,22 @@ def test_catalog_persists_incrementally_without_materializing_one_large_json_str
     catalog.ensure()
 
     assert catalog.path.is_file()
+
+
+def test_catalog_keeps_corpus_metadata_out_of_python_memory(tmp_path):
+    for index in range(25):
+        (tmp_path / f"{index}.json").write_text(json.dumps({
+            "raw_document_id": str(index),
+            "body_inline": f"港口吞吐量记录 {index}",
+            "captured_at": "2026-07-21T00:00:00Z",
+            "source_system": "test-source",
+        }), encoding="utf-8")
+
+    catalog = BronzeCatalog(tmp_path)
+    catalog.ensure()
+
+    assert catalog.size == 25
+    assert not any(
+        isinstance(value, dict) and len(value) == 25
+        for value in vars(catalog).values()
+    )

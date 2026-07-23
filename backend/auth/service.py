@@ -125,25 +125,57 @@ def _reserve_invite_code(db: sqlite3.Connection, code: str) -> bool:
     )
     return cursor.rowcount == 1
 
+def _registration_duplicate_error(db: sqlite3.Connection, username: str, email: str) -> str | None:
+    if db.execute(
+        "SELECT 1 FROM users WHERE normalize_identity(username) = normalize_identity(?) LIMIT 1",
+        (username,),
+    ).fetchone():
+        return "用户名已存在"
+    if db.execute(
+        "SELECT 1 FROM users WHERE normalize_identity(email) = normalize_identity(?) LIMIT 1",
+        (email,),
+    ).fetchone():
+        return "邮箱已存在"
+    return None
+
 
 def register_user(username: str, email: str, password: str, invite_code: str) -> dict:
     db = get_db()
-    # Reserve the invite code first, in the same transaction as the user insert,
-    # so a failed insert rolls back the reservation and concurrent registrations
-    # can't over-consume a single-use code.
-    if not _reserve_invite_code(db, invite_code):
-        db.rollback()
-        raise ValueError("邀请码无效、已使用或已过期")
+    username = username.strip()
+    email = email.strip()
+    if len(username) < 2:
+        raise ValueError("用户名长度至少为 2 个字符")
+    if not email:
+        raise ValueError("邮箱不能为空")
+
+    duplicate_error = _registration_duplicate_error(db, username, email)
+    if duplicate_error:
+        raise ValueError(duplicate_error)
+    password_hash = hash_password(password)
+
     try:
-        password_hash = hash_password(password)
+        # Serialize the final duplicate checks and insertion. SQLite allows one
+        # immediate writer, so concurrent registrations cannot both pass the
+        # checks before either account is committed.
+        db.execute("BEGIN IMMEDIATE")
+        duplicate_error = _registration_duplicate_error(db, username, email)
+        if duplicate_error:
+            raise ValueError(duplicate_error)
+        # Reserve the invite code only after identity checks. Any later failure
+        # rolls back this reservation with the user insert.
+        if not _reserve_invite_code(db, invite_code):
+            raise ValueError("邀请码无效、已使用或已过期")
         cursor = db.execute(
             "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
             (username, email, password_hash),
         )
         db.commit()
     except sqlite3.IntegrityError:
-        db.rollback()  # release the reserved invite-code use
+        db.rollback()
         raise ValueError("用户名已存在")
+    except Exception:
+        db.rollback()
+        raise
     user_id = cursor.lastrowid
     return _user_row_to_dict(
         db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()

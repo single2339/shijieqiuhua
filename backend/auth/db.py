@@ -11,6 +11,11 @@ DB_PATH = STORAGE_ROOT / "_auth.db"
 
 _local = threading.local()
 
+
+def _normalize_identity(value: str | None) -> str:
+    return value.strip().casefold() if isinstance(value, str) else ""
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +85,7 @@ def get_db() -> sqlite3.Connection:
     if not hasattr(_local, "conn") or _local.conn is None:
         STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
         _local.conn = sqlite3.connect(str(DB_PATH))
+        _local.conn.create_function("normalize_identity", 1, _normalize_identity)
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
         _local.conn.execute("PRAGMA foreign_keys=ON")

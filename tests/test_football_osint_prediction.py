@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from backend.football_osint.analysis.prediction import predict
-from backend.football_osint.models import FactorImpact, FootballOsintJobRequest
+from backend.football_osint.models import (
+    FactorImpact,
+    FootballOsintJobRequest,
+    OutcomeOdds,
+    OutcomeProbabilities,
+    SportteryMarket,
+)
 from backend.football_osint.factor_registry import build_factors
 from backend.football_osint.models import MatchProfile, OsintEvidence
 
@@ -23,30 +31,30 @@ def _request(kickoff_at: str) -> FootballOsintJobRequest:
     return FootballOsintJobRequest(home_team="A队", away_team="B队", kickoff_at=kickoff_at)
 
 
-def test_info_insufficient_far_from_kickoff_uses_softer_wording():
+def test_info_insufficient_without_market_has_no_direction_summary():
     far_kickoff = (datetime.now(_CST) + timedelta(days=5)).strftime("%Y-%m-%d %H:%M")
 
     result = predict(_request(far_kickoff), _NO_SIGNAL_FACTORS)
 
     assert result.lean == "info_insufficient"
-    assert "暂未发布" in result.summary
-    assert "开赛前 1-2 天" in result.summary
+    assert "方向判断" in result.summary
+    assert len(result.summary) <= 42
 
 
-def test_info_insufficient_near_kickoff_uses_coverage_gap_wording():
+def test_info_insufficient_near_kickoff_has_no_direction_summary():
     near_kickoff = (datetime.now(_CST) + timedelta(hours=6)).strftime("%Y-%m-%d %H:%M")
 
     result = predict(_request(near_kickoff), _NO_SIGNAL_FACTORS)
 
     assert result.lean == "info_insufficient"
-    assert "懂球帝赛前分析未命中" in result.summary
+    assert "方向判断" in result.summary
 
 
-def test_info_insufficient_unparseable_kickoff_defaults_to_softer_wording():
+def test_info_insufficient_unparseable_kickoff_has_no_direction_summary():
     result = predict(_request("not-a-date"), _NO_SIGNAL_FACTORS)
 
     assert result.lean == "info_insufficient"
-    assert "暂未发布" in result.summary
+    assert "方向判断" in result.summary
 
 
 def _direction_factor(*, impact: float, weight: float = 1.0, label: str = "近期状态信号") -> FactorImpact:
@@ -98,6 +106,86 @@ def _weather_factor(*, impact: float = -0.05) -> FactorImpact:
         direction="neutral",
         confidence=0.45,
     )
+
+
+def _market(*, home: float = 0.46, draw: float = 0.30, away: float = 0.24, hhad: bool = False) -> SportteryMarket:
+    return SportteryMarket(
+        had_odds=OutcomeOdds(home_win=2.2, draw=3.4, away_win=4.2),
+        had_implied_probabilities=OutcomeProbabilities(home_win=home, draw=draw, away_win=away),
+        home_handicap=-1 if hhad else None,
+        hhad_odds=OutcomeOdds(home_win=3.2, draw=3.4, away_win=2.1) if hhad else None,
+        hhad_implied_probabilities=OutcomeProbabilities(home_win=0.25, draw=0.25, away_win=0.50) if hhad else None,
+        observed_at="2026-08-11T12:00:00+00:00",
+    )
+
+
+def test_score_matrix_produces_normalized_clear_home_probabilities():
+    result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)])
+
+    probabilities = result.outcome_probabilities
+    assert probabilities.home_win + probabilities.draw + probabilities.away_win == pytest.approx(1.0)
+    assert probabilities.home_win > probabilities.draw
+    assert probabilities.home_win > probabilities.away_win
+    assert result.clarity == "clear"
+    assert result.margin_to_runner_up >= 0.05
+    assert len(result.scoreline_band) == 4
+
+
+def test_close_prediction_summary_explicitly_says_advantage_is_insufficient():
+    result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.01)])
+
+    assert result.clarity == "close"
+    assert "优势不足" in result.summary
+
+
+def test_had_market_fusion_lies_between_market_and_strong_home_model():
+    factors = [_direction_factor(impact=0.30)]
+    model_only = predict(_request("2026-06-20 20:00"), factors)
+    fused = predict(_request("2026-06-20 20:00"), factors, market=_market())
+
+    assert 0.46 < fused.outcome_probabilities.home_win < model_only.outcome_probabilities.home_win
+    assert fused.sporttery_market is not None
+
+
+def test_market_without_fundamentals_remains_insufficient_and_reference_only():
+    result = predict(_request("2026-06-20 20:00"), _NO_SIGNAL_FACTORS, market=_market())
+
+    assert result.lean == "info_insufficient"
+    assert result.clarity == "insufficient"
+    assert "市场仅作参考" in result.summary
+    assert result.sporttery_market is not None
+    assert result.handicap_conclusion is None
+
+
+def test_complete_hhad_yields_normalized_handicap_conclusion():
+    result = predict(
+        _request("2026-06-20 20:00"),
+        [_direction_factor(impact=0.30)],
+        market=_market(hhad=True),
+    )
+
+    conclusion = result.handicap_conclusion
+    assert conclusion is not None
+    assert conclusion.home_handicap == -1
+    assert sum(conclusion.handicap_probabilities.model_dump().values()) == pytest.approx(1.0)
+
+
+def test_incomplete_hhad_is_suppressed():
+    market = _market().model_copy(update={"home_handicap": None})
+    result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)], market=market)
+
+    assert result.handicap_conclusion is None
+
+
+def test_market_factor_is_a_driver_but_does_not_meet_fundamental_minimum():
+    market = _market()
+    factors = build_factors(_request("2026-06-20 20:00"), MatchProfile(), [], market=market)
+    result = predict(_request("2026-06-20 20:00"), factors, factor_min=1, market=market)
+
+    market_factor = next(factor for factor in factors if factor.factor_id == "market.sporttery_had")
+    assert market_factor.enabled is True
+    assert market_factor.label in result.drivers or result.lean == "info_insufficient"
+    assert result.lean == "info_insufficient"
 
 
 

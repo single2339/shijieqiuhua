@@ -57,10 +57,12 @@ from .models import (
     OsintEvidence,
     OsintMatch,
     OsintSourceStatus,
+    SportteryMarket,
 )
 from .sources import DONGQIUDI_SOURCE_TEMPLATES, SEARCH_SOURCE_TEMPLATES
 from .adapters import open_meteo as weather_adapter
 from .adapters import rss_feed as rss_adapter
+from .adapters import sporttery as sporttery_adapter
 from .adapters import web_search as web_search_adapter
 
 
@@ -87,9 +89,9 @@ def run_prediction_sync(
         profile=_profile_match(request),
     )
 
-    search_stats = _collect_zero_config_sources(request, evidence, sources)
-    factors = factor_registry_module.build_factors(request, match.profile, evidence)
-    prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
+    search_stats, market = _collect_zero_config_sources(request, evidence, sources)
+    factors = factor_registry_module.build_factors(request, match.profile, evidence, market=market)
+    prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min(), market=market)
     confidence = confidence_module.grade(match.profile, evidence, factors)
     data_quality = data_quality_module.build_data_quality(
         request, sources, evidence, factors, prediction, search_stats=search_stats,
@@ -182,7 +184,7 @@ def _collect_zero_config_sources(
     request: FootballOsintJobRequest,
     evidence: list[OsintEvidence],
     sources: list[OsintSourceStatus],
-) -> data_quality_module.SearchQualityStats:
+) -> tuple[data_quality_module.SearchQualityStats, SportteryMarket | None]:
     fixture_id = evidence_module.append_evidence(
         evidence,
         source="User request",
@@ -205,17 +207,16 @@ def _collect_zero_config_sources(
     )
     _collect_farich_foot_sources(request, evidence, sources)
 
-    # ── weather / search / RSS / football-data — run in parallel (independent I/O) ──
-    # Do not attach betting/odds feeds here. Sporttery is reserved for result
-    # settlement fallback in track_record.py; PRD R1 excludes real odds/handicap
-    # evidence from the paid OSINT report surface.
+    # ── weather / search / RSS / football-data / official market — parallel I/O ──
     search_stats = data_quality_module.SearchQualityStats()
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    market: SportteryMarket | None = None
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(_collect_one_weather, request, evidence): "weather",
             pool.submit(_collect_search_sources, request, evidence, sources): "search",
             pool.submit(rss_adapter.collect_all, request, evidence): "rss",
             pool.submit(_collect_football_data_stats, request, evidence, sources): "football_data",
+            pool.submit(_collect_sporttery, request, evidence): "sporttery",
         }
         for future in as_completed(futures):
             label = futures[future]
@@ -238,6 +239,15 @@ def _collect_zero_config_sources(
                         ))
                 elif label == "search" and isinstance(result, data_quality_module.SearchQualityStats):
                     search_stats = result
+                elif label == "sporttery":
+                    market, evidence_id, reason = result
+                    sources.append(OsintSourceStatus(
+                        adapter="sporttery",
+                        label="中国体育彩票盘口",
+                        status="ok" if evidence_id else "skipped",
+                        evidence_ids=[evidence_id] if evidence_id else [],
+                        reason="" if evidence_id else reason,
+                    ))
                 # search / football_data append to evidence + sources internally
             except Exception:
                 log.warning("%s phase failed or timed out", label)
@@ -260,12 +270,45 @@ def _collect_zero_config_sources(
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="ok", evidence_ids=note_ids))
     else:
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="skipped", reason="未提供伤病、首发或球队新闻补充"))
-    return search_stats
+    return search_stats, market
 
 
 def _collect_one_weather(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:
     """Tiny wrapper so weather can be submitted to ThreadPoolExecutor."""
     return weather_adapter.collect(request, evidence)
+
+
+def _collect_sporttery(
+    request: FootballOsintJobRequest,
+    evidence: list[OsintEvidence],
+) -> tuple[SportteryMarket | None, str, str]:
+    """Collect one official Sporttery snapshot and its traceable evidence row."""
+    odds = sporttery_adapter.get_odds(
+        request.home_team,
+        request.away_team,
+        request.kickoff_at,
+        provider=request.provider,
+        provider_match_id=request.provider_match_id,
+    )
+    if odds is None:
+        return None, "", "体彩未覆盖该场比赛"
+    market = sporttery_adapter.market_snapshot(odds, observed_at=datetime.now(timezone.utc).isoformat())
+    if market is None:
+        return None, "", "体彩赔率不完整"
+    claim = f"体彩胜平负赔率: 主胜{odds.had_h:.2f} / 平{odds.had_d:.2f} / 客胜{odds.had_a:.2f}"
+    if market.home_handicap is not None and odds.hhad_h is not None:
+        claim += f"；让球({market.home_handicap:+d})赔率: 主胜{odds.hhad_h:.2f} / 平{odds.hhad_d:.2f} / 客胜{odds.hhad_a:.2f}"
+    evidence_id = evidence_module.append_evidence(
+        evidence,
+        source=f"中国体育彩票 ({odds.league})",
+        source_type="odds",
+        claim=claim,
+        topic="odds.sporttery.market",
+        side="neutral",
+        confidence=0.60,
+        raw_excerpt=json.dumps(market.model_dump(mode="json"), ensure_ascii=False),
+    )
+    return market, evidence_id, ""
 
 
 

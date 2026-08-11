@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from math import isclose
-from typing import Any, Literal
+from typing import Any, Literal, Mapping, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -37,6 +37,17 @@ class FootballOsintJobRequest(BaseModel):
     home_aliases: list[str] = Field(default_factory=list)
     away_aliases: list[str] = Field(default_factory=list)
     user_supplied: UserSuppliedInput = Field(default_factory=UserSuppliedInput)
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        copied = super().model_copy(update=update, deep=deep)
+        if not isinstance(copied.user_supplied, UserSuppliedInput):
+            copied.user_supplied = UserSuppliedInput.model_validate(copied.user_supplied)
+        return copied
 
 
 class MatchProfile(BaseModel):

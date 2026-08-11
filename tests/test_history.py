@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from backend.auth import db as auth_db
+
+_DEFAULT_SETTLED_AT = object()
 
 
 @pytest.fixture
@@ -25,7 +28,9 @@ def _insert_record(conn, *, job_id="job1", home="曼城", away="利物浦",
                    lean="home", actual_outcome="home",
                    home_score=2, away_score=1,
                    lean_correct=1, scoreline_hit=0,
-                   settled_at="2026-06-25 21:05"):
+                   settled_at=_DEFAULT_SETTLED_AT):
+    if settled_at is _DEFAULT_SETTLED_AT:
+        settled_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     conn.execute(
         """INSERT INTO prediction_record
            (job_id, home_team, away_team, kickoff_at, competition,

@@ -32,6 +32,14 @@ def test_pipeline_job_id_changes_with_question_and_user_notes():
     assert pipeline._job_id(base) != pipeline._job_id(with_note)
 
 
+def test_model_copy_normalizes_user_supplied_dict():
+    request = FootballOsintJobRequest(home_team="曼城", away_team="利物浦")
+
+    copied = request.model_copy(update={"user_supplied": {"notes": ["private note"]}})
+
+    assert copied.user_supplied.notes == ["private note"]
+
+
 def test_concurrent_evidence_append_mints_unique_ids_referenced_by_sources():
     from backend.football_osint import evidence as evidence_module
     from backend.football_osint.models import OsintSourceStatus

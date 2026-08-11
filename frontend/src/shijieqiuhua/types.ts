@@ -124,10 +124,37 @@ export interface FactorImpact {
 export interface PredictionResult {
   lean: 'home' | 'away' | 'draw' | 'home_or_draw' | 'away_or_draw' | 'info_insufficient'
   summary: string
-  probability_band: Record<'home_win' | 'draw' | 'away_win', [number, number]>
+  outcome_probabilities: OutcomeProbabilities
+  primary_probability: number
+  margin_to_runner_up: number
+  clarity: 'clear' | 'close' | 'insufficient'
   scoreline_band: string[]
   drivers: string[]
   uncertainties: string[]
+  sporttery_market: SportteryMarket | null
+  handicap_conclusion: HandicapConclusion | null
+}
+
+export interface OutcomeProbabilities {
+  home_win: number
+  draw: number
+  away_win: number
+}
+
+export interface OutcomeOdds {
+  home_win: number
+  draw: number
+  away_win: number
+}
+
+export interface SportteryMarket {
+  home_handicap: number
+  hhad_odds: OutcomeOdds
+}
+
+export interface HandicapConclusion {
+  outcome: 'home' | 'draw' | 'away'
+  probability: number
 }
 
 export interface DataQualitySummary {

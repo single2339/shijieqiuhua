@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FootballOsintJobStatus(str, Enum):
@@ -89,13 +89,73 @@ class FactorImpact(BaseModel):
     missing_reason: str = ""
 
 
+class OutcomeProbabilities(BaseModel):
+    home_win: float = Field(ge=0.0, le=1.0)
+    draw: float = Field(ge=0.0, le=1.0)
+    away_win: float = Field(ge=0.0, le=1.0)
+
+
+class OutcomeOdds(BaseModel):
+    home_win: float = Field(gt=0.0)
+    draw: float = Field(gt=0.0)
+    away_win: float = Field(gt=0.0)
+
+
+class SportteryMarket(BaseModel):
+    home_handicap: int
+    hhad_odds: OutcomeOdds
+
+
+class HandicapConclusion(BaseModel):
+    outcome: Literal["home", "draw", "away"]
+    probability: float = Field(ge=0.0, le=1.0)
+
+
 class PredictionResult(BaseModel):
     lean: Literal["home", "away", "draw", "home_or_draw", "away_or_draw", "info_insufficient"]
     summary: str
-    probability_band: dict[str, tuple[float, float]]
+    outcome_probabilities: OutcomeProbabilities
+    primary_probability: float = Field(ge=0.0, le=1.0)
+    margin_to_runner_up: float = Field(ge=0.0, le=1.0)
+    clarity: Literal["clear", "close", "insufficient"]
     scoreline_band: list[str]
     drivers: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
+    sporttery_market: SportteryMarket | None = None
+    handicap_conclusion: HandicapConclusion | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def convert_legacy_probability_band(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "probability_band" not in value:
+            return value
+
+        payload = dict(value)
+        bands = payload.pop("probability_band") or {}
+        midpoint = {
+            outcome: (float(band[0]) + float(band[1])) / 2
+            for outcome, band in bands.items()
+            if isinstance(band, (list, tuple)) and len(band) == 2
+        }
+        outcomes = ("home_win", "draw", "away_win")
+        if set(midpoint) != set(outcomes) or sum(midpoint.values()) <= 0:
+            midpoint = {outcome: 1 / 3 for outcome in outcomes}
+
+        total = sum(midpoint.values())
+        probabilities = {
+            outcome: round(midpoint[outcome] / total, 6)
+            for outcome in outcomes
+        }
+        ranked = sorted(probabilities.values(), reverse=True)
+        payload["outcome_probabilities"] = probabilities
+        payload["primary_probability"] = ranked[0]
+        payload["margin_to_runner_up"] = round(ranked[0] - ranked[1], 6)
+        payload["clarity"] = (
+            "insufficient"
+            if payload.get("lean") == "info_insufficient"
+            else "clear" if ranked[0] - ranked[1] >= 0.05 else "close"
+        )
+        return payload
 
 
 class ConfidenceRating(BaseModel):

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.football_osint.analysis.prediction import predict
+from backend.football_osint.adapters.sporttery import SportteryOdds, market_snapshot
 from backend.football_osint.models import (
     FactorImpact,
     FootballOsintJobRequest,
@@ -147,6 +148,40 @@ def test_had_market_fusion_lies_between_market_and_strong_home_model():
     assert fused.sporttery_market is not None
 
 
+def test_one_fundamental_uses_exact_45_55_had_fusion_weights():
+    factors = [_direction_factor(impact=0.30)]
+    market = _market()
+    model = predict(_request("2026-06-20 20:00"), factors)
+    fused = predict(_request("2026-06-20 20:00"), factors, market=market)
+
+    for outcome in ("home_win", "draw", "away_win"):
+        expected = 0.45 * getattr(model.outcome_probabilities, outcome) + 0.55 * getattr(
+            market.had_implied_probabilities, outcome
+        )
+        assert getattr(fused.outcome_probabilities, outcome) == pytest.approx(expected)
+    assert sum(fused.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
+
+
+def test_two_fundamentals_use_exact_65_35_had_fusion_weights():
+    factors = [
+        _direction_factor(impact=0.30),
+        FactorImpact(
+            factor_id="h2h.relevance", label="历史交锋参考性", group="h2h",
+            enabled=True, weight=0.10, impact=0.10, direction="home", confidence=0.8,
+        ),
+    ]
+    market = _market()
+    model = predict(_request("2026-06-20 20:00"), factors)
+    fused = predict(_request("2026-06-20 20:00"), factors, market=market)
+
+    for outcome in ("home_win", "draw", "away_win"):
+        expected = 0.65 * getattr(model.outcome_probabilities, outcome) + 0.35 * getattr(
+            market.had_implied_probabilities, outcome
+        )
+        assert getattr(fused.outcome_probabilities, outcome) == pytest.approx(expected)
+    assert sum(fused.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
+
+
 def test_market_without_fundamentals_remains_insufficient_and_reference_only():
     result = predict(_request("2026-06-20 20:00"), _NO_SIGNAL_FACTORS, market=_market())
 
@@ -174,6 +209,23 @@ def test_incomplete_hhad_is_suppressed():
     market = _market().model_copy(update={"home_handicap": None})
     result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)], market=market)
 
+    assert result.handicap_conclusion is None
+
+
+def test_partial_raw_hhad_snapshot_is_suppressed_before_prediction():
+    market = market_snapshot(
+        SportteryOdds(
+            home_team="主队", away_team="客队", kickoff_at="",
+            had_h=2.0, had_d=3.5, had_a=4.0,
+            hhad_h=1.8, hhad_goal_line="+1",
+        ),
+        observed_at="2026-08-11T12:00:00+00:00",
+    )
+
+    assert market is not None
+    assert market.home_handicap is None
+    assert market.hhad_odds is None
+    result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)], market=market)
     assert result.handicap_conclusion is None
 
 

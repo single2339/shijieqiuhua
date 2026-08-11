@@ -109,13 +109,21 @@ class OutcomeOdds(BaseModel):
 
 
 class SportteryMarket(BaseModel):
-    home_handicap: int
-    hhad_odds: OutcomeOdds
+    provider: Literal["sporttery"] = "sporttery"
+    had_odds: OutcomeOdds | None = None
+    had_implied_probabilities: OutcomeProbabilities
+    home_handicap: int | None = None
+    hhad_odds: OutcomeOdds | None = None
+    hhad_implied_probabilities: OutcomeProbabilities | None = None
+    observed_at: str
 
 
 class HandicapConclusion(BaseModel):
+    home_handicap: int
     outcome: Literal["home", "draw", "away"]
     probability: float = Field(ge=0.0, le=1.0)
+    margin_to_runner_up: float = Field(ge=0.0, le=1.0)
+    clarity: Literal["clear", "close"]
 
 
 class PredictionResult(BaseModel):

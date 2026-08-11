@@ -148,13 +148,21 @@ export interface OutcomeOdds {
 }
 
 export interface SportteryMarket {
-  home_handicap: number
-  hhad_odds: OutcomeOdds
+  provider: 'sporttery'
+  had_odds: OutcomeOdds | null
+  had_implied_probabilities: OutcomeProbabilities
+  home_handicap: number | null
+  hhad_odds: OutcomeOdds | null
+  hhad_implied_probabilities: OutcomeProbabilities | null
+  observed_at: string
 }
 
 export interface HandicapConclusion {
+  home_handicap: number
   outcome: 'home' | 'draw' | 'away'
   probability: number
+  margin_to_runner_up: number
+  clarity: 'clear' | 'close'
 }
 
 export interface DataQualitySummary {

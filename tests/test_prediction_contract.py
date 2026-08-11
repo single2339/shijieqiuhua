@@ -30,10 +30,20 @@ def test_prediction_result_serializes_exact_outcomes_and_sporttery_fields():
         clarity="clear",
         scoreline_band=["2-1"],
         sporttery_market=SportteryMarket(
+            had_odds=OutcomeOdds(home_win=1.9, draw=3.1, away_win=3.8),
+            had_implied_probabilities=OutcomeProbabilities(home_win=0.48, draw=0.29, away_win=0.23),
             home_handicap=-1,
             hhad_odds=OutcomeOdds(home_win=2.1, draw=3.4, away_win=3.0),
+            hhad_implied_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
+            observed_at="2026-08-11T12:00:00+00:00",
         ),
-        handicap_conclusion=HandicapConclusion(outcome="away", probability=0.45),
+        handicap_conclusion=HandicapConclusion(
+            home_handicap=-1,
+            outcome="away",
+            probability=0.40,
+            margin_to_runner_up=0.08,
+            clarity="clear",
+        ),
     )
     job = FootballOsintJob(
         job_id="contract_1",
@@ -56,10 +66,38 @@ def test_prediction_result_serializes_exact_outcomes_and_sporttery_fields():
         "drivers": [],
         "uncertainties": [],
         "sporttery_market": {
+            "provider": "sporttery",
+            "had_odds": {"home_win": 1.9, "draw": 3.1, "away_win": 3.8},
+            "had_implied_probabilities": {"home_win": 0.48, "draw": 0.29, "away_win": 0.23},
             "home_handicap": -1,
             "hhad_odds": {"home_win": 2.1, "draw": 3.4, "away_win": 3.0},
+            "hhad_implied_probabilities": {"home_win": 0.32, "draw": 0.28, "away_win": 0.40},
+            "observed_at": "2026-08-11T12:00:00+00:00",
         },
-        "handicap_conclusion": {"outcome": "away", "probability": 0.45},
+        "handicap_conclusion": {
+            "home_handicap": -1,
+            "outcome": "away",
+            "probability": 0.40,
+            "margin_to_runner_up": 0.08,
+            "clarity": "clear",
+        },
+    }
+
+
+def test_sporttery_market_serializes_had_without_hhad():
+    market = SportteryMarket(
+        had_implied_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.28, away_win=0.22),
+        observed_at="2026-08-11T12:00:00+00:00",
+    )
+
+    assert market.model_dump(mode="json") == {
+        "provider": "sporttery",
+        "had_odds": None,
+        "had_implied_probabilities": {"home_win": 0.5, "draw": 0.28, "away_win": 0.22},
+        "home_handicap": None,
+        "hhad_odds": None,
+        "hhad_implied_probabilities": None,
+        "observed_at": "2026-08-11T12:00:00+00:00",
     }
 
 

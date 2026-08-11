@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from backend.auth import db as auth_db
 from backend.football_osint.models import (
+    FactorImpact,
     FootballOsintJob,
     FootballOsintJobStatus,
     HandicapConclusion,
@@ -280,3 +281,82 @@ def test_partly_applied_sporttery_migration_adds_remaining_columns(tmp_path, mon
         "actual_hhad_outcome",
         "hhad_correct",
     } <= columns
+
+
+def test_mocked_sporttery_pipeline_prediction_persists_and_settles_handicap(tmp_path, monkeypatch):
+    """Exercise the official-market path from pipeline result through history."""
+    from datetime import datetime, timezone
+
+    from backend.football_osint import pipeline, track_record
+    from backend.football_osint.adapters import football_data_schedule
+    from backend.football_osint.adapters.sporttery import SportteryOdds
+    from backend.football_osint.history import get_history_detail
+
+    storage = tmp_path / "bronze_storage"
+    storage.mkdir()
+    monkeypatch.setattr(auth_db, "STORAGE_ROOT", storage)
+    monkeypatch.setattr(auth_db, "DB_PATH", storage / "_auth.db")
+    monkeypatch.setattr(auth_db, "_local", threading.local())
+    conn = auth_db.get_db()
+
+    odds = SportteryOdds(
+        home_team="主队", away_team="客队", kickoff_at="2026-05-01 19:00",
+        had_h=2.10, had_d=3.40, had_a=3.60,
+        hhad_h=2.00, hhad_d=3.20, hhad_a=3.80, hhad_goal_line="+1", league="测试联赛",
+    )
+    factors = [
+        FactorImpact(
+            factor_id="form.recent_signal", label="主队近期状态", group="form",
+            direction="home", weight=0.30, impact=0.18, confidence=0.80, enabled=True,
+        ),
+        FactorImpact(
+            factor_id="h2h.relevance", label="主队交锋优势", group="h2h",
+            direction="home", weight=0.20, impact=0.12, confidence=0.75, enabled=True,
+        ),
+    ]
+
+    monkeypatch.setattr(pipeline, "_collect_farich_foot_sources", lambda request, evidence, sources: None)
+    monkeypatch.setattr(pipeline, "_collect_one_weather", lambda request, evidence: ("", "disabled"))
+    monkeypatch.setattr(
+        pipeline, "_collect_search_sources",
+        lambda request, evidence, sources: pipeline.data_quality_module.SearchQualityStats(),
+    )
+    monkeypatch.setattr(pipeline.rss_adapter, "collect_all", lambda request, evidence: [])
+    monkeypatch.setattr(pipeline, "_collect_football_data_stats", lambda request, evidence, sources: None)
+    monkeypatch.setattr(pipeline.factor_registry_module, "build_factors", lambda *args, **kwargs: factors)
+    monkeypatch.setattr(pipeline.sporttery_adapter, "get_odds", lambda *args, **kwargs: odds)
+
+    job = pipeline.run_prediction_sync(
+        {
+            "home_team": "主队",
+            "away_team": "客队",
+            "kickoff_at": "2026-05-01 19:00",
+            "competition": "测试联赛",
+        },
+        storage_root=storage / "football_osint",
+    )
+
+    assert job.prediction is not None
+    assert job.prediction.summary
+    assert len(set(job.prediction.outcome_probabilities.model_dump().values())) == 3
+    assert sum(job.prediction.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
+    assert isinstance(job.prediction.sporttery_market, SportteryMarket)
+    assert job.prediction.sporttery_market.home_handicap == 1
+    assert next(source for source in job.sources if source.adapter == "sporttery").status == "ok"
+    assert job.prediction.handicap_conclusion is not None
+    assert job.prediction.handicap_conclusion.home_handicap == 1
+
+    assert track_record.record_if_definite(job, conn=conn) is True
+    settled_fixture = football_data_schedule.Fixture(
+        match_id="settled", league="测试联赛",
+        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+        home_team="主队", away_team="客队", status="finished", home_score=1, away_score=2,
+    )
+    monkeypatch.setattr(
+        football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [settled_fixture]
+    )
+
+    assert track_record.settle_pending(conn=conn) == 1
+    detail = get_history_detail(job.job_id, paid=False)
+    assert detail is not None
+    assert detail["record"]["sporttery_handicap"]["actual_outcome"] == "draw"

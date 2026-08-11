@@ -22,8 +22,9 @@ from typing import Any
 import httpx
 
 from .. import cache
+from ..analysis.market import normalize_decimal_odds, parse_home_handicap
 from ..evidence import append_evidence
-from ..models import FootballOsintJobRequest, OsintEvidence
+from ..models import FootballOsintJobRequest, OsintEvidence, OutcomeOdds, SportteryMarket
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +72,42 @@ class SportteryOdds:
     hhad_a: float | None = None
     hhad_goal_line: str = ""
     league: str = ""
+
+
+def market_snapshot(odds: SportteryOdds, *, observed_at: str) -> SportteryMarket | None:
+    """Build a typed, de-margined market snapshot from Sporttery odds."""
+    if min(odds.had_h, odds.had_d, odds.had_a) <= 0:
+        return None
+
+    had_odds = OutcomeOdds(
+        home_win=odds.had_h,
+        draw=odds.had_d,
+        away_win=odds.had_a,
+    )
+    home_handicap = parse_home_handicap(odds.hhad_goal_line)
+    hhad_values = (odds.hhad_h, odds.hhad_d, odds.hhad_a)
+    has_valid_hhad = home_handicap is not None and all(
+        value is not None and value > 0 for value in hhad_values
+    )
+    hhad_odds = None
+    hhad_probabilities = None
+    if has_valid_hhad:
+        hhad_odds = OutcomeOdds(
+            home_win=odds.hhad_h,
+            draw=odds.hhad_d,
+            away_win=odds.hhad_a,
+        )
+        hhad_probabilities = normalize_decimal_odds(hhad_odds)
+
+    return SportteryMarket(
+        provider="sporttery",
+        had_odds=had_odds,
+        had_implied_probabilities=normalize_decimal_odds(had_odds),
+        home_handicap=home_handicap if has_valid_hhad else None,
+        hhad_odds=hhad_odds,
+        hhad_implied_probabilities=hhad_probabilities,
+        observed_at=observed_at,
+    )
 
 
 def _headers() -> dict[str, str]:
@@ -245,7 +282,46 @@ def fetch_fixtures_for_range(date_from: str, date_to: str) -> list[SportteryFixt
     return in_range
 
 
-def get_odds(home_team: str, away_team: str, kickoff_at: str = "") -> SportteryOdds | None:
+def _normalise_team_name(name: str) -> str:
+    return " ".join(name.split()).casefold()
+
+
+def _kickoff_date(kickoff_at: str) -> str | None:
+    """Return the CST calendar date for a parseable kickoff string."""
+    value = kickoff_at.strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(value, fmt).replace(tzinfo=CST)
+                break
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=CST)
+    return parsed.astimezone(CST).date().isoformat()
+
+
+def _find_match(raw_data: dict, match_id: str) -> dict | None:
+    for date_info in (raw_data.get("value") or {}).get("matchInfoList") or []:
+        for match in date_info.get("subMatchList") or []:
+            if str(match.get("matchId", "")) == match_id:
+                return match
+    return None
+
+
+def get_odds(
+    home_team: str,
+    away_team: str,
+    kickoff_at: str = "",
+    *,
+    provider_match_id: str = "",
+) -> SportteryOdds | None:
     """Look up odds for a specific match by team names.
 
     Returns None if the match is not found in the current sporttery data.
@@ -257,45 +333,51 @@ def get_odds(home_team: str, away_team: str, kickoff_at: str = "") -> SportteryO
     # Also try HHAD for handicap data
     hhad_data = _fetch_raw("hhad")
 
-    home_n = home_team.strip()
-    away_n = away_team.strip()
+    home_n = _normalise_team_name(home_team)
+    away_n = _normalise_team_name(away_team)
+    kickoff_date = _kickoff_date(kickoff_at)
 
     match_info_list = (data.get("value") or {}).get("matchInfoList") or []
-    for date_info in match_info_list:
-        for m in date_info.get("subMatchList") or []:
-            m_home = (m.get("homeTeamAllName") or m.get("homeTeamAbbName") or "").strip()
-            m_away = (m.get("awayTeamAllName") or m.get("awayTeamAbbName") or "").strip()
-            if m_home == home_n and m_away == away_n:
-                had = _parse_odds(m.get("had") or {})
+    selected = _find_match(data, provider_match_id.strip()) if provider_match_id.strip() else None
+    if selected is None:
+        for date_info in match_info_list:
+            for match in date_info.get("subMatchList") or []:
+                match_home = _normalise_team_name(match.get("homeTeamAllName") or match.get("homeTeamAbbName") or "")
+                match_away = _normalise_team_name(match.get("awayTeamAllName") or match.get("awayTeamAbbName") or "")
+                if match_home != home_n or match_away != away_n:
+                    continue
+                if kickoff_date is not None and match.get("matchDate") != kickoff_date:
+                    continue
+                selected = match
+                break
+            if selected is not None:
+                break
 
-                # Look up HHAD odds from the HHAD data if available
-                hhad: dict[str, float] = {}
-                hhad_goal_line = ""
-                if hhad_data:
-                    for di2 in (hhad_data.get("value") or {}).get("matchInfoList") or []:
-                        for m2 in di2.get("subMatchList") or []:
-                            if str(m2.get("matchId", "")) == str(m.get("matchId", "")):
-                                hhad = _parse_odds(m2.get("hhad") or {})
-                                hhad_goal_line = (m2.get("hhad") or {}).get("goalLine", "")
-                                break
-                        if hhad:
-                            break
+    if selected is None:
+        return None
 
-                return SportteryOdds(
-                    home_team=home_n,
-                    away_team=away_n,
-                    kickoff_at=f"{m.get('matchDate', '')} {m.get('matchTime', '')}",
-                    had_h=had.get("h", 0.0),
-                    had_d=had.get("d", 0.0),
-                    had_a=had.get("a", 0.0),
-                    hhad_h=hhad.get("h") if hhad else None,
-                    hhad_d=hhad.get("d") if hhad else None,
-                    hhad_a=hhad.get("a") if hhad else None,
-                    hhad_goal_line=hhad_goal_line,
-                    league=m.get("leagueAllName") or m.get("leagueAbbName", ""),
-                )
+    had = _parse_odds(selected.get("had") or {})
+    hhad: dict[str, float] = {}
+    hhad_goal_line = ""
+    if hhad_data:
+        hhad_match = _find_match(hhad_data, str(selected.get("matchId", "")))
+        if hhad_match is not None:
+            hhad = _parse_odds(hhad_match.get("hhad") or {})
+            hhad_goal_line = (hhad_match.get("hhad") or {}).get("goalLine", "")
 
-    return None
+    return SportteryOdds(
+        home_team=home_team.strip(),
+        away_team=away_team.strip(),
+        kickoff_at=f"{selected.get('matchDate', '')} {selected.get('matchTime', '')}",
+        had_h=had.get("h", 0.0),
+        had_d=had.get("d", 0.0),
+        had_a=had.get("a", 0.0),
+        hhad_h=hhad.get("h") if hhad else None,
+        hhad_d=hhad.get("d") if hhad else None,
+        hhad_a=hhad.get("a") if hhad else None,
+        hhad_goal_line=hhad_goal_line,
+        league=selected.get("leagueAllName") or selected.get("leagueAbbName", ""),
+    )
 
 
 def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:
@@ -304,7 +386,12 @@ def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> 
     Returns (evidence_id, error_reason) compatible with the pipeline collector
     pattern (same signature as open_meteo.collect).
     """
-    odds = get_odds(request.home_team, request.away_team, request.kickoff_at)
+    odds = get_odds(
+        request.home_team,
+        request.away_team,
+        request.kickoff_at,
+        provider_match_id=request.provider_match_id,
+    )
     if odds is None:
         return "", "体彩未覆盖该场比赛"
 

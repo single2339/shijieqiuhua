@@ -68,6 +68,24 @@ def test_outcome_probabilities_reject_values_above_one():
         OutcomeProbabilities(home_win=1.01, draw=0.0, away_win=0.0)
 
 
+def test_outcome_probabilities_reject_total_other_than_one():
+    with pytest.raises(ValidationError):
+        OutcomeProbabilities(home_win=0.5, draw=0.3, away_win=0.3)
+
+
+def test_prediction_result_rejects_inconsistent_derived_fields():
+    with pytest.raises(ValidationError):
+        PredictionResult(
+            lean="home",
+            summary="主队略占优",
+            outcome_probabilities=OutcomeProbabilities(home_win=0.48, draw=0.29, away_win=0.23),
+            primary_probability=0.48,
+            margin_to_runner_up=0.10,
+            clarity="close",
+            scoreline_band=["2-1"],
+        )
+
+
 def test_legacy_probability_band_is_converted_to_normalized_exact_probabilities():
     prediction = PredictionResult.model_validate({
         "lean": "home",

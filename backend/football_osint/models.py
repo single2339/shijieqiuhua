@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from math import isclose
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -94,6 +95,12 @@ class OutcomeProbabilities(BaseModel):
     draw: float = Field(ge=0.0, le=1.0)
     away_win: float = Field(ge=0.0, le=1.0)
 
+    @model_validator(mode="after")
+    def validate_total(self) -> OutcomeProbabilities:
+        if not isclose(self.home_win + self.draw + self.away_win, 1.0, abs_tol=1e-5):
+            raise ValueError("outcome probabilities must sum to 1")
+        return self
+
 
 class OutcomeOdds(BaseModel):
     home_win: float = Field(gt=0.0)
@@ -156,6 +163,24 @@ class PredictionResult(BaseModel):
             else "clear" if ranked[0] - ranked[1] >= 0.05 else "close"
         )
         return payload
+
+    @model_validator(mode="after")
+    def validate_derived_fields(self) -> PredictionResult:
+        ranked = sorted(self.outcome_probabilities.model_dump().values(), reverse=True)
+        primary_probability = ranked[0]
+        margin_to_runner_up = primary_probability - ranked[1]
+        clarity = (
+            "insufficient"
+            if self.lean == "info_insufficient"
+            else "clear" if margin_to_runner_up >= 0.05 else "close"
+        )
+        if not isclose(self.primary_probability, primary_probability, abs_tol=1e-6):
+            raise ValueError("primary_probability must match the highest outcome probability")
+        if not isclose(self.margin_to_runner_up, margin_to_runner_up, abs_tol=1e-6):
+            raise ValueError("margin_to_runner_up must match the top-two probability margin")
+        if self.clarity != clarity:
+            raise ValueError("clarity must match the lean and top-two probability margin")
+        return self
 
 
 class ConfidenceRating(BaseModel):

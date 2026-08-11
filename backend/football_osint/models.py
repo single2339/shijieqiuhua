@@ -139,10 +139,14 @@ class HandicapConclusion(BaseModel):
 
     @model_validator(mode="after")
     def validate_derived_fields(self) -> HandicapConclusion:
-        ranked = sorted(self.handicap_probabilities.model_dump().values(), reverse=True)
+        probabilities = self.handicap_probabilities.model_dump()
+        ranked = sorted(probabilities.values(), reverse=True)
         probability = ranked[0]
         margin_to_runner_up = probability - ranked[1]
         clarity = "clear" if margin_to_runner_up >= 0.05 else "close"
+        outcome_key = {"home": "home_win", "draw": "draw", "away": "away_win"}[self.outcome]
+        if not isclose(probabilities[outcome_key], probability, abs_tol=1e-6):
+            raise ValueError("outcome must match the highest handicap probability")
         if not isclose(self.probability, probability, abs_tol=1e-6):
             raise ValueError("probability must match the highest handicap probability")
         if not isclose(self.margin_to_runner_up, margin_to_runner_up, abs_tol=1e-6):

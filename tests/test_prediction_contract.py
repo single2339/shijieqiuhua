@@ -177,6 +177,18 @@ def test_handicap_conclusion_rejects_inconsistent_probability_metrics():
         )
 
 
+def test_handicap_conclusion_rejects_outcome_not_matching_highest_probability():
+    with pytest.raises(ValidationError):
+        HandicapConclusion(
+            home_handicap=-1,
+            outcome="home",
+            handicap_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
+            probability=0.40,
+            margin_to_runner_up=0.08,
+            clarity="clear",
+        )
+
+
 def test_outcome_probabilities_reject_values_above_one():
     with pytest.raises(ValidationError):
         OutcomeProbabilities(home_win=1.01, draw=0.0, away_win=0.0)

@@ -40,6 +40,7 @@ def test_prediction_result_serializes_exact_outcomes_and_sporttery_fields():
         handicap_conclusion=HandicapConclusion(
             home_handicap=-1,
             outcome="away",
+            handicap_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
             probability=0.40,
             margin_to_runner_up=0.08,
             clarity="clear",
@@ -77,6 +78,7 @@ def test_prediction_result_serializes_exact_outcomes_and_sporttery_fields():
         "handicap_conclusion": {
             "home_handicap": -1,
             "outcome": "away",
+            "handicap_probabilities": {"home_win": 0.32, "draw": 0.28, "away_win": 0.40},
             "probability": 0.40,
             "margin_to_runner_up": 0.08,
             "clarity": "clear",
@@ -99,6 +101,80 @@ def test_sporttery_market_serializes_had_without_hhad():
         "hhad_implied_probabilities": None,
         "observed_at": "2026-08-11T12:00:00+00:00",
     }
+
+
+def test_sporttery_market_rejects_incomplete_hhad_group():
+    with pytest.raises(ValidationError):
+        SportteryMarket(
+            had_implied_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.28, away_win=0.22),
+            home_handicap=-1,
+            observed_at="2026-08-11T12:00:00+00:00",
+        )
+
+
+def test_prediction_result_rejects_handicap_conclusion_without_complete_hhad_market():
+    with pytest.raises(ValidationError):
+        PredictionResult(
+            lean="home",
+            summary="主队略占优",
+            outcome_probabilities=OutcomeProbabilities(home_win=0.48, draw=0.29, away_win=0.23),
+            primary_probability=0.48,
+            margin_to_runner_up=0.19,
+            clarity="clear",
+            scoreline_band=[],
+            sporttery_market=SportteryMarket(
+                had_implied_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.28, away_win=0.22),
+                observed_at="2026-08-11T12:00:00+00:00",
+            ),
+            handicap_conclusion=HandicapConclusion(
+                home_handicap=-1,
+                outcome="away",
+                handicap_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
+                probability=0.40,
+                margin_to_runner_up=0.08,
+                clarity="clear",
+            ),
+        )
+
+
+def test_prediction_result_rejects_handicap_conclusion_with_different_handicap():
+    with pytest.raises(ValidationError):
+        PredictionResult(
+            lean="home",
+            summary="主队略占优",
+            outcome_probabilities=OutcomeProbabilities(home_win=0.48, draw=0.29, away_win=0.23),
+            primary_probability=0.48,
+            margin_to_runner_up=0.19,
+            clarity="clear",
+            scoreline_band=[],
+            sporttery_market=SportteryMarket(
+                had_implied_probabilities=OutcomeProbabilities(home_win=0.48, draw=0.29, away_win=0.23),
+                home_handicap=-1,
+                hhad_odds=OutcomeOdds(home_win=2.1, draw=3.4, away_win=3.0),
+                hhad_implied_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
+                observed_at="2026-08-11T12:00:00+00:00",
+            ),
+            handicap_conclusion=HandicapConclusion(
+                home_handicap=-2,
+                outcome="away",
+                handicap_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
+                probability=0.40,
+                margin_to_runner_up=0.08,
+                clarity="clear",
+            ),
+        )
+
+
+def test_handicap_conclusion_rejects_inconsistent_probability_metrics():
+    with pytest.raises(ValidationError):
+        HandicapConclusion(
+            home_handicap=-1,
+            outcome="away",
+            handicap_probabilities=OutcomeProbabilities(home_win=0.32, draw=0.28, away_win=0.40),
+            probability=0.40,
+            margin_to_runner_up=0.04,
+            clarity="close",
+        )
 
 
 def test_outcome_probabilities_reject_values_above_one():

@@ -117,13 +117,39 @@ class SportteryMarket(BaseModel):
     hhad_implied_probabilities: OutcomeProbabilities | None = None
     observed_at: str
 
+    @model_validator(mode="after")
+    def validate_hhad_group(self) -> SportteryMarket:
+        hhad_fields = (
+            self.home_handicap,
+            self.hhad_odds,
+            self.hhad_implied_probabilities,
+        )
+        if any(field is not None for field in hhad_fields) and not all(field is not None for field in hhad_fields):
+            raise ValueError("home_handicap, hhad_odds, and hhad_implied_probabilities must be provided together")
+        return self
+
 
 class HandicapConclusion(BaseModel):
     home_handicap: int
     outcome: Literal["home", "draw", "away"]
+    handicap_probabilities: OutcomeProbabilities
     probability: float = Field(ge=0.0, le=1.0)
     margin_to_runner_up: float = Field(ge=0.0, le=1.0)
     clarity: Literal["clear", "close"]
+
+    @model_validator(mode="after")
+    def validate_derived_fields(self) -> HandicapConclusion:
+        ranked = sorted(self.handicap_probabilities.model_dump().values(), reverse=True)
+        probability = ranked[0]
+        margin_to_runner_up = probability - ranked[1]
+        clarity = "clear" if margin_to_runner_up >= 0.05 else "close"
+        if not isclose(self.probability, probability, abs_tol=1e-6):
+            raise ValueError("probability must match the highest handicap probability")
+        if not isclose(self.margin_to_runner_up, margin_to_runner_up, abs_tol=1e-6):
+            raise ValueError("margin_to_runner_up must match the top-two handicap probability margin")
+        if self.clarity != clarity:
+            raise ValueError("clarity must match the top-two handicap probability margin")
+        return self
 
 
 class PredictionResult(BaseModel):
@@ -188,6 +214,17 @@ class PredictionResult(BaseModel):
             raise ValueError("margin_to_runner_up must match the top-two probability margin")
         if self.clarity != clarity:
             raise ValueError("clarity must match the lean and top-two probability margin")
+        if self.handicap_conclusion is not None:
+            market = self.sporttery_market
+            if (
+                market is None
+                or market.home_handicap is None
+                or market.hhad_odds is None
+                or market.hhad_implied_probabilities is None
+            ):
+                raise ValueError("handicap_conclusion requires a complete HHAD market")
+            if self.handicap_conclusion.home_handicap != market.home_handicap:
+                raise ValueError("handicap_conclusion home_handicap must match the HHAD market")
         return self
 
 

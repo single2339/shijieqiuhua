@@ -160,6 +160,7 @@ export interface SportteryMarket {
 export interface HandicapConclusion {
   home_handicap: number
   outcome: 'home' | 'draw' | 'away'
+  handicap_probabilities: OutcomeProbabilities
   probability: number
   margin_to_runner_up: number
   clarity: 'clear' | 'close'

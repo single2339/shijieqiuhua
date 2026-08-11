@@ -10,6 +10,9 @@ const LEAN_LABEL: Record<string, string> = {
 const OUTCOME_LABEL: Record<string, string> = {
   home: '主队赢', away: '客队赢', draw: '平局',
 }
+const HANDICAP_OUTCOME_LABEL: Record<string, string> = {
+  home: '让胜', away: '让负', draw: '让平',
+}
 
 interface PostMatchReviewProps {
   detail: HistoryDetail | null
@@ -24,6 +27,8 @@ export default function PostMatchReview({ detail, loading, userTier, onUpgrade }
 
   const { record, retrospective, factors_expired } = detail
   const canDeep = userTier === 'paid'
+  const handicap = record.sporttery_handicap
+  const handicapSummary = handicap && `体彩让球（主队 ${handicap.home_handicap >= 0 ? '+' : ''}${handicap.home_handicap}）｜研判：${HANDICAP_OUTCOME_LABEL[handicap.predicted_outcome]}（${Math.round(handicap.predicted_probability * 100)}%）｜赛果：${handicap.actual_outcome ? HANDICAP_OUTCOME_LABEL[handicap.actual_outcome] : '—'}｜${handicap.correct === true ? '命中' : handicap.correct === false ? '未中' : '待结算'}`
 
   return (
     <div className="sqh-pmr">
@@ -74,6 +79,8 @@ export default function PostMatchReview({ detail, loading, userTier, onUpgrade }
           </>
         )}
       </div>
+
+      {handicapSummary && <div className="sqh-pmr-handicap">{handicapSummary}</div>}
 
       <div className={canDeep ? '' : 'sqh-report-locked'}>
         {!canDeep && (

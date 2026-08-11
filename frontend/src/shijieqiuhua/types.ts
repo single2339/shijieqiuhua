@@ -260,6 +260,15 @@ export interface HistoryRecord {
   lean_correct: boolean | null
   scoreline_hit: boolean | null
   settled_at: string
+  sporttery_handicap?: SportteryHandicapSettlement
+}
+
+export interface SportteryHandicapSettlement {
+  home_handicap: number
+  predicted_outcome: 'home' | 'draw' | 'away'
+  predicted_probability: number
+  actual_outcome: 'home' | 'draw' | 'away' | null
+  correct: boolean | null
 }
 
 export interface Retrospective {

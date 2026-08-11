@@ -138,6 +138,8 @@ def get_history_detail(job_id: str, *, paid: bool) -> dict | None:
                predicted_lean, predicted_scoreline_band,
                actual_home_score, actual_away_score, actual_outcome,
                lean_correct, scoreline_hit, settled_at,
+               sporttery_home_handicap, predicted_hhad_outcome, predicted_hhad_probability,
+               actual_hhad_outcome, hhad_correct,
                match_key, question_kind, question_id, question_hash, warm_window,
                cache_source, record_role, stats_primary, excluded_reason, created_from_job_id
         FROM prediction_record
@@ -176,6 +178,14 @@ def get_history_detail(job_id: str, *, paid: bool) -> dict | None:
             "created_from_job_id": row["created_from_job_id"],
         }
     }
+    if row["predicted_hhad_outcome"] is not None:
+        result["record"]["sporttery_handicap"] = {
+            "home_handicap": row["sporttery_home_handicap"],
+            "predicted_outcome": row["predicted_hhad_outcome"],
+            "predicted_probability": row["predicted_hhad_probability"],
+            "actual_outcome": row["actual_hhad_outcome"],
+            "correct": _row_bool(row["hhad_correct"]),
+        }
 
     if not paid:
         return result

@@ -142,6 +142,38 @@ def test_history_detail_base_fields_for_free_user(tmp_db):
     assert "retrospective" not in result
 
 
+def test_history_detail_includes_predicted_sporttery_handicap_for_free_user(tmp_db):
+    _insert_record(tmp_db)
+    tmp_db.execute(
+        """
+        UPDATE prediction_record
+        SET sporttery_home_handicap=1, predicted_hhad_outcome='draw',
+            predicted_hhad_probability=0.41, actual_hhad_outcome='draw', hhad_correct=1
+        WHERE job_id='job1'
+        """
+    )
+    tmp_db.commit()
+
+    from backend.football_osint.history import get_history_detail
+    result = get_history_detail("job1", paid=False)
+
+    assert result["record"]["sporttery_handicap"] == {
+        "home_handicap": 1,
+        "predicted_outcome": "draw",
+        "predicted_probability": 0.41,
+        "actual_outcome": "draw",
+        "correct": True,
+    }
+    assert "retrospective" not in result
+
+
+def test_history_detail_omits_sporttery_handicap_when_not_predicted(tmp_db):
+    _insert_record(tmp_db)
+    from backend.football_osint.history import get_history_detail
+
+    assert "sporttery_handicap" not in get_history_detail("job1", paid=False)["record"]
+
+
 def test_history_detail_paid_gets_factors_expired_when_no_bronze(tmp_db):
     _insert_record(tmp_db)
     from backend.football_osint.history import get_history_detail

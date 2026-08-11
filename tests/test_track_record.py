@@ -104,7 +104,8 @@ from datetime import datetime, timedelta, timezone
 from backend.football_osint import track_record
 from backend.football_osint.adapters import football_data_schedule
 from backend.football_osint.models import (
-    FootballOsintJob, FootballOsintJobStatus, OsintMatch, PredictionResult,
+    FootballOsintJob, FootballOsintJobStatus, HandicapConclusion, OsintMatch,
+    OutcomeOdds, OutcomeProbabilities, PredictionResult, SportteryMarket,
 )
 
 
@@ -124,6 +125,34 @@ def _job(lean="home", status=FootballOsintJobStatus.COMPLETED, job_id="job1",
     )
 
 
+def _with_handicap_conclusion(job, *, handicap=1, outcome="draw", probability=0.41):
+    job.prediction = PredictionResult(
+        lean=job.prediction.lean,
+        summary="",
+        outcome_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.30, away_win=0.20),
+        primary_probability=0.50,
+        margin_to_runner_up=0.20,
+        clarity="clear",
+        scoreline_band=job.prediction.scoreline_band,
+        sporttery_market=SportteryMarket(
+            had_implied_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.30, away_win=0.20),
+            home_handicap=handicap,
+            hhad_odds=OutcomeOdds(home_win=2.0, draw=3.0, away_win=4.0),
+            hhad_implied_probabilities=OutcomeProbabilities(home_win=0.30, draw=probability, away_win=0.29),
+            observed_at="2026-05-01T10:00:00+00:00",
+        ),
+        handicap_conclusion=HandicapConclusion(
+            home_handicap=handicap,
+            outcome=outcome,
+            handicap_probabilities=OutcomeProbabilities(home_win=0.30, draw=probability, away_win=0.29),
+            probability=probability,
+            margin_to_runner_up=probability - 0.30,
+            clarity="clear",
+        ),
+    )
+    return job
+
+
 def test_record_if_definite_inserts_row_for_definite_lean(tmp_db):
     inserted = track_record.record_if_definite(_job(lean="home"), conn=tmp_db)
     assert inserted is True
@@ -131,6 +160,32 @@ def test_record_if_definite_inserts_row_for_definite_lean(tmp_db):
     assert row["predicted_lean"] == "home"
     assert json.loads(row["predicted_scoreline_band"]) == ["1-1", "2-1"]
     assert row["settled_at"] is None
+
+
+def test_record_if_definite_persists_handicap_conclusion(tmp_db):
+    job = _with_handicap_conclusion(_job())
+
+    assert track_record.record_if_definite(job, conn=tmp_db) is True
+
+    row = tmp_db.execute(
+        "SELECT sporttery_home_handicap, predicted_hhad_outcome, predicted_hhad_probability "
+        "FROM prediction_record WHERE job_id='job1'"
+    ).fetchone()
+    assert dict(row) == {
+        "sporttery_home_handicap": 1,
+        "predicted_hhad_outcome": "draw",
+        "predicted_hhad_probability": 0.41,
+    }
+
+
+def test_record_if_definite_leaves_handicap_columns_null_without_conclusion(tmp_db):
+    assert track_record.record_if_definite(_job(), conn=tmp_db) is True
+
+    row = tmp_db.execute(
+        "SELECT sporttery_home_handicap, predicted_hhad_outcome, predicted_hhad_probability "
+        "FROM prediction_record WHERE job_id='job1'"
+    ).fetchone()
+    assert tuple(row) == (None, None, None)
 
 
 def test_record_if_definite_records_info_insufficient_for_history(tmp_db):
@@ -172,6 +227,63 @@ def test_settle_pending_resolves_match_and_computes_correctness(tmp_db, monkeypa
     assert row["lean_correct"] == 1
     assert row["scoreline_hit"] == 1
     assert row["settled_at"] is not None
+
+
+def test_settle_pending_settles_stored_handicap_prediction(tmp_db, monkeypatch):
+    track_record.record_if_definite(_with_handicap_conclusion(_job()), conn=tmp_db)
+    fake_fixture = football_data_schedule.Fixture(
+        match_id="hhad-hit", league="EPL",
+        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+        home_team="曼城", away_team="利物浦", status="finished",
+        home_score=1, away_score=2,
+    )
+    monkeypatch.setattr(
+        football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [fake_fixture]
+    )
+
+    assert track_record.settle_pending(conn=tmp_db) == 1
+    row = tmp_db.execute(
+        "SELECT actual_hhad_outcome, hhad_correct FROM prediction_record WHERE job_id='job1'"
+    ).fetchone()
+    assert dict(row) == {"actual_hhad_outcome": "draw", "hhad_correct": 1}
+
+
+def test_settle_pending_marks_mismatched_handicap_prediction_incorrect(tmp_db, monkeypatch):
+    track_record.record_if_definite(_with_handicap_conclusion(_job()), conn=tmp_db)
+    fake_fixture = football_data_schedule.Fixture(
+        match_id="hhad-miss", league="EPL",
+        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+        home_team="曼城", away_team="利物浦", status="finished",
+        home_score=3, away_score=1,
+    )
+    monkeypatch.setattr(
+        football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [fake_fixture]
+    )
+
+    assert track_record.settle_pending(conn=tmp_db) == 1
+    row = tmp_db.execute(
+        "SELECT actual_hhad_outcome, hhad_correct FROM prediction_record WHERE job_id='job1'"
+    ).fetchone()
+    assert dict(row) == {"actual_hhad_outcome": "home", "hhad_correct": 0}
+
+
+def test_settle_pending_leaves_handicap_settlement_null_without_prediction(tmp_db, monkeypatch):
+    track_record.record_if_definite(_job(), conn=tmp_db)
+    fake_fixture = football_data_schedule.Fixture(
+        match_id="no-hhad", league="EPL",
+        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
+        home_team="曼城", away_team="利物浦", status="finished",
+        home_score=2, away_score=1,
+    )
+    monkeypatch.setattr(
+        football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [fake_fixture]
+    )
+
+    assert track_record.settle_pending(conn=tmp_db) == 1
+    row = tmp_db.execute(
+        "SELECT actual_hhad_outcome, hhad_correct FROM prediction_record WHERE job_id='job1'"
+    ).fetchone()
+    assert tuple(row) == (None, None)
 
 
 def test_settle_pending_scores_double_chance_predictions(tmp_db, monkeypatch):

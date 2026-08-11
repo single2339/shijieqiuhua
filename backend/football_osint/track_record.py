@@ -15,6 +15,7 @@ from pathlib import Path
 from backend.auth.db import get_db
 from backend.football_osint.adapters import football_data_schedule
 from backend.football_osint.adapters import sporttery as sporttery_adapter
+from backend.football_osint.analysis.market import settle_handicap
 from backend.football_osint.models import FootballOsintJob, FootballOsintJobStatus
 from backend.football_osint.storage import DEFAULT_STORAGE_ROOT
 
@@ -45,24 +46,32 @@ def record_if_definite(
 
     c = conn or get_db()
     meta = _record_metadata(job, metadata)
+    handicap_conclusion = job.prediction.handicap_conclusion
+    handicap_values = (
+        handicap_conclusion.home_handicap,
+        handicap_conclusion.outcome,
+        handicap_conclusion.probability,
+    ) if handicap_conclusion is not None else (None, None, None)
     try:
         c.execute(
             """
             INSERT INTO prediction_record
               (job_id, home_team, away_team, kickoff_at, competition,
                predicted_lean, predicted_scoreline_band, created_at,
+               sporttery_home_handicap, predicted_hhad_outcome, predicted_hhad_probability,
                match_key, question_kind, question_id, question_hash,
                warm_window, cache_source, record_role, stats_primary,
                excluded_reason, created_from_job_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job.job_id, job.match.home_team, job.match.away_team,
                 job.match.kickoff_at, job.match.competition,
                 job.prediction.lean, json.dumps(job.prediction.scoreline_band, ensure_ascii=False),
-                job.created_at, meta["match_key"], meta["question_kind"], meta["question_id"],
+                job.created_at, *handicap_values,
+                meta["match_key"], meta["question_kind"], meta["question_id"],
                 meta["question_hash"], meta["warm_window"], meta["cache_source"],
-                "history_detail", "", job.job_id,
+                "history_detail", 0, "", job.job_id,
             ),
         )
         select_stats_primary(c, meta["match_key"])
@@ -269,7 +278,8 @@ def settle_pending(*, conn: sqlite3.Connection | None = None) -> int:
     c = conn or get_db()
     rows = c.execute(
         "SELECT job_id, home_team, away_team, kickoff_at, predicted_lean, "
-        "predicted_scoreline_band, created_at FROM prediction_record WHERE settled_at IS NULL"
+        "predicted_scoreline_band, created_at, sporttery_home_handicap, "
+        "predicted_hhad_outcome FROM prediction_record WHERE settled_at IS NULL"
     ).fetchall()
 
     settled = 0
@@ -295,15 +305,31 @@ def settle_pending(*, conn: sqlite3.Connection | None = None) -> int:
             log.warning("prediction_record %s has malformed scoreline band", row["job_id"])
             band = []
         scoreline_hit = None if predicted_lean == "info_insufficient" else (1 if f"{home_score}-{away_score}" in band else 0)
+        home_handicap = row["sporttery_home_handicap"]
+        predicted_hhad_outcome = row["predicted_hhad_outcome"]
+        actual_hhad_outcome = (
+            settle_handicap(home_score, away_score, home_handicap)
+            if home_handicap is not None
+            else None
+        )
+        hhad_correct = (
+            (1 if actual_hhad_outcome == predicted_hhad_outcome else 0)
+            if actual_hhad_outcome is not None and predicted_hhad_outcome is not None
+            else None
+        )
 
         c.execute(
             """
             UPDATE prediction_record
             SET actual_home_score=?, actual_away_score=?, actual_outcome=?,
-                lean_correct=?, scoreline_hit=?, settled_at=datetime('now')
+                lean_correct=?, scoreline_hit=?, actual_hhad_outcome=?, hhad_correct=?,
+                settled_at=datetime('now')
             WHERE job_id=?
             """,
-            (home_score, away_score, actual_outcome, lean_correct, scoreline_hit, row["job_id"]),
+            (
+                home_score, away_score, actual_outcome, lean_correct, scoreline_hit,
+                actual_hhad_outcome, hhad_correct, row["job_id"],
+            ),
         )
         settled += 1
     c.commit()

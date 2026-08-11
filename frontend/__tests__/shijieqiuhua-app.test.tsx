@@ -63,6 +63,28 @@ describe('shijieqiuhua v2 review components', () => {
     expect(html).toContain('付费回顾注记')
   })
 
+  test('post-match review renders a stored Sporttery handicap settlement', () => {
+    const handicapDetail = {
+      ...detail,
+      record: {
+        ...detail.record,
+        sporttery_handicap: {
+          home_handicap: 1,
+          predicted_outcome: 'draw',
+          predicted_probability: 0.41,
+          actual_outcome: 'draw',
+          correct: true,
+        },
+      },
+    }
+    const html = renderToString(<PostMatchReview detail={handicapDetail} loading={false} userTier="free" />)
+
+    expect(html).toContain('体彩让球（主队 +1）')
+    expect(html).toContain('研判：让平（41%）')
+    expect(html).toContain('赛果：让平')
+    expect(html).toContain('命中')
+  })
+
   test('compare panel renders insufficient evidence bucket', () => {
     const html = renderToString(
       <ComparePanel

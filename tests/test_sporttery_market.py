@@ -11,7 +11,7 @@ from backend.football_osint.analysis.market import (
     score_matrix_probabilities,
     settle_handicap,
 )
-from backend.football_osint.models import OutcomeOdds
+from backend.football_osint.models import FootballOsintJobRequest, OutcomeOdds
 
 
 def _raw(matches: list[dict]) -> dict:
@@ -67,6 +67,22 @@ def test_handicap_probabilities_aggregates_each_score_once():
 
 
 @pytest.mark.parametrize(
+    "matrix",
+    [
+        {(1, 0): -0.1, (0, 0): 1.1},
+        {(1, 0): float("nan")},
+        {(1, 0): float("inf")},
+        {(1, 0): 0.0, (0, 0): 0.0},
+    ],
+)
+def test_score_matrix_helpers_reject_invalid_probability_mass(matrix):
+    with pytest.raises(ValueError):
+        score_matrix_probabilities(matrix)
+    with pytest.raises(ValueError):
+        handicap_probabilities(matrix, 1)
+
+
+@pytest.mark.parametrize(
     ("home_score", "away_score", "handicap", "outcome"),
     [(1, 1, 1, "home"), (1, 2, 1, "draw"), (1, 3, 1, "away")],
 )
@@ -116,6 +132,33 @@ def test_market_snapshot_rejects_non_positive_had_odds():
     assert sporttery.market_snapshot(odds, observed_at="now") is None
 
 
+@pytest.mark.parametrize("bad_odds", [float("nan"), float("inf")])
+def test_market_snapshot_rejects_non_finite_had_odds(bad_odds):
+    odds = SportteryOdds("主队", "客队", "", bad_odds, 3.5, 4.0)
+
+    assert sporttery.market_snapshot(odds, observed_at="now") is None
+
+
+@pytest.mark.parametrize("bad_odds", [float("nan"), float("inf")])
+def test_market_snapshot_suppresses_non_finite_hhad_odds(bad_odds):
+    odds = SportteryOdds("主队", "客队", "", 2.0, 3.5, 4.0, bad_odds, 3.6, 4.5, "+1")
+
+    market = sporttery.market_snapshot(odds, observed_at="now")
+
+    assert market is not None
+    assert market.home_handicap is None
+    assert market.hhad_odds is None
+    assert market.hhad_implied_probabilities is None
+
+
+def test_parse_odds_converts_non_finite_values_to_zero():
+    assert sporttery._parse_odds({"h": "NaN", "d": "inf", "a": "2.0"}) == {
+        "h": 0.0,
+        "d": 0.0,
+        "a": 2.0,
+    }
+
+
 def test_get_odds_uses_kickoff_date_to_disambiguate_duplicate_team_names(monkeypatch):
     had = _raw([_match("old", "2026-08-14"), _match("right", "2026-08-15")])
     hhad = _raw([_match("right", "2026-08-15", hhad={"h": "1.8", "d": "3.6", "a": "4.5", "goalLine": "+1"})])
@@ -132,7 +175,54 @@ def test_get_odds_prefers_official_provider_match_id(monkeypatch):
     hhad = _raw([])
     monkeypatch.setattr(sporttery, "_fetch_raw", lambda pool: had if pool == "had" else hhad)
 
-    odds = sporttery.get_odds("同名主队", "同名客队", "2026-08-15T19:30:00+08:00", provider_match_id="official")
+    odds = sporttery.get_odds(
+        "同名主队",
+        "同名客队",
+        "2026-08-15T19:30:00+08:00",
+        provider="sporttery",
+        provider_match_id="official",
+    )
 
     assert odds is not None
     assert odds.kickoff_at.startswith("2026-08-16")
+
+
+def test_get_odds_ignores_foreign_provider_match_id_collision(monkeypatch):
+    had = _raw([
+        _match("football-data-id", "2026-08-16", "无关主队", "无关客队"),
+        _match("sporttery-id", "2026-08-15"),
+    ])
+    monkeypatch.setattr(sporttery, "_fetch_raw", lambda pool: had if pool == "had" else _raw([]))
+
+    odds = sporttery.get_odds(
+        "同名主队",
+        "同名客队",
+        "2026-08-15T19:30:00+08:00",
+        provider="football-data",
+        provider_match_id="football-data-id",
+    )
+
+    assert odds is not None
+    assert odds.kickoff_at.startswith("2026-08-15")
+
+
+def test_collect_passes_request_provider_to_odds_lookup(monkeypatch):
+    received = {}
+
+    def fake_get_odds(*args, **kwargs):
+        received.update(kwargs)
+        return None
+
+    monkeypatch.setattr(sporttery, "get_odds", fake_get_odds)
+
+    sporttery.collect(
+        FootballOsintJobRequest(
+            home_team="主队",
+            away_team="客队",
+            provider="football-data",
+            provider_match_id="foreign-id",
+        ),
+        [],
+    )
+
+    assert received == {"provider": "football-data", "provider_match_id": "foreign-id"}

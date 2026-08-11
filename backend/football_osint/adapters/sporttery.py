@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -76,7 +77,7 @@ class SportteryOdds:
 
 def market_snapshot(odds: SportteryOdds, *, observed_at: str) -> SportteryMarket | None:
     """Build a typed, de-margined market snapshot from Sporttery odds."""
-    if min(odds.had_h, odds.had_d, odds.had_a) <= 0:
+    if not all(math.isfinite(value) and value > 0 for value in (odds.had_h, odds.had_d, odds.had_a)):
         return None
 
     had_odds = OutcomeOdds(
@@ -87,7 +88,7 @@ def market_snapshot(odds: SportteryOdds, *, observed_at: str) -> SportteryMarket
     home_handicap = parse_home_handicap(odds.hhad_goal_line)
     hhad_values = (odds.hhad_h, odds.hhad_d, odds.hhad_a)
     has_valid_hhad = home_handicap is not None and all(
-        value is not None and value > 0 for value in hhad_values
+        value is not None and math.isfinite(value) and value > 0 for value in hhad_values
     )
     hhad_odds = None
     hhad_probabilities = None
@@ -155,7 +156,8 @@ def _parse_odds(odds_dict: dict) -> dict[str, float]:
     result: dict[str, float] = {}
     for key in ("h", "d", "a"):
         try:
-            result[key] = float(odds_dict.get(key, 0) or 0)
+            value = float(odds_dict.get(key, 0) or 0)
+            result[key] = value if math.isfinite(value) else 0.0
         except (ValueError, TypeError):
             result[key] = 0.0
     return result
@@ -320,6 +322,7 @@ def get_odds(
     away_team: str,
     kickoff_at: str = "",
     *,
+    provider: str = "",
     provider_match_id: str = "",
 ) -> SportteryOdds | None:
     """Look up odds for a specific match by team names.
@@ -338,7 +341,11 @@ def get_odds(
     kickoff_date = _kickoff_date(kickoff_at)
 
     match_info_list = (data.get("value") or {}).get("matchInfoList") or []
-    selected = _find_match(data, provider_match_id.strip()) if provider_match_id.strip() else None
+    selected = (
+        _find_match(data, provider_match_id.strip())
+        if provider == "sporttery" and provider_match_id.strip()
+        else None
+    )
     if selected is None:
         for date_info in match_info_list:
             for match in date_info.get("subMatchList") or []:
@@ -390,6 +397,7 @@ def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> 
         request.home_team,
         request.away_team,
         request.kickoff_at,
+        provider=request.provider,
         provider_match_id=request.provider_match_id,
     )
     if odds is None:

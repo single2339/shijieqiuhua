@@ -1,6 +1,7 @@
 """Pure market probability and handicap settlement helpers."""
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from typing import Literal
@@ -11,6 +12,8 @@ _HANDICAP_PATTERN = re.compile(r"[+-]?\d+")
 
 
 def _probabilities(home: float, draw: float, away: float) -> OutcomeProbabilities:
+    if any(not math.isfinite(weight) or weight < 0 for weight in (home, draw, away)):
+        raise ValueError("probability weights must be finite and non-negative")
     total = home + draw + away
     if total <= 0:
         raise ValueError("probability weights must have positive total")
@@ -45,6 +48,8 @@ def score_matrix_probabilities(
     """Aggregate a score-probability matrix into ordinary 1X2 outcomes."""
     home = draw = away = 0.0
     for (home_score, away_score), mass in matrix.items():
+        if not math.isfinite(mass) or mass < 0:
+            raise ValueError("score matrix mass must be finite and non-negative")
         if home_score > away_score:
             home += mass
         elif home_score == away_score:
@@ -75,5 +80,7 @@ def handicap_probabilities(
     """Aggregate a score matrix under the supplied home handicap."""
     outcomes = {"home": 0.0, "draw": 0.0, "away": 0.0}
     for (home_score, away_score), mass in matrix.items():
+        if not math.isfinite(mass) or mass < 0:
+            raise ValueError("score matrix mass must be finite and non-negative")
         outcomes[settle_handicap(home_score, away_score, home_handicap)] += mass
     return _probabilities(outcomes["home"], outcomes["draw"], outcomes["away"])

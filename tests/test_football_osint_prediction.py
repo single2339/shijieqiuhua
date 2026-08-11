@@ -148,6 +148,18 @@ def test_had_market_fusion_lies_between_market_and_strong_home_model():
     assert fused.sporttery_market is not None
 
 
+def test_cautious_home_lean_falls_back_to_fused_away_primary_when_market_contradicts_it():
+    result = predict(
+        _request("2026-06-20 20:00"),
+        [_direction_factor(impact=0.04), _draw_risk_factor()],
+        market=_market(home=0.08, draw=0.12, away=0.80),
+    )
+
+    assert result.outcome_probabilities.away_win == max(result.outcome_probabilities.model_dump().values())
+    assert result.lean == "away"
+    assert result.summary.startswith("客胜")
+
+
 def test_one_fundamental_uses_exact_45_55_had_fusion_weights():
     factors = [_direction_factor(impact=0.30)]
     market = _market()

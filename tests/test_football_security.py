@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 from fastapi.testclient import TestClient
 
 from backend.app_football import app
@@ -27,6 +30,42 @@ def test_pipeline_job_id_changes_with_question_and_user_notes():
 
     assert pipeline._job_id(base) != pipeline._job_id(other_question)
     assert pipeline._job_id(base) != pipeline._job_id(with_note)
+
+
+def test_concurrent_evidence_append_mints_unique_ids_referenced_by_sources():
+    from backend.football_osint import evidence as evidence_module
+    from backend.football_osint.models import OsintSourceStatus
+
+    class CoordinatedEvidence(list):
+        def __init__(self) -> None:
+            super().__init__()
+            self.barrier = Barrier(4)
+
+        def __len__(self) -> int:
+            length = super().__len__()
+            append_lock = getattr(evidence_module, "_EVIDENCE_APPEND_LOCK", None)
+            if append_lock is None or not append_lock.locked():
+                self.barrier.wait(timeout=2)
+            return length
+
+    evidence = CoordinatedEvidence()
+
+    def collect(index: int) -> OsintSourceStatus:
+        evidence_id = evidence_module.append_evidence(
+            evidence,
+            source=f"collector-{index}", source_type="test", claim="concurrent evidence",
+            topic="test.concurrent", side="neutral", confidence=0.5,
+        )
+        return OsintSourceStatus(
+            adapter=f"collector-{index}", label="并发采集", status="ok", evidence_ids=[evidence_id],
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        sources = list(pool.map(collect, range(4)))
+
+    evidence_ids = [item.id for item in evidence]
+    assert len(evidence_ids) == len(set(evidence_ids)) == 4
+    assert {reference for source in sources for reference in source.evidence_ids} == set(evidence_ids)
 
 
 def test_zero_config_collection_attaches_official_sporttery_market_once(monkeypatch):

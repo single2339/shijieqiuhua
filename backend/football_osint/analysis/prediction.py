@@ -65,8 +65,15 @@ def predict(
         drivers: list[str] = []
         scoreline_band: list[str] = []
     else:
-        # Cautious double-chance language only remains for an explicit draw-risk rule.
-        lean = _cautious_lean(edge, draw_pressure) or _OUTCOME_TO_LEAN[primary_key]
+        # Cautious double-chance language only remains while the fused market
+        # still leaves that side at least as likely to avoid defeat.
+        cautious_lean = _cautious_lean(edge, draw_pressure)
+        if cautious_lean == "home_or_draw" and outcome_probabilities.home_win + outcome_probabilities.draw >= outcome_probabilities.away_win:
+            lean = cautious_lean
+        elif cautious_lean == "away_or_draw" and outcome_probabilities.away_win + outcome_probabilities.draw >= outcome_probabilities.home_win:
+            lean = cautious_lean
+        else:
+            lean = _OUTCOME_TO_LEAN[primary_key]
         clarity = "clear" if margin >= 0.05 else "close"
         summary = _summary(primary_key, primary_probability, margin, clarity)
         drivers = [

@@ -214,9 +214,9 @@ function VerdictCard({ prediction, confidence, dataQuality }: {
         </div>
       )}
 
-      {!insufficient && prediction.probability_band && (
+      {!insufficient && (
         <ProbabilityBands
-          bands={prediction.probability_band}
+          probabilities={prediction.outcome_probabilities}
           lead={prediction.lean === 'home' || prediction.lean === 'home_or_draw' ? 'home_win'
             : prediction.lean === 'away' || prediction.lean === 'away_or_draw' ? 'away_win'
             : 'draw'}
@@ -246,24 +246,21 @@ function VerdictCard({ prediction, confidence, dataQuality }: {
 const PB_LABELS: Record<string, string> = { home_win: '主胜', draw: '平局', away_win: '客胜' }
 const PB_COLORS: Record<string, string> = { home_win: '#1c4f3a', draw: '#c9a86a', away_win: '#6d725f' }
 
-function ProbabilityBands({ bands, lead }: {
-  bands: Record<'home_win' | 'draw' | 'away_win', [number, number]>
+function ProbabilityBands({ probabilities, lead }: {
+  probabilities: Record<'home_win' | 'draw' | 'away_win', number>
   lead: string
 }) {
   const keys = ['home_win', 'draw', 'away_win'] as const
   return (
     <div className="sqh-prob-grid">
       {keys.map(k => {
-        // probability_band comes from the backend as fractions (e.g. 0.32–0.40)
-        const lo = Math.round(bands[k][0] * 100)
-        const hi = Math.round(bands[k][1] * 100)
-        const mid = Math.round((lo + hi) / 2)
+        const probability = Math.round(probabilities[k] * 100)
         return (
           <div className={`sqh-prob-cell${lead === k ? ' sqh-prob-cell--lead' : ''}`} key={k}>
             <h4>{PB_LABELS[k]}</h4>
-            <div className="sqh-prob-value">{lo}–{hi}<small>%</small></div>
+            <div className="sqh-prob-value">{probability}<small>%</small></div>
             <div className="sqh-prob-bar">
-              <i style={{ width: `${mid}%`, background: PB_COLORS[k] }} />
+              <i style={{ width: `${probability}%`, background: PB_COLORS[k] }} />
             </div>
           </div>
         )

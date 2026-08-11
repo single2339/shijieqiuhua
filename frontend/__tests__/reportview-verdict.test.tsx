@@ -83,6 +83,19 @@ describe('ReportView concise verdict', () => {
     expect(html).not.toContain('体彩官方盘口参考')
   })
 
+  test('keeps only the official market reference when information is insufficient', () => {
+    const html = renderToStaticMarkup(<ReportView osintJob={makeJob({
+      lean: 'info_insufficient',
+      summary: '基础信息不足；仅展示官方市场参考，不形成方向结论。',
+      clarity: 'insufficient',
+    })} userTier="paid" />)
+
+    expect(html).toContain('体彩官方盘口参考')
+    expect(html).not.toContain('sqh-prob-grid')
+    expect(html).not.toContain('data-lead=')
+    expect(html).not.toContain('首选主胜')
+  })
+
   test('does not place paid process content in free HTML', () => {
     const html = renderToStaticMarkup(<ReportView osintJob={makeJob()} userTier="free" />)
 

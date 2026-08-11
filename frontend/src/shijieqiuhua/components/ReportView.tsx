@@ -175,6 +175,7 @@ function VerdictCard({ prediction, confidence }: {
   confidence: FootballOsintJob['confidence']
 }) {
   const insufficient = prediction.lean === 'info_insufficient'
+  const showProbabilities = !insufficient && prediction.clarity !== 'insufficient'
 
   return (
     <div className={`sqh-verdict${insufficient ? ' sqh-verdict--insufficient' : ''}`}>
@@ -189,12 +190,13 @@ function VerdictCard({ prediction, confidence }: {
 
       <p className="sqh-verdict-summary">{prediction.summary}</p>
 
-      <ProbabilityBands
-        probabilities={prediction.outcome_probabilities}
-        marginToRunnerUp={prediction.margin_to_runner_up}
-        clarity={prediction.clarity}
-        insufficient={insufficient}
-      />
+      {showProbabilities && (
+        <ProbabilityBands
+          probabilities={prediction.outcome_probabilities}
+          marginToRunnerUp={prediction.margin_to_runner_up}
+          clarity={prediction.clarity}
+        />
+      )}
 
       {prediction.scoreline_band.length > 0 && (
         <div className="sqh-scoreline-row">
@@ -223,20 +225,17 @@ function VerdictCard({ prediction, confidence }: {
 const PB_LABELS: Record<string, string> = { home_win: '主胜', draw: '平局', away_win: '客胜' }
 const PB_COLORS: Record<string, string> = { home_win: '#1c4f3a', draw: '#c9a86a', away_win: '#6d725f' }
 
-function ProbabilityBands({ probabilities, marginToRunnerUp, clarity, insufficient }: {
+function ProbabilityBands({ probabilities, marginToRunnerUp, clarity }: {
   probabilities: Record<'home_win' | 'draw' | 'away_win', number>
   marginToRunnerUp: number
   clarity: NonNullable<FootballOsintJob['prediction']>['clarity']
-  insufficient: boolean
 }) {
   const keys = ['home_win', 'draw', 'away_win'] as const
   const ranked = [...keys].sort((a, b) => probabilities[b] - probabilities[a])
   const lead = ranked[0]
-  const leadSentence = insufficient
-    ? null
-    : clarity === 'clear'
-      ? `首选${PB_LABELS[lead]} · 领先 ${Math.round(marginToRunnerUp * 100)} 个百分点`
-      : `首选${PB_LABELS[lead]} · 优势不足，存在接近结果`
+  const leadSentence = clarity === 'clear'
+    ? `首选${PB_LABELS[lead]} · 领先 ${Math.round(marginToRunnerUp * 100)} 个百分点`
+    : `首选${PB_LABELS[lead]} · 优势不足，存在接近结果`
 
   return (
     <>

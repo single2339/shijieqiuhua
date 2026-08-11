@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   ArrowRight, CheckCircle, Clock, Gauge, Info, ListChecks,
-  Lock, MagnifyingGlass, Scales, ShieldCheck, WarningCircle,
+  Lock, MagnifyingGlass, Scales, WarningCircle,
 } from '@phosphor-icons/react'
 import { motion } from 'framer-motion'
 import { byStrength } from './evidence'
@@ -48,30 +48,14 @@ export default function ReportView({ osintJob, userTier, onUpgrade }: ReportView
       transition={{ duration: 0.4, ease: [0.2, 0.7, 0.3, 1] }}
     >
       {/* ── verdict ── */}
-      {prediction && (
-        <VerdictCard prediction={prediction} confidence={confidence} dataQuality={osintJob.data_quality} />
-      )}
+      {prediction && <VerdictCard prediction={prediction} confidence={confidence} />}
 
       {/* ── gated sections ── */}
-      <div className={canDeep ? '' : 'sqh-report-locked'}>
-        {!canDeep && (
-          <div className="sqh-report-veil">
-            <div className="sqh-report-veil-inner">
-              <Lock size={28} weight="duotone" />
-              <b>开通完整功能后查看</b>
-              <p>证据链、因子权重与情报轨迹是研判的依据所在。</p>
-              {onUpgrade && (
-                <button className="sqh-unlock-btn" onClick={onUpgrade}>
-                  开通完整功能 <ArrowRight size={15} weight="bold" />
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div style={{ filter: canDeep ? 'none' : 'blur(3px)', pointerEvents: canDeep ? 'auto' : 'none' }}>
-          {tabs.length > 0 && (
-            <>
+      {tabs.length > 0 && (
+        canDeep ? (
+          <details className="sqh-analysis-disclosure">
+            <summary><ListChecks size={16} weight="duotone" />查看完整分析过程</summary>
+            <div className="sqh-analysis-disclosure-body">
               <div className="sqh-tabbar">
                 {tabs.map(t => (
                   <button
@@ -130,10 +114,21 @@ export default function ReportView({ osintJob, userTier, onUpgrade }: ReportView
                   )}
                 </div>
               </div>
-            </>
-          )}
-        </div>
-      </div>
+            </div>
+          </details>
+        ) : (
+          <div className="sqh-report-lock-card">
+            <Lock size={28} weight="duotone" />
+            <b>开通完整功能后查看</b>
+            <p>证据链、因子权重与情报轨迹是研判的依据所在。</p>
+            {onUpgrade && (
+              <button className="sqh-unlock-btn" onClick={onUpgrade}>
+                开通完整功能 <ArrowRight size={15} weight="bold" />
+              </button>
+            )}
+          </div>
+        )
+      )}
     </motion.div>
   )
 }
@@ -175,10 +170,9 @@ function ConfBadge({ level }: { level: string }) {
   )
 }
 
-function VerdictCard({ prediction, confidence, dataQuality }: {
+function VerdictCard({ prediction, confidence }: {
   prediction: NonNullable<FootballOsintJob['prediction']>
   confidence: FootballOsintJob['confidence']
-  dataQuality?: FootballOsintJob['data_quality']
 }) {
   const insufficient = prediction.lean === 'info_insufficient'
 
@@ -186,9 +180,6 @@ function VerdictCard({ prediction, confidence, dataQuality }: {
     <div className={`sqh-verdict${insufficient ? ' sqh-verdict--insufficient' : ''}`}>
       <div className="sqh-verdict-top">
         <div>
-          <div className="sqh-section-title" style={{ marginBottom: 8 }}>
-            <Gauge size={15} weight="duotone" /><span>方向研判</span>
-          </div>
           <div className="sqh-verdict-headline">
             {LEAN_LABEL[prediction.lean] || prediction.lean}
           </div>
@@ -198,30 +189,12 @@ function VerdictCard({ prediction, confidence, dataQuality }: {
 
       <p className="sqh-verdict-summary">{prediction.summary}</p>
 
-      {insufficient && (
-        <div className="sqh-verdict-honest">
-          <ShieldCheck size={16} weight="duotone" />
-          {dataQuality?.primary_insufficiency_reason ? (
-            <>
-              主因：{dataQualityReasonLabel(dataQuality.primary_insufficiency_reason)}。
-              {dataQuality.insufficiency_reasons.slice(1, 3).length > 0 && (
-                <> 其它缺口：{dataQuality.insufficiency_reasons.slice(1, 3).map(dataQualityReasonLabel).join('、')}。</>
-              )}
-            </>
-          ) : (
-            <>我们没编。缺关键数据时如实说明，开赛前会自动复扫。</>
-          )}
-        </div>
-      )}
-
-      {!insufficient && (
-        <ProbabilityBands
-          probabilities={prediction.outcome_probabilities}
-          lead={prediction.lean === 'home' || prediction.lean === 'home_or_draw' ? 'home_win'
-            : prediction.lean === 'away' || prediction.lean === 'away_or_draw' ? 'away_win'
-            : 'draw'}
-        />
-      )}
+      <ProbabilityBands
+        probabilities={prediction.outcome_probabilities}
+        marginToRunnerUp={prediction.margin_to_runner_up}
+        clarity={prediction.clarity}
+        insufficient={insufficient}
+      />
 
       {prediction.scoreline_band.length > 0 && (
         <div className="sqh-scoreline-row">
@@ -234,8 +207,12 @@ function VerdictCard({ prediction, confidence, dataQuality }: {
 
       {prediction.drivers.length > 0 && (
         <p className="sqh-verdict-drivers">
-          关键因子：{prediction.drivers.join('、')}
+          关键因子：{prediction.drivers.slice(0, 2).join('、')}
         </p>
+      )}
+
+      {prediction.sporttery_market && (
+        <SportteryReference prediction={prediction} />
       )}
     </div>
   )
@@ -246,25 +223,62 @@ function VerdictCard({ prediction, confidence, dataQuality }: {
 const PB_LABELS: Record<string, string> = { home_win: '主胜', draw: '平局', away_win: '客胜' }
 const PB_COLORS: Record<string, string> = { home_win: '#1c4f3a', draw: '#c9a86a', away_win: '#6d725f' }
 
-function ProbabilityBands({ probabilities, lead }: {
+function ProbabilityBands({ probabilities, marginToRunnerUp, clarity, insufficient }: {
   probabilities: Record<'home_win' | 'draw' | 'away_win', number>
-  lead: string
+  marginToRunnerUp: number
+  clarity: NonNullable<FootballOsintJob['prediction']>['clarity']
+  insufficient: boolean
 }) {
   const keys = ['home_win', 'draw', 'away_win'] as const
+  const ranked = [...keys].sort((a, b) => probabilities[b] - probabilities[a])
+  const lead = ranked[0]
+  const leadSentence = insufficient
+    ? null
+    : clarity === 'clear'
+      ? `首选${PB_LABELS[lead]} · 领先 ${Math.round(marginToRunnerUp * 100)} 个百分点`
+      : `首选${PB_LABELS[lead]} · 优势不足，存在接近结果`
+
   return (
-    <div className="sqh-prob-grid">
-      {keys.map(k => {
-        const probability = Math.round(probabilities[k] * 100)
-        return (
-          <div className={`sqh-prob-cell${lead === k ? ' sqh-prob-cell--lead' : ''}`} key={k}>
-            <h4>{PB_LABELS[k]}</h4>
-            <div className="sqh-prob-value">{probability}<small>%</small></div>
-            <div className="sqh-prob-bar">
-              <i style={{ width: `${probability}%`, background: PB_COLORS[k] }} />
+    <>
+      {leadSentence && <p className="sqh-prob-lead">{leadSentence}</p>}
+      <div className="sqh-prob-grid">
+        {ranked.map(k => {
+          const probability = Math.round(probabilities[k] * 100)
+          return (
+            <div className={`sqh-prob-cell${lead === k ? ' sqh-prob-cell--lead' : ''}`} data-lead={lead === k} key={k}>
+              <span className="sqh-prob-label">{PB_LABELS[k]} {probability}%</span>
+              <div className="sqh-prob-bar">
+                <i style={{ width: `${probability}%`, background: PB_COLORS[k] }} />
+              </div>
             </div>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+const HANDICAP_LABELS: Record<'home' | 'draw' | 'away', string> = {
+  home: '让胜',
+  draw: '让平',
+  away: '让负',
+}
+
+function SportteryReference({ prediction }: { prediction: NonNullable<FootballOsintJob['prediction']> }) {
+  const { sporttery_market: market, handicap_conclusion: conclusion } = prediction
+  if (!market) return null
+
+  const handicapLabel = market.home_handicap === null
+    ? null
+    : market.home_handicap >= 0
+      ? `主队受让 +${market.home_handicap}`
+      : `主队让 ${market.home_handicap}`
+
+  return (
+    <div className="sqh-sporttery-reference">
+      <span className="sqh-sporttery-title">体彩官方盘口参考</span>
+      {handicapLabel && <span>{handicapLabel}</span>}
+      {conclusion && <span>{HANDICAP_LABELS[conclusion.outcome]} · {Math.round(conclusion.probability * 100)}%</span>}
     </div>
   )
 }

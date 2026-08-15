@@ -2139,6 +2139,7 @@
 .sqh-market-source > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .sqh-market-source strong { overflow: hidden; color: #3d4038; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .sqh-market-source > div span { color: #8b877b; font-size: 10.5px; }
+.sqh-market-source--stale > div span { color: #a03020; font-weight: 800; }
 .sqh-market-source-odds { color: #5a564a; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .sqh-market-comparison { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid #d8e6d2; border-radius: 12px; color: #1c6b2d; background: #f1f7ed; }
@@ -2180,6 +2181,7 @@
   .sqh-auth-aside { display: none; }
   .sqh-decision-desk { padding: 16px; }
   .sqh-decision-desk__grid, .sqh-decision-skeleton__grid { grid-template-columns: 1fr; }
+  .sqh-decision-probabilities { grid-template-columns: 1fr; }
   .sqh-market-comparison--limited { align-items: flex-start; }
   .sqh-market-comparison--limited p { margin: 0; text-align: left; }
 }

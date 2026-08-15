@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import DecisionDesk from '../src/shijieqiuhua/components/DecisionDesk'
 import type { MatchDecision } from '../src/shijieqiuhua/types'
@@ -107,6 +108,28 @@ describe('DecisionDesk', () => {
     expect(html).toContain('2 - 0')
     expect(html).toContain('方向命中')
     expect(html).toContain('比分未命中')
+    expect(html.indexOf('最终比分')).toBeLessThan(html.indexOf('系统研判'))
+  })
+
+  test('marks stale market snapshots and keeps live fixtures as a pre-match verdict', () => {
+    const stale = makeDecision({
+      fixture_status: 'live',
+      market_sources: [{
+        source_id: 'sporttery', display_name: '中国体育彩票', market: '1x2',
+        odds: { home_win: 1.93, draw: 3.31, away_win: 4.04 },
+        observed_at: new Date(Date.now() - 31 * 60_000).toISOString(), provider_event_id: 'sp-123',
+      }],
+    })
+    const html = renderToStaticMarkup(<DecisionDesk decision={stale} />)
+
+    expect(html).toContain('赛前研判，截至开赛前')
+    expect(html).toContain('数据已过期')
+  })
+
+  test('uses a one-column probability layout on mobile', () => {
+    const css = readFileSync(new URL('../src/shijieqiuhua.css', import.meta.url), 'utf8')
+    expect(css).toContain('@media (max-width: 860px)')
+    expect(css).toContain('.sqh-decision-probabilities { grid-template-columns: 1fr; }')
   })
 
   test('provides a structured skeleton and an inline error state', () => {

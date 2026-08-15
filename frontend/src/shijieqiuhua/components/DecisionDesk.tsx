@@ -50,12 +50,16 @@ export default function DecisionDesk({ decision, loading = false, error }: Decis
         <div>
           <p className="sqh-decision-eyebrow"><Pulse size={14} weight="bold" />比赛决策台</p>
           <h2>{title}</h2>
-          {match && <p className="sqh-decision-meta">{match.competition || '赛事待确认'} · {formatKickoff(match.kickoff_at)} · {statusLabel(decision.fixture_status)}</p>}
+          {match && <p className="sqh-decision-meta">{match.competition || '赛事待确认'} · {formatKickoff(match.kickoff_at)} · {statusDetail(decision.fixture_status)}</p>}
         </div>
         <div className={`sqh-decision-status sqh-decision-status--${decision.fixture_status}`}>
           <span />{statusLabel(decision.fixture_status)}
         </div>
       </header>
+
+      {decision.fixture_status === 'finished' && decision.actual_result && (
+        <FinishedReview actual={decision.actual_result} review={decision.review} />
+      )}
 
       <div className="sqh-decision-desk__grid">
         <SystemVerdictPanel decision={decision} />
@@ -63,10 +67,6 @@ export default function DecisionDesk({ decision, loading = false, error }: Decis
       </div>
 
       <MarketComparisonPanel comparison={decision.market_comparison} />
-
-      {decision.fixture_status === 'finished' && decision.actual_result && (
-        <FinishedReview actual={decision.actual_result} review={decision.review} />
-      )}
 
       <footer className="sqh-decision-disclaimer"><Info size={14} weight="duotone" />{decision.disclaimer}</footer>
     </motion.section>
@@ -173,7 +173,8 @@ function ProbabilityStrip({ probabilities }: { probabilities: OutcomeProbabiliti
 
 function MarketSourceRow({ source }: { source: MarketSourceSnapshot }) {
   const observed = freshnessLabel(source.observed_at)
-  return <div className="sqh-market-source">
+  const stale = isStale(source.observed_at)
+  return <div className={`sqh-market-source${stale ? ' sqh-market-source--stale' : ''}`}>
     <div><strong>{source.display_name}</strong><span>{observed}</span></div>
     <span className="sqh-market-source-odds">{source.odds.home_win.toFixed(2)} · {source.odds.draw.toFixed(2)} · {source.odds.away_win.toFixed(2)}</span>
   </div>
@@ -225,10 +226,20 @@ function freshnessLabel(value: string): string {
   if (Number.isNaN(date.getTime())) return '更新时间待确认'
   const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60_000))
   if (minutes < 2) return '刚刚更新'
+  if (minutes > 30) return `数据已过期 · ${minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时`}前更新`
   if (minutes < 60) return `${minutes} 分钟前更新`
-  return `${Math.floor(minutes / 60)} 小时前更新`
+  return `${minutes < 60 ? minutes : Math.floor(minutes / 60)} ${minutes < 60 ? '分钟' : '小时'}前更新`
+}
+
+function isStale(value: string): boolean {
+  const date = new Date(value)
+  return !Number.isNaN(date.getTime()) && Date.now() - date.getTime() > 30 * 60_000
 }
 
 function statusLabel(status: MatchDecision['fixture_status']): string {
-  return status === 'finished' ? '已结束' : status === 'live' ? '进行中' : '赛前'
+  return status === 'finished' ? '已结束' : status === 'live' ? '赛前研判' : '赛前'
+}
+
+function statusDetail(status: MatchDecision['fixture_status']): string {
+  return status === 'live' ? '赛前研判，截至开赛前' : statusLabel(status)
 }

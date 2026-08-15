@@ -10,10 +10,11 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .adapters import dongqiudi_schedule, football_data_schedule
-from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
+from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest, MatchDecision
 from . import warm_cache
 from . import track_record
 from . import history as history_module
+from . import decision_service
 
 _JOB_ID_RE = re.compile(r"^fo_\d{8}_[0-9a-f]{10}$")
 
@@ -78,6 +79,22 @@ async def create_job(request: FootballOsintJobRequest, http_request: Request):
     async with _ANSWER_SEMAPHORE:
         entry = await warm_cache.cache_or_compute(request)
     return entry.job
+
+
+@router.post(
+    "/decisions",
+    response_model=MatchDecision,
+    response_model_exclude_none=True,
+)
+async def get_match_decision(request: FootballOsintJobRequest, http_request: Request):
+    """Return the paid primary full-time decision for one fixture.
+
+    The service normalizes every caller to the fixed full-time question, so a
+    specialist prompt cannot change the first-view prediction or its cache key.
+    """
+    _require_paid(http_request)
+    async with _ANSWER_SEMAPHORE:
+        return await decision_service.resolve(request)
 
 
 @router.post("/answer", response_model=FootballOsintAnswer)

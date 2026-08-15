@@ -204,17 +204,6 @@ class MarketContext(BaseModel):
     comparison: MarketComparison | None = None
 
 
-class ActualResult(BaseModel):
-    home_score: int = Field(ge=0)
-    away_score: int = Field(ge=0)
-
-
-class MatchDecision(BaseModel):
-    outcome: Literal["home_win", "draw", "away_win", "info_insufficient"]
-    outcome_probabilities: OutcomeProbabilities | None = None
-    reason: str = ""
-
-
 class SportteryMarket(BaseModel):
     provider: Literal["sporttery"] = "sporttery"
     had_odds: OutcomeOdds | None = None
@@ -368,6 +357,46 @@ class IntelligenceFinding(BaseModel):
     confidence_level: Literal["L1", "L2", "L3", "L4"]
     evidence_ids: list[str] = Field(default_factory=list)
     source_summary: str = ""
+
+
+class ActualResult(BaseModel):
+    home_score: int = Field(ge=0)
+    away_score: int = Field(ge=0)
+    outcome: Literal["home", "draw", "away"]
+    settled_at: datetime
+
+
+class PostMatchReview(BaseModel):
+    lean_correct: bool | None = None
+    scoreline_hit: bool | None = None
+    summary: str = ""
+
+
+class MatchDecision(BaseModel):
+    """Paid first-view match decision.
+
+    ``outcome`` and ``outcome_probabilities`` are retained as the small model
+    input consumed by :func:`analysis.market.compare_market_consensus`.  The
+    remaining fields form the API response and deliberately keep the OSINT
+    prediction and market context in separate branches.
+    """
+
+    outcome: Literal["home_win", "draw", "away_win", "info_insufficient"]
+    outcome_probabilities: OutcomeProbabilities | None = None
+    reason: str = ""
+    match: OsintMatch | None = None
+    fixture_status: Literal["scheduled", "live", "finished"] = "scheduled"
+    model_prediction: PredictionResult | None = None
+    confidence: ConfidenceRating | None = None
+    market_consensus: MarketConsensus | None = None
+    market_sources: list[MarketSourceSnapshot] = Field(default_factory=list)
+    market_comparison: MarketComparison = Field(
+        default_factory=lambda: MarketComparison(status="limited")
+    )
+    evidence_summary: list[IntelligenceFinding] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    actual_result: ActualResult | None = None
+    review: PostMatchReview | None = None
 
 
 class FootballOsintJob(BaseModel):

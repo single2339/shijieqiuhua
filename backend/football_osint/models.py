@@ -5,7 +5,7 @@ from enum import Enum
 from math import isclose, isfinite
 from typing import Any, Literal, Mapping, Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 
 class FootballOsintJobStatus(str, Enum):
@@ -363,7 +363,7 @@ class ActualResult(BaseModel):
     home_score: int = Field(ge=0)
     away_score: int = Field(ge=0)
     outcome: Literal["home", "draw", "away"]
-    settled_at: datetime
+    settled_at: datetime | None = None
 
 
 class PostMatchReview(BaseModel):
@@ -397,6 +397,14 @@ class MatchDecision(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     actual_result: ActualResult | None = None
     review: PostMatchReview | None = None
+    disclaimer: str = ""
+
+    @field_serializer("model_prediction")
+    def serialize_model_prediction(self, prediction: PredictionResult | None) -> dict[str, Any] | None:
+        """Never expose legacy odds fields through the system-prediction panel."""
+        if prediction is None:
+            return None
+        return prediction.model_dump(exclude={"sporttery_market", "handicap_conclusion"})
 
 
 class FootballOsintJob(BaseModel):

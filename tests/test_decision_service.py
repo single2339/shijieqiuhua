@@ -20,6 +20,7 @@ from backend.football_osint.models import (
     OutcomeOdds,
     OutcomeProbabilities,
     PredictionResult,
+    SportteryMarket,
 )
 
 
@@ -53,6 +54,11 @@ def _job() -> FootballOsintJob:
         clarity="clear",
         scoreline_band=["2-1"],
         drivers=["近期状态"],
+        sporttery_market=SportteryMarket(
+            had_odds=OutcomeOdds(home_win=2.0, draw=4.0, away_win=4.0),
+            had_implied_probabilities=probabilities,
+            observed_at=NOW.isoformat(),
+        ),
     )
     return FootballOsintJob(
         job_id="fo_20260815_abcdef1234",
@@ -114,6 +120,28 @@ def test_compose_degrades_cleanly_when_market_consensus_is_unavailable():
     assert decision.market_consensus is None
     assert decision.market_comparison.status == "limited"
     assert decision.model_prediction == job.prediction
+    assert "sporttery_market" not in decision.model_dump()["model_prediction"]
+    assert "handicap_conclusion" not in decision.model_dump()["model_prediction"]
+    assert "不构成投注" in decision.disclaimer
+
+
+async def test_finished_fixture_uses_provider_settlement_time_not_job_update(monkeypatch):
+    job = _job()
+    job.updated_at = "2026-08-10T00:00:00+00:00"
+    fixture = SimpleNamespace(
+        status="finished",
+        home_score=2,
+        away_score=1,
+        settled_at=NOW,
+    )
+    monkeypatch.setattr(decision_service, "_find_fixture", lambda _request: fixture)
+
+    status, actual = await decision_service._resolve_fixture_state(REQUEST, job)
+
+    assert status == "finished"
+    assert actual is not None
+    assert actual.settled_at == NOW
+    assert actual.settled_at != decision_service._as_utc(job.updated_at)
 
 
 def test_decision_endpoint_requires_login_and_paid_entitlement(monkeypatch):
@@ -158,3 +186,5 @@ def test_decision_endpoint_returns_paid_fulltime_decision(monkeypatch):
     assert data["model_prediction"]["scoreline_band"] == ["2-1"]
     assert data["market_comparison"]["status"] == "aligned"
     assert "sporttery_market" not in data["model_prediction"]
+    assert "handicap_conclusion" not in data["model_prediction"]
+    assert "不构成投注" in data["disclaimer"]

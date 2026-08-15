@@ -24,6 +24,7 @@ from .models import (
 
 
 FULLTIME_QUESTION = "全场比分预测是多少？"
+DECISION_DISCLAIMER = "本研判基于赛前公开信息与独立模型生成，仅供信息参考，不构成投注或投资建议。"
 
 
 async def resolve(request: FootballOsintJobRequest) -> MatchDecision:
@@ -68,6 +69,7 @@ def compose(
         updated_at=_as_utc(job.updated_at),
         actual_result=actual_result,
         review=review,
+        disclaimer=DECISION_DISCLAIMER,
     )
 
 
@@ -86,7 +88,7 @@ async def _resolve_fixture_state(
                     home_score=home_score,
                     away_score=away_score,
                     outcome=_actual_outcome(home_score, away_score),
-                    settled_at=_as_utc(job.updated_at),
+                    settled_at=_fixture_settled_at(fixture),
                 )
             return status, None
 
@@ -154,6 +156,20 @@ def _parse_kickoff(value: str) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     return parsed.astimezone(timezone.utc)
+
+
+def _fixture_settled_at(fixture: object) -> datetime | None:
+    """Use provider settlement metadata only; never substitute a job timestamp."""
+    for field in ("settled_at", "updated_at"):
+        value = getattr(fixture, field, None)
+        if isinstance(value, datetime):
+            if value.tzinfo is not None and value.utcoffset() is not None:
+                return value.astimezone(timezone.utc)
+        elif isinstance(value, str):
+            parsed = _parse_kickoff(value)
+            if parsed is not None:
+                return parsed
+    return None
 
 
 def _as_utc(value: str | datetime) -> datetime:

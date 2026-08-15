@@ -80,6 +80,8 @@ describe('DecisionDesk', () => {
     expect(html.indexOf('系统研判')).toBeLessThan(html.indexOf('市场共识'))
     expect(html).toContain('中国体育彩票')
     expect(html).toContain('Bet365')
+    expect(html).toContain('去水后：主胜 50% · 平 28% · 客胜 22%')
+    expect(html).toContain('去水概率暂不可用')
     expect(html).toContain('模型与市场方向一致')
   })
 

@@ -174,8 +174,9 @@ function ProbabilityStrip({ probabilities }: { probabilities: OutcomeProbabiliti
 function MarketSourceRow({ source }: { source: MarketSourceSnapshot }) {
   const observed = freshnessLabel(source.observed_at)
   const stale = isStale(source.observed_at)
+  const implied = source.implied_probabilities
   return <div className={`sqh-market-source${stale ? ' sqh-market-source--stale' : ''}`}>
-    <div><strong>{source.display_name}</strong><span>{observed}</span></div>
+    <div><strong>{source.display_name}</strong><span>{observed}</span><span className="sqh-market-source-implied">{implied ? `去水后：主胜 ${Math.round(implied.home_win * 100)}% · 平 ${Math.round(implied.draw * 100)}% · 客胜 ${Math.round(implied.away_win * 100)}%` : '去水概率暂不可用'}</span></div>
     <span className="sqh-market-source-odds">{source.odds.home_win.toFixed(2)} · {source.odds.draw.toFixed(2)} · {source.odds.away_win.toFixed(2)}</span>
   </div>
 }

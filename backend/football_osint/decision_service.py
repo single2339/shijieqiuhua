@@ -107,7 +107,12 @@ def _find_fixture(request: FootballOsintJobRequest):
     if provider in {"", "football-data"}:
         fixtures.extend(football_data_schedule.fetch_fixtures(days_ahead=3))
     if provider in {"", "dongqiudi"}:
-        fixtures.extend(dongqiudi_schedule.fetch_fixtures())
+        # The Dongqiudi tab feed labels many records as ``Fixture`` even when
+        # it already carries a final score.  Reuse its tested state derivation
+        # before composing a decision or a post-match review.
+        fixtures.extend(
+            dongqiudi_schedule.fixtures_in_range(dongqiudi_schedule.fetch_fixtures())
+        )
 
     candidates = [fixture for fixture in fixtures if _same_provider(request, fixture)]
     if request.provider_match_id:

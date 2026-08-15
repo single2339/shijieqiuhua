@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -142,6 +142,35 @@ async def test_finished_fixture_uses_provider_settlement_time_not_job_update(mon
     assert actual is not None
     assert actual.settled_at == NOW
     assert actual.settled_at != decision_service._as_utc(job.updated_at)
+
+
+async def test_dongqiudi_raw_fixture_with_score_becomes_finished_with_review(monkeypatch):
+    from backend.football_osint.adapters import dongqiudi_schedule, football_data_schedule
+
+    job = _job()
+    raw_fixture = dongqiudi_schedule.Fixture(
+        match_id="dqd_1",
+        league="英超",
+        kickoff_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        home_team="主队",
+        away_team="客队",
+        status="scheduled",
+        home_score=2,
+        away_score=1,
+    )
+    monkeypatch.setattr(football_data_schedule, "fetch_fixtures", lambda **_kwargs: [])
+    monkeypatch.setattr(dongqiudi_schedule, "fetch_fixtures", lambda: [raw_fixture])
+
+    request = REQUEST.model_copy(update={"kickoff_at": raw_fixture.kickoff_at.isoformat()})
+    status, actual = await decision_service._resolve_fixture_state(request, job)
+    decision = decision_service.compose(job, fixture_status=status, actual_result=actual)
+
+    assert status == "finished"
+    assert actual is not None
+    assert actual.home_score == 2
+    assert actual.away_score == 1
+    assert decision.review is not None
+    assert decision.review.lean_correct is True
 
 
 def test_decision_endpoint_requires_login_and_paid_entitlement(monkeypatch):

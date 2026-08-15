@@ -21,7 +21,6 @@ from ..models import FootballOsintJobRequest, MarketSourceSnapshot, OutcomeOdds
 DEFAULT_BASE_URL = "https://api.theoddsapi.com"
 DEFAULT_BOOKMAKERS = "pinnacle,bet365,williamhill"
 REQUEST_TIMEOUT_SECONDS = 8.0
-KICKOFF_TOLERANCE = timedelta(minutes=5)
 _CST = timezone(timedelta(hours=8))
 
 # The provider uses these stable sport keys.  We only request competitions
@@ -88,14 +87,20 @@ def collect(request: FootballOsintJobRequest) -> tuple[list[MarketSourceSnapshot
     if not isinstance(payload, list):
         return [], "授权赔率数据服务响应无效"
 
-    matches = [
-        event for event in payload
-        if isinstance(event, dict) and _event_matches(event, request, requested_kickoff)
-    ]
+    try:
+        matches = [
+            event for event in payload
+            if isinstance(event, dict) and _event_matches(event, request, requested_kickoff)
+        ]
+    except Exception:
+        return [], "授权赔率数据服务响应无效"
     if len(matches) != 1:
         return [], "未找到唯一匹配的授权赔率赛事"
 
-    snapshots = _snapshots_from_event(matches[0])
+    try:
+        snapshots = _snapshots_from_event(matches[0])
+    except Exception:
+        return [], "授权赔率数据服务响应无效"
     if not snapshots:
         return [], "授权赔率数据服务未提供完整有效的胜平负赔率"
     return snapshots, ""
@@ -142,7 +147,7 @@ def _event_matches(
     if _normalise(event.get("away_team")) != _normalise(request.away_team):
         return False
     event_kickoff = _parse_kickoff(event.get("commence_time", ""))
-    return event_kickoff is not None and abs(event_kickoff - requested_kickoff) <= KICKOFF_TOLERANCE
+    return event_kickoff == requested_kickoff
 
 
 def _snapshots_from_event(event: dict[str, Any]) -> list[MarketSourceSnapshot]:
@@ -155,7 +160,10 @@ def _snapshots_from_event(event: dict[str, Any]) -> list[MarketSourceSnapshot]:
     observed_at = datetime.now(timezone.utc)
     snapshots: list[MarketSourceSnapshot] = []
     seen_source_ids: set[str] = set()
-    for bookmaker in event.get("bookmakers", []):
+    bookmakers = event.get("bookmakers")
+    if not isinstance(bookmakers, list):
+        raise ValueError("bookmakers must be a list")
+    for bookmaker in bookmakers:
         snapshot = _snapshot_from_bookmaker(bookmaker, home, away, event_id, observed_at)
         if snapshot is not None and snapshot.source_id not in seen_source_ids:
             snapshots.append(snapshot)
@@ -177,15 +185,20 @@ def _snapshot_from_bookmaker(
         return None
 
     odds_by_outcome: dict[str, float] = {}
-    for market in bookmaker.get("markets", []):
-        if not isinstance(market, dict) or market.get("key") != "h2h":
+    markets = bookmaker.get("markets")
+    if not isinstance(markets, list):
+        raise ValueError("markets must be a list")
+    for market in markets:
+        if not isinstance(market, dict):
+            raise ValueError("market must be an object")
+        if market.get("key") != "h2h":
             continue
         outcomes = market.get("outcomes")
         if not isinstance(outcomes, list):
-            continue
+            raise ValueError("outcomes must be a list")
         for outcome in outcomes:
             if not isinstance(outcome, dict):
-                return None
+                raise ValueError("outcome must be an object")
             name = _normalise(outcome.get("name"))
             if name == home:
                 outcome_key = "home"

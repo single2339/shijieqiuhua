@@ -121,6 +121,20 @@ def test_collect_rejects_ambiguous_or_nonmatching_events(monkeypatch):
     assert reason == "未找到唯一匹配的授权赔率赛事"
 
 
+def test_collect_rejects_same_teams_when_kickoff_is_only_within_five_minutes(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(
+        theoddsapi.httpx,
+        "get",
+        lambda *args, **kwargs: _Response([_event(commence_time="2026-08-16T15:04:00Z")]),
+    )
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert snapshots == []
+    assert reason == "未找到唯一匹配的授权赔率赛事"
+
+
 def test_collect_rejects_incomplete_or_nonfinite_quotes(monkeypatch):
     invalid_event = _event(bookmakers=[{
         "key": "pinnacle",
@@ -140,6 +154,16 @@ def test_collect_rejects_incomplete_or_nonfinite_quotes(monkeypatch):
 
     assert snapshots == []
     assert reason == "授权赔率数据服务未提供完整有效的胜平负赔率"
+
+
+def test_collect_rejects_malformed_provider_containers(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([_event(bookmakers={})]))
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert snapshots == []
+    assert reason == "授权赔率数据服务响应无效"
 
 
 def test_collect_returns_chinese_timeout_reason(monkeypatch):

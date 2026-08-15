@@ -60,6 +60,17 @@ def test_history_list_returns_settled_records(tmp_db):
     assert r["lean_correct"] is True
 
 
+def test_history_list_hides_predictions_for_free_payload(tmp_db):
+    _insert_record(tmp_db)
+    from backend.football_osint.history import get_history_list
+
+    row = get_history_list(days=30, paid=False)[0]
+
+    assert row["actual_outcome"] == "home"
+    assert "predicted_lean" not in row
+    assert "predicted_scoreline_band" not in row
+
+
 def test_history_list_excludes_unsettled(tmp_db):
     _insert_record(tmp_db, settled_at=None)
     from backend.football_osint.history import get_history_list
@@ -120,7 +131,7 @@ def test_history_detail_includes_metadata_and_tolerates_malformed_scoreline(tmp_
     tmp_db.commit()
 
     from backend.football_osint.history import get_history_detail
-    rec = get_history_detail("job_bad_band", paid=False)["record"]
+    rec = get_history_detail("job_bad_band", paid=True)["record"]
 
     assert rec["predicted_scoreline_band"] == []
     assert rec["match_key"] == "曼城|利物浦|2026-06-25 19:00"
@@ -136,18 +147,22 @@ def test_history_detail_returns_none_for_missing(tmp_db):
     assert get_history_detail("no_such_job", paid=False) is None
 
 
-def test_history_detail_base_fields_for_free_user(tmp_db):
+def test_history_detail_hides_predictions_for_free_user(tmp_db):
     _insert_record(tmp_db)
     from backend.football_osint.history import get_history_detail
     result = get_history_detail("job1", paid=False)
     assert result is not None
     rec = result["record"]
-    assert rec["lean_correct"] is True
+    assert rec["actual_outcome"] == "home"
+    assert "predicted_lean" not in rec
+    assert "predicted_scoreline_band" not in rec
+    assert "lean_correct" not in rec
+    assert "scoreline_hit" not in rec
     assert "factors" not in result
     assert "retrospective" not in result
 
 
-def test_history_detail_includes_predicted_sporttery_handicap_for_free_user(tmp_db):
+def test_history_detail_hides_sporttery_handicap_for_free_user(tmp_db):
     _insert_record(tmp_db)
     tmp_db.execute(
         """
@@ -162,13 +177,7 @@ def test_history_detail_includes_predicted_sporttery_handicap_for_free_user(tmp_
     from backend.football_osint.history import get_history_detail
     result = get_history_detail("job1", paid=False)
 
-    assert result["record"]["sporttery_handicap"] == {
-        "home_handicap": 1,
-        "predicted_outcome": "draw",
-        "predicted_probability": 0.41,
-        "actual_outcome": "draw",
-        "correct": True,
-    }
+    assert "sporttery_handicap" not in result["record"]
     assert "retrospective" not in result
 
 
@@ -259,7 +268,7 @@ def test_compare_jobs_returns_error_for_missing(tmp_path, monkeypatch):
     assert results[0]["error"] == "数据不可用"
 
 
-def test_compare_jobs_from_warm_cache(monkeypatch):
+def test_compare_jobs_ignores_current_warm_cache(monkeypatch):
     from backend.football_osint.models import (
         FootballOsintJob, FootballOsintJobStatus, OsintMatch, PredictionResult, ConfidenceRating,
     )
@@ -276,11 +285,7 @@ def test_compare_jobs_from_warm_cache(monkeypatch):
     monkeypatch.setattr(warm_cache, "get_cached_by_job_id", lambda jid: job if jid == "job_cached" else None)
 
     results = h_mod.compare_jobs(["job_cached"])
-    assert len(results) == 1
-    r = results[0]
-    assert r["predicted_lean"] == "home"
-    assert r["confidence_level"] == "L2"
-    assert r["factor_completeness"] == "0/0"
+    assert results == [{"job_id": "job_cached", "error": "数据不可用"}]
 
 
 def test_compare_jobs_caps_at_three(monkeypatch, tmp_path):

@@ -64,8 +64,13 @@ def load_report_from_bronze(job_id: str) -> str | None:
 
 # ── history list ──────────────────────────────────────────────────────────────
 
-def get_history_list(*, days: int = _HISTORY_DEFAULT_DAYS) -> list[dict]:
-    """已结束比赛列表（摘要字段）。One public row per match_key."""
+def get_history_list(*, days: int = _HISTORY_DEFAULT_DAYS, paid: bool = True) -> list[dict]:
+    """已结束比赛列表（摘要字段）。One row per match_key.
+
+    ``paid=False`` is intentionally defensive for any future public caller:
+    settled scores remain available, while every prediction-derived field is
+    removed from the payload.
+    """
     rows = get_db().execute(
         """
         WITH settled AS (
@@ -97,7 +102,7 @@ def get_history_list(*, days: int = _HISTORY_DEFAULT_DAYS) -> list[dict]:
         (f"-{days} days", _HISTORY_MAX_ROWS),
     ).fetchall()
 
-    return [
+    records = [
         {
             "job_id": r["job_id"],
             "primary_job_id": r["job_id"],
@@ -123,6 +128,13 @@ def get_history_list(*, days: int = _HISTORY_DEFAULT_DAYS) -> list[dict]:
         }
         for r in rows
     ]
+    if paid:
+        return records
+
+    for record in records:
+        for key in ("predicted_lean", "predicted_scoreline_band", "lean_correct", "scoreline_hit"):
+            record.pop(key, None)
+    return records
 
 
 # ── history detail ─────────────────────────────────────────────────────────────
@@ -151,44 +163,45 @@ def get_history_detail(job_id: str, *, paid: bool) -> dict | None:
     if row is None:
         return None
 
-    result: dict[str, Any] = {
-        "record": {
-            "job_id": row["job_id"],
-            "home_team": row["home_team"],
-            "away_team": row["away_team"],
-            "kickoff_at": row["kickoff_at"],
-            "competition": row["competition"],
-            "predicted_lean": row["predicted_lean"],
-            "predicted_scoreline_band": _scoreline_band(row["predicted_scoreline_band"]),
-            "actual_home_score": row["actual_home_score"],
-            "actual_away_score": row["actual_away_score"],
-            "actual_outcome": row["actual_outcome"],
-            "lean_correct": _row_bool(row["lean_correct"]),
-            "scoreline_hit": _row_bool(row["scoreline_hit"]),
-            "settled_at": row["settled_at"],
-            "match_key": _row_match_key(row),
-            "question_kind": row["question_kind"],
-            "question_id": row["question_id"],
-            "question_hash": row["question_hash"],
-            "warm_window": row["warm_window"],
-            "cache_source": row["cache_source"],
-            "record_role": row["record_role"],
-            "stats_primary": bool(row["stats_primary"]),
-            "excluded_reason": row["excluded_reason"],
-            "created_from_job_id": row["created_from_job_id"],
-        }
+    record: dict[str, Any] = {
+        "job_id": row["job_id"],
+        "home_team": row["home_team"],
+        "away_team": row["away_team"],
+        "kickoff_at": row["kickoff_at"],
+        "competition": row["competition"],
+        "actual_home_score": row["actual_home_score"],
+        "actual_away_score": row["actual_away_score"],
+        "actual_outcome": row["actual_outcome"],
+        "settled_at": row["settled_at"],
+        "match_key": _row_match_key(row),
+        "question_kind": row["question_kind"],
+        "question_id": row["question_id"],
+        "warm_window": row["warm_window"],
+        "record_role": row["record_role"],
+        "stats_primary": bool(row["stats_primary"]),
     }
+    result: dict[str, Any] = {"record": record}
+    if not paid:
+        return result
+
+    record.update({
+        "predicted_lean": row["predicted_lean"],
+        "predicted_scoreline_band": _scoreline_band(row["predicted_scoreline_band"]),
+        "lean_correct": _row_bool(row["lean_correct"]),
+        "scoreline_hit": _row_bool(row["scoreline_hit"]),
+        "question_hash": row["question_hash"],
+        "cache_source": row["cache_source"],
+        "excluded_reason": row["excluded_reason"],
+        "created_from_job_id": row["created_from_job_id"],
+    })
     if row["predicted_hhad_outcome"] is not None:
-        result["record"]["sporttery_handicap"] = {
+        record["sporttery_handicap"] = {
             "home_handicap": row["sporttery_home_handicap"],
             "predicted_outcome": row["predicted_hhad_outcome"],
             "predicted_probability": row["predicted_hhad_probability"],
             "actual_outcome": row["actual_hhad_outcome"],
             "correct": _row_bool(row["hhad_correct"]),
         }
-
-    if not paid:
-        return result
 
     # ── paid-only: factors + retrospective ──
     factors = _load_factors(job_id)
@@ -263,17 +276,14 @@ def match_keys_for_job_ids(job_ids: list[str]) -> dict[str, str]:
 # ── compare ───────────────────────────────────────────────────────────────────
 
 def compare_jobs(job_ids: list[str]) -> list[dict]:
-    """多场对比摘要（最多 3 场）。从 warm_cache 内存或 bronze_storage 读取。"""
-    from backend.football_osint import warm_cache
+    """多场对比摘要（最多 3 场），仅从持久化 bronze 读取。"""
 
     results = []
     for jid in job_ids[:3]:
-        job = warm_cache.get_cached_by_job_id(jid)
+        job = load_job_from_bronze(jid)
         if job is None:
-            job = load_job_from_bronze(jid)
-            if job is None:
-                results.append({"job_id": jid, "error": "数据不可用"})
-                continue
+            results.append({"job_id": jid, "error": "数据不可用"})
+            continue
 
         pred = job.prediction
         evidence = job.evidence or []

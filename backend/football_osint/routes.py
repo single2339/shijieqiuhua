@@ -39,12 +39,6 @@ class CompareRequest(BaseModel):
         return value
 
 
-def _require_registered(http_request: Request) -> dict:
-    """Gate behind login only — no entitlement check (registered free users allowed)."""
-    from backend.auth.routes import get_current_user
-    return get_current_user(http_request)  # raises 401 if not authenticated
-
-
 def _require_paid(http_request: Request) -> dict:
     """Gate analysis endpoints behind login + an active full_analysis entitlement.
 
@@ -148,9 +142,7 @@ async def list_fixtures(days: int = Query(3, ge=0, le=14)):
 async def get_job(job_id: str, http_request: Request):
     job_id = _validate_job_id(job_id)
     _require_paid(http_request)
-    job = warm_cache.get_cached_by_job_id(job_id)
-    if job is None:
-        job = await asyncio.to_thread(history_module.load_job_from_bronze, job_id)
+    job = await asyncio.to_thread(history_module.load_job_from_bronze, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="football osint job not found")
     return job
@@ -160,9 +152,6 @@ async def get_job(job_id: str, http_request: Request):
 async def get_report(job_id: str, http_request: Request):
     job_id = _validate_job_id(job_id)
     _require_paid(http_request)
-    job = warm_cache.get_cached_by_job_id(job_id)
-    if job is not None:
-        return job.report_markdown
     report = await asyncio.to_thread(history_module.load_report_from_bronze, job_id)
     if report is None:
         raise HTTPException(status_code=404, detail="football osint job not found")
@@ -277,19 +266,17 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
 
 @router.get("/history")
 async def list_history(http_request: Request, days: int = Query(30, ge=1, le=90)):
-    """已结束比赛历史列表（摘要）。已注册用户可访问。"""
-    _require_registered(http_request)
-    return await asyncio.to_thread(history_module.get_history_list, days=days)
+    """已结束比赛历史列表（摘要）。需付费。"""
+    _require_paid(http_request)
+    return await asyncio.to_thread(history_module.get_history_list, days=days, paid=True)
 
 
 @router.get("/history/{job_id}")
 async def get_history_detail(job_id: str, http_request: Request):
-    """单场回顾。lean/比分/命中标记对已注册用户开放；因子+retrospective 需付费。"""
+    """单场回顾（含预测、盘口与赛后复盘）。需付费。"""
     job_id = _validate_job_id(job_id)
-    user = _require_registered(http_request)
-    from backend.billing import has_entitlement
-    paid = has_entitlement(user["id"])
-    result = await asyncio.to_thread(history_module.get_history_detail, job_id, paid=paid)
+    _require_paid(http_request)
+    result = await asyncio.to_thread(history_module.get_history_detail, job_id, paid=True)
     if result is None:
         raise HTTPException(status_code=404, detail="未找到该比赛的已结算记录")
     return result

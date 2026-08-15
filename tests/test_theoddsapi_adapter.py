@@ -63,7 +63,7 @@ class _Response:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            request = httpx.Request("GET", "https://api.theoddsapi.com/odds/")
+            request = httpx.Request("GET", "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/")
             raise httpx.HTTPStatusError("error", request=request, response=httpx.Response(self.status_code, request=request))
 
     def json(self) -> object:
@@ -82,8 +82,8 @@ def test_collect_is_disabled_without_a_licensed_key(monkeypatch):
 def test_collect_normalizes_named_bookmaker_quotes_and_request(monkeypatch):
     received: dict[str, object] = {}
 
-    def fake_get(url, *, params, headers, timeout):
-        received.update(url=url, params=params, headers=headers, timeout=timeout)
+    def fake_get(url, *, params, timeout):
+        received.update(url=url, params=params, timeout=timeout)
         return _Response([_event()])
 
     monkeypatch.setenv("THEODDS_API_KEY", "test-key")
@@ -99,14 +99,14 @@ def test_collect_normalizes_named_bookmaker_quotes_and_request(monkeypatch):
     assert snapshots[0].observed_at.tzinfo == timezone.utc
     assert sum(snapshots[0].implied_probabilities.model_dump().values()) == 1.0
     assert received == {
-        "url": "https://api.theoddsapi.com/odds/",
+        "url": "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/",
         "params": {
-            "sport_key": "soccer_epl",
+            "apiKey": "test-key",
+            "regions": "uk",
             "markets": "h2h",
             "oddsFormat": "decimal",
             "bookmakers": "pinnacle,bet365",
         },
-        "headers": {"x-api-key": "test-key"},
         "timeout": 8.0,
     }
 
@@ -164,6 +164,53 @@ def test_collect_rejects_malformed_provider_containers(monkeypatch):
 
     assert snapshots == []
     assert reason == "授权赔率数据服务响应无效"
+
+
+def test_collect_does_not_hide_unexpected_parser_failures(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([_event()]))
+
+    def broken_parser(event):
+        raise RuntimeError("implementation regression")
+
+    monkeypatch.setattr(theoddsapi, "_snapshots_from_event", broken_parser)
+
+    try:
+        theoddsapi.collect(_request())
+    except RuntimeError as exc:
+        assert str(exc) == "implementation regression"
+    else:
+        raise AssertionError("unexpected parser failures must propagate")
+
+
+def test_collect_rejects_date_only_kickoff_without_calling_provider(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not call provider")))
+
+    snapshots, reason = theoddsapi.collect(_request(kickoff_at="2026-08-16"))
+
+    assert snapshots == []
+    assert reason == "比赛开赛时间不完整，无法安全匹配授权赔率数据"
+
+
+def test_collect_accepts_equivalent_offset_kickoff(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([_event()]))
+
+    snapshots, reason = theoddsapi.collect(_request(kickoff_at="2026-08-16T23:00:00+08:00"))
+
+    assert reason == ""
+    assert len(snapshots) == 2
+
+
+def test_collect_interprets_timezone_less_full_kickoff_as_cst(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([_event()]))
+
+    snapshots, reason = theoddsapi.collect(_request(kickoff_at="2026-08-16 23:00"))
+
+    assert reason == ""
+    assert len(snapshots) == 2
 
 
 def test_collect_returns_chinese_timeout_reason(monkeypatch):

@@ -18,7 +18,7 @@ import httpx
 from ..analysis.market import normalize_decimal_odds
 from ..models import FootballOsintJobRequest, MarketSourceSnapshot, OutcomeOdds
 
-DEFAULT_BASE_URL = "https://api.theoddsapi.com"
+DEFAULT_BASE_URL = "https://api.the-odds-api.com"
 DEFAULT_BOOKMAKERS = "pinnacle,bet365,williamhill"
 REQUEST_TIMEOUT_SECONDS = 8.0
 _CST = timezone(timedelta(hours=8))
@@ -65,14 +65,14 @@ def collect(request: FootballOsintJobRequest) -> tuple[list[MarketSourceSnapshot
     bookmakers = os.getenv("THEODDS_API_BOOKMAKERS", DEFAULT_BOOKMAKERS).strip() or DEFAULT_BOOKMAKERS
     try:
         response = httpx.get(
-            f"{base_url.rstrip('/')}/odds/",
+            f"{base_url.rstrip('/')}/v4/sports/{sport_key}/odds/",
             params={
-                "sport_key": sport_key,
+                "apiKey": api_key,
+                "regions": "uk",
                 "markets": "h2h",
                 "oddsFormat": "decimal",
                 "bookmakers": bookmakers,
             },
-            headers={"x-api-key": api_key},
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -87,19 +87,16 @@ def collect(request: FootballOsintJobRequest) -> tuple[list[MarketSourceSnapshot
     if not isinstance(payload, list):
         return [], "授权赔率数据服务响应无效"
 
-    try:
-        matches = [
-            event for event in payload
-            if isinstance(event, dict) and _event_matches(event, request, requested_kickoff)
-        ]
-    except Exception:
-        return [], "授权赔率数据服务响应无效"
+    matches = [
+        event for event in payload
+        if isinstance(event, dict) and _event_matches(event, request, requested_kickoff)
+    ]
     if len(matches) != 1:
         return [], "未找到唯一匹配的授权赔率赛事"
 
     try:
         snapshots = _snapshots_from_event(matches[0])
-    except Exception:
+    except ValueError:
         return [], "授权赔率数据服务响应无效"
     if not snapshots:
         return [], "授权赔率数据服务未提供完整有效的胜平负赔率"
@@ -120,7 +117,10 @@ def _normalise(value: object) -> str:
 def _parse_kickoff(value: str) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
-    raw = value.strip().replace("Z", "+00:00")
+    raw = value.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?", raw):
+        return None
+    raw = raw.replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError:

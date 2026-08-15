@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+from datetime import timezone
+
+import httpx
+
+from backend.football_osint.adapters import theoddsapi
+from backend.football_osint.models import FootballOsintJobRequest
+
+
+def _request(**updates: str) -> FootballOsintJobRequest:
+    values = {
+        "home_team": "Manchester United",
+        "away_team": "Arsenal",
+        "kickoff_at": "2026-08-16T15:00:00Z",
+        "competition": "Premier League",
+    }
+    values.update(updates)
+    return FootballOsintJobRequest(**values)
+
+
+def _event(**updates: object) -> dict:
+    values = {
+        "id": "event-123",
+        "home_team": "Manchester United",
+        "away_team": "Arsenal",
+        "commence_time": "2026-08-16T15:00:00Z",
+        "bookmakers": [
+            {
+                "key": "pinnacle",
+                "title": "Pinnacle",
+                "markets": [{
+                    "key": "h2h",
+                    "outcomes": [
+                        {"name": "Manchester United", "price": 2.1},
+                        {"name": "Draw", "price": 3.5},
+                        {"name": "Arsenal", "price": 3.8},
+                    ],
+                }],
+            },
+            {
+                "key": "bet365",
+                "title": "Bet365",
+                "markets": [{
+                    "key": "h2h",
+                    "outcomes": [
+                        {"name": "Manchester United", "price": 2.15},
+                        {"name": "Draw", "price": 3.4},
+                        {"name": "Arsenal", "price": 3.7},
+                    ],
+                }],
+            },
+        ],
+    }
+    values.update(updates)
+    return values
+
+
+class _Response:
+    def __init__(self, payload: object, status_code: int = 200):
+        self.payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            request = httpx.Request("GET", "https://api.theoddsapi.com/odds/")
+            raise httpx.HTTPStatusError("error", request=request, response=httpx.Response(self.status_code, request=request))
+
+    def json(self) -> object:
+        return self.payload
+
+
+def test_collect_is_disabled_without_a_licensed_key(monkeypatch):
+    monkeypatch.delenv("THEODDS_API_KEY", raising=False)
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert snapshots == []
+    assert reason == "未配置授权赔率数据服务"
+
+
+def test_collect_normalizes_named_bookmaker_quotes_and_request(monkeypatch):
+    received: dict[str, object] = {}
+
+    def fake_get(url, *, params, headers, timeout):
+        received.update(url=url, params=params, headers=headers, timeout=timeout)
+        return _Response([_event()])
+
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setenv("THEODDS_API_BOOKMAKERS", "pinnacle,bet365")
+    monkeypatch.setattr(theoddsapi.httpx, "get", fake_get)
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert reason == ""
+    assert [snapshot.source_id for snapshot in snapshots] == ["pinnacle", "bet365"]
+    assert snapshots[0].display_name == "The Odds API · Pinnacle"
+    assert snapshots[0].provider_event_id == "event-123"
+    assert snapshots[0].observed_at.tzinfo == timezone.utc
+    assert sum(snapshots[0].implied_probabilities.model_dump().values()) == 1.0
+    assert received == {
+        "url": "https://api.theoddsapi.com/odds/",
+        "params": {
+            "sport_key": "soccer_epl",
+            "markets": "h2h",
+            "oddsFormat": "decimal",
+            "bookmakers": "pinnacle,bet365",
+        },
+        "headers": {"x-api-key": "test-key"},
+        "timeout": 8.0,
+    }
+
+
+def test_collect_rejects_ambiguous_or_nonmatching_events(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([_event(), _event(id="event-456")]))
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert snapshots == []
+    assert reason == "未找到唯一匹配的授权赔率赛事"
+
+
+def test_collect_rejects_incomplete_or_nonfinite_quotes(monkeypatch):
+    invalid_event = _event(bookmakers=[{
+        "key": "pinnacle",
+        "markets": [{
+            "key": "h2h",
+            "outcomes": [
+                {"name": "Manchester United", "price": 2.1},
+                {"name": "Draw", "price": float("inf")},
+                {"name": "Arsenal", "price": 3.8},
+            ],
+        }],
+    }])
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+    monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([invalid_event]))
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert snapshots == []
+    assert reason == "授权赔率数据服务未提供完整有效的胜平负赔率"
+
+
+def test_collect_returns_chinese_timeout_reason(monkeypatch):
+    monkeypatch.setenv("THEODDS_API_KEY", "test-key")
+
+    def timeout(*args, **kwargs):
+        raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(theoddsapi.httpx, "get", timeout)
+
+    snapshots, reason = theoddsapi.collect(_request())
+
+    assert snapshots == []
+    assert reason == "授权赔率数据服务请求超时"

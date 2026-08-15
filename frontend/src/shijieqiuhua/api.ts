@@ -1,4 +1,4 @@
-import type { FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer } from './types'
+import type { CompareItem, FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord, MatchDecision, TrackRecordStats } from './types'
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
 
@@ -43,6 +43,22 @@ export async function askFootballQuestion(request: FootballOsintJobRequest): Pro
   return readJson<FootballQuestionAnswer>(res)
 }
 
+/**
+ * Load the paid, first-view decision for a fixture.
+ *
+ * The server owns the full-time question. Dropping a caller's specialist
+ * question keeps the first-view verdict independent of question UI state.
+ */
+export async function fetchMatchDecision(request: FootballOsintJobRequest): Promise<MatchDecision> {
+  const { question: _question, ...fixtureRequest } = request
+  const res = await fetch('/api/football/osint/decisions', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify(fixtureRequest),
+  })
+  return readJson<MatchDecision>(res)
+}
+
 export async function fetchFootballOsintJob(jobId: string): Promise<FootballOsintJob> {
   const res = await fetch(`/api/football/osint/jobs/${encodeURIComponent(jobId)}`)
   return readJson<FootballOsintJob>(res)
@@ -51,6 +67,32 @@ export async function fetchFootballOsintJob(jobId: string): Promise<FootballOsin
 export async function fetchFixtures(days = 3): Promise<FixtureStatus[]> {
   const res = await fetch(`/api/football/osint/fixtures?days=${days}`)
   return readJson<FixtureStatus[]>(res)
+}
+
+export async function fetchTrackRecord(): Promise<TrackRecordStats> {
+  const res = await fetch('/api/football/osint/track-record')
+  return readJson<TrackRecordStats>(res)
+}
+
+// ── v2: history & compare ──
+
+export async function fetchHistory(days = 30): Promise<HistoryRecord[]> {
+  const res = await fetch(`/api/football/osint/history?days=${days}`)
+  return readJson<HistoryRecord[]>(res)
+}
+
+export async function fetchHistoryDetail(jobId: string): Promise<HistoryDetail> {
+  const res = await fetch(`/api/football/osint/history/${encodeURIComponent(jobId)}`)
+  return readJson<HistoryDetail>(res)
+}
+
+export async function compareMatches(jobIds: string[]): Promise<CompareItem[]> {
+  const res = await fetch('/api/football/osint/compare', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify({ job_ids: jobIds }),
+  })
+  return readJson<CompareItem[]>(res)
 }
 
 // ── auth ──

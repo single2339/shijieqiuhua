@@ -286,13 +286,25 @@ def _r11_info_insufficient_high(conn: sqlite3.Connection) -> "Alert | None":
     if total < 50:
         return None
     pct = 100.0 * ii / total
+    reason_rows = conn.execute("""
+        SELECT json_extract(payload_json, '$.insufficiency_reasons[0]') AS reason
+        FROM telemetry_event
+        WHERE event_name='research.dashboard_view'
+          AND json_extract(payload_json, '$.lean')='info_insufficient'
+          AND ts >= datetime('now', '-1 day')
+    """).fetchall()
+    reasons: dict[str, int] = {}
+    for reason_row in reason_rows:
+        reason = reason_row[0] or "unknown"
+        reasons[reason] = reasons.get(reason, 0) + 1
+    top_reason = max(reasons, key=reasons.get) if reasons else "unknown"
     if pct > 70:
         return Alert(
             rule_id="ALERT-11",
             severity="P2",
             title=f"info_insufficient = {pct:.0f}% (>70%)",
-            body="Most matches lack data — RISK-3 active. Check adapter health.",
-            payload={"pct": pct},
+            body=f"Most matches lack data — RISK-3 active. Top reason: {top_reason}. Check adapter health.",
+            payload={"pct": pct, "top_reason": top_reason},
         )
     return None
 
@@ -325,8 +337,31 @@ def _r13_dau_drop(conn: sqlite3.Connection) -> "Alert | None":
     return None
 
 
-# ALERT-10/12/14/15/16 left as TODO with explicit reason: they need either
-# DeepSeek pricing tables (10), per-adapter aggregation (12), funnel views
+@rule("ALERT-10", "P2")
+def _r10_llm_cost_estimate(conn: sqlite3.Connection) -> "Alert | None":
+    # ponytail: no per-call token counts yet; approximate by call volume.
+    # DeepSeek chat ~¥0.003/call avg (2k tokens). ¥500/month ≈ ¥17/day ≈ 5600 calls/day.
+    # Warn at 3000 calls/day (~53% of monthly budget in one day).
+    row = conn.execute("""
+        SELECT COUNT(*) FROM telemetry_event
+        WHERE event_name='llm.call_completed'
+          AND ts >= datetime('now', '-24 hours')
+    """).fetchone()
+    cnt = (row[0] or 0) if row else 0
+    threshold = int(os.getenv("ALERT_LLM_DAILY_CALL_LIMIT", "3000"))
+    if cnt > threshold:
+        est_cny = round(cnt * 0.003, 1)
+        return Alert(
+            rule_id="ALERT-10",
+            severity="P2",
+            title=f"LLM calls {cnt}/day (est. ¥{est_cny}, budget ¥17/day)",
+            body=f"DeepSeek call count exceeds {threshold}/day threshold. Add token tracking for precise cost.",
+            payload={"calls_24h": cnt, "est_cny": est_cny, "threshold": threshold},
+        )
+    return None
+
+
+# ALERT-12/14/15/16 left as TODO: per-adapter aggregation (12), funnel views
 # (14), filesystem stats (15), or systemd integration (16). All tractable
 # but scoped out of the W5 dry-run skeleton.
 

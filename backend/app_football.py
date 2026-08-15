@@ -1,6 +1,7 @@
 """Minimal FastAPI app for shijieqiuhua — no osint-network agent deps."""
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,7 +17,15 @@ if _dotenv.exists():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    from backend.football_osint import track_record, warm_cache
+
+    warm_task = asyncio.create_task(warm_cache.warm_loop())
+    backfill_task = asyncio.create_task(track_record.backfill_loop())
+    try:
+        yield
+    finally:
+        warm_task.cancel()
+        backfill_task.cancel()
 
 
 app = FastAPI(title="ShijieQiuhua API", version="1.0.0", lifespan=lifespan)
@@ -64,6 +73,14 @@ app.include_router(auth_router, prefix="/api/auth")
 app.include_router(admin_router, prefix="/api/admin")
 app.include_router(football_osint_router)
 app.include_router(billing_router)
+
+
+from backend.football import FootballAnalysisRequest, FootballAnalysisResponse, analyze_football_match
+
+
+@app.post("/api/football/analyze", response_model=FootballAnalysisResponse)
+async def analyze_football(request: FootballAnalysisRequest):
+    return analyze_football_match(request)
 
 
 @app.get("/api/health")

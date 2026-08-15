@@ -87,9 +87,14 @@ def test_invite_codes_rejects_count_over_1000(tmp_db):
 def test_payment_codes_creates_activation_rows_and_audit(tmp_db):
     rc = admin.main(["payment_codes", "--count", "5", "--validity-days", "60", "--note", "promo"])
     assert rc == 0
-    rows = tmp_db.execute("SELECT status, note FROM activation_code").fetchall()
+    rows = tmp_db.execute("SELECT status, note, validity_days_after_redeem FROM activation_code").fetchall()
     assert len(rows) == 5
-    assert all(r["status"] == "unused" and r["note"] == "promo" for r in rows)
+    assert all(
+        r["status"] == "unused"
+        and r["note"] == "promo"
+        and r["validity_days_after_redeem"] == 30
+        for r in rows
+    )
     audit_rows = audit.recent(event="admin.bulk_create_payment", conn=tmp_db)
     assert len(audit_rows) == 1
 

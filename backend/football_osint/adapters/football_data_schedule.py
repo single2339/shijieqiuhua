@@ -50,20 +50,32 @@ class Fixture:
     status: str
     home_score: int | None
     away_score: int | None
+    provider: str = "football-data"
+    provider_match_id: str = ""
+    home_provider_id: str = ""
+    away_provider_id: str = ""
 
 
 def fetch_fixtures(days_ahead: int = 3) -> list[Fixture]:
     """Fetch fixtures from today through ``days_ahead`` days (UTC), cached 5 min."""
+    today = datetime.now(timezone.utc).date()
+    date_from = today.isoformat()
+    date_to = (today + timedelta(days=max(days_ahead, 0))).isoformat()
+    return fetch_fixtures_for_range(date_from, date_to)
+
+
+def fetch_fixtures_for_range(date_from: str, date_to: str) -> list[Fixture]:
+    """Fetch fixtures for an explicit ``YYYY-MM-DD`` UTC date range, cached 5 min.
+
+    Unlike ``fetch_fixtures`` (always "today + N days forward"), this accepts
+    past dates too — used by track-record backfill to look up finished matches.
+    """
     api_key = os.getenv("FOOTBALL_DATA_API_KEY", "")
     if not api_key:
         log.warning("FOOTBALL_DATA_API_KEY not set; fixtures unavailable")
         return []
 
-    today = datetime.now(timezone.utc).date()
-    date_from = today.isoformat()
-    date_to = (today + timedelta(days=max(days_ahead, 0))).isoformat()
     cache_key = f"fd:{date_from}:{date_to}"
-
     cached = cache.schedule_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -102,21 +114,41 @@ def parse_matches(payload: dict) -> list[Fixture]:
         kickoff = _parse_utc(m.get("utcDate"))
         if kickoff is None:
             continue
-        full_time = (m.get("score") or {}).get("fullTime") or {}
+        home_score, away_score = _regulation_score(m.get("score") or {})
         league_en = _competition(m)
         home_en = _team(m, "homeTeam")
         away_en = _team(m, "awayTeam")
+        match_id = _payload_id(m.get("id"))
+        home_provider_id = _payload_id((m.get("homeTeam") or {}).get("id"))
+        away_provider_id = _payload_id((m.get("awayTeam") or {}).get("id"))
         fixtures.append(Fixture(
-            match_id=str(m.get("id", "")),
+            match_id=match_id,
             league=name_map.get(league_en, league_en),
             kickoff_at=kickoff,
             home_team=name_map.get(home_en, home_en),
             away_team=name_map.get(away_en, away_en),
             status=_STATUS_MAP.get(m.get("status", ""), "scheduled"),
-            home_score=full_time.get("home"),
-            away_score=full_time.get("away"),
+            home_score=home_score,
+            away_score=away_score,
+            provider_match_id=match_id,
+            home_provider_id=home_provider_id,
+            away_provider_id=away_provider_id,
         ))
     return fixtures
+
+
+def _regulation_score(score: dict) -> tuple[int | None, int | None]:
+    """Return the 90-minute score, excluding extra time and penalties."""
+    regular_time = score.get("regularTime") or {}
+    if regular_time.get("home") is not None and regular_time.get("away") is not None:
+        return regular_time.get("home"), regular_time.get("away")
+
+    duration = score.get("duration")
+    if duration and duration != "REGULAR":
+        return None, None
+
+    full_time = score.get("fullTime") or {}
+    return full_time.get("home"), full_time.get("away")
 
 
 def upcoming(fixtures: list[Fixture]) -> list[Fixture]:
@@ -134,6 +166,10 @@ def _competition(match: dict) -> str:
 
 def _team(match: dict, side: str) -> str:
     return (match.get(side) or {}).get("name", "")
+
+
+def _payload_id(value: object) -> str:
+    return "" if value is None else str(value)
 
 
 def _parse_utc(value: str | None) -> datetime | None:

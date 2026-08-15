@@ -9,12 +9,16 @@
 .superpowers/
 .opencode/
 .claude/settings.local.json
+.omc/
+frontend/.omc/
+headroom_memory.db
 
 # Python
 __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+.pytest_cache/
 
 # Node
 node_modules/

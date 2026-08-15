@@ -75,11 +75,11 @@ def confirmed_findings(
         findings.append(
             IntelligenceFinding(
                 id="finding_fundamental_collected",
-                statement="已抓取到 Win007/球探基本面页面，可作为后续多源验证起点。",
+                statement="已抓取到懂球帝赛前分析页面，可作为后续多源验证起点。",
                 finding_type="confirmed",
                 confidence_level="L3",
                 evidence_ids=fundamental_ids,
-                source_summary="来自 Win007 公开基本面页面。",
+                source_summary="来自懂球帝赛前分析页面。",
             )
         )
     return findings
@@ -91,7 +91,7 @@ def assessments(
     prediction: PredictionResult,
     confidence: ConfidenceRating,
 ) -> list[IntelligenceFinding]:
-    driver_labels = [factor.label for factor in factors if factor.factor_id in prediction.drivers]
+    driver_labels = [factor.label for factor in factors if factor.label in prediction.drivers]
     statement = (
         f"当前倾向为 {prediction.lean}，但该判断属于 {confidence.level}，"
         f"主要依据为{('、'.join(driver_labels) or '基础输入与公开源计划')}。"
@@ -132,6 +132,6 @@ def next_steps(
         "执行三方验证：至少补充官方赛程、主流比分平台、球队/赛事公告三个独立来源。",
         "补充临场阵容、伤停和天气信息，重新加工证据链。",
     ]
-    if any(source.adapter == "win007_baseface" and source.status != "ok" for source in sources):
-        steps.append("补充 Win007 matchId 后抓取球探基本面页，核对积分排名、历史交锋、近期战绩和未来赛程。")
+    if any(source.adapter == "dongqiudi_analysis" and source.status != "ok" for source in sources):
+        steps.append("补充懂球帝 matchId 后抓取赛前分析页，核对积分排名、历史交锋、近期战绩和未来赛程。")
     return steps

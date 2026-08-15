@@ -11,7 +11,11 @@ DB_PATH = STORAGE_ROOT / "_auth.db"
 
 _local = threading.local()
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "sql"
-_EXTRA_MIGRATIONS = ("003_billing_and_entitlements.sql",)
+_EXTRA_MIGRATIONS = (
+    "003_billing_and_entitlements.sql",
+    "004_prediction_track_record.sql",
+    "005_sporttery_handicap_settlement.sql",
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -83,7 +87,20 @@ def get_db() -> sqlite3.Connection:
         for migration in _EXTRA_MIGRATIONS:
             sql_path = _MIGRATIONS_DIR / migration
             if sql_path.exists():
-                _local.conn.executescript(sql_path.read_text(encoding="utf-8"))
+                sql = sql_path.read_text(encoding="utf-8")
+                if migration == "005_sporttery_handicap_settlement.sql":
+                    for statement in sql.split(";"):
+                        if not statement.strip():
+                            continue
+                        try:
+                            _local.conn.execute(statement)
+                        except sqlite3.OperationalError as exc:
+                            if "duplicate column name" not in str(exc).lower():
+                                raise
+                else:
+                    _local.conn.executescript(sql)
+        from backend.football_osint.schema import ensure_schema
+        ensure_schema(_local.conn)
     return _local.conn
 
 

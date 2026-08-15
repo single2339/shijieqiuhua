@@ -1,0 +1,36 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "世界球花 · 完整产品界面": {
+      "versions": [
+        {
+          "path": "index.html",
+          "createdAt": "2026-06-17T01:39:59.204Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "研判报告展示区 · 方案对比": {
+      "versions": [
+        {
+          "path": "Report Redesign.html",
+          "createdAt": "2026-06-17T14:44:35.303Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "落地页重设 · 公开战绩证据区": {
+      "versions": [
+        {
+          "path": "Landing Redesign.html",
+          "createdAt": "2026-06-22T03:09:39.536Z",
+          "status": "needs-review"
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-06-17T01:39:59.204Z",
+  "updatedAt": "2026-06-22T03:13:13.756Z"
+}

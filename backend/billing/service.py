@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # PRD §6.3: skip 0/O/1/I/L
 ACTIVATION_CODE_LEN = 16
 DEFAULT_EXPIRES_DAYS = 90
+DEFAULT_VALIDITY_DAYS_AFTER_REDEEM = 30
 
 
 class EntitlementType(str, Enum):
@@ -74,7 +75,7 @@ def generate_codes(
     count: int,
     *,
     expires_days: int = DEFAULT_EXPIRES_DAYS,
-    validity_days_after_redeem: int | None = None,
+    validity_days_after_redeem: int | None = DEFAULT_VALIDITY_DAYS_AFTER_REDEEM,
     note: str = "",
     admin_actor: str = "admin",
 ) -> list[str]:
@@ -114,7 +115,12 @@ def generate_codes(
         audit.write(
             event="admin.bulk_create_payment",
             actor=admin_actor,
-            payload={"count": len(created), "expires_days": expires_days, "note": note},
+            payload={
+                "count": len(created),
+                "expires_days": expires_days,
+                "validity_days_after_redeem": validity_days_after_redeem,
+                "note": note,
+            },
             conn=conn,
         )
     return created

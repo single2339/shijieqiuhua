@@ -2,17 +2,41 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
-import time
-from collections import OrderedDict
+import re
 
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field, field_validator
 
 from .adapters import dongqiudi_schedule, football_data_schedule
-from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest
-from .pipeline import run_prediction_sync
+from .models import FootballOsintAnswer, FootballOsintJob, FootballOsintJobRequest, MatchDecision
+from . import warm_cache
+from . import track_record
+from . import history as history_module
+from . import decision_service
+
+_JOB_ID_RE = re.compile(r"^fo_\d{8}_[0-9a-f]{10}$")
+
+
+def _validate_job_id(job_id: str) -> str:
+    if not _JOB_ID_RE.fullmatch(job_id):
+        raise HTTPException(status_code=422, detail="job_id 格式无效")
+    return job_id
+
+
+class CompareRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1, max_length=3)
+
+    @field_validator("job_ids")
+    @classmethod
+    def validate_job_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("job_ids 不能重复")
+        invalid = [jid for jid in value if not _JOB_ID_RE.fullmatch(jid)]
+        if invalid:
+            raise ValueError("job_ids 含无效格式")
+        return value
 
 
 def _require_paid(http_request: Request) -> dict:
@@ -34,78 +58,37 @@ router = APIRouter(prefix="/api/football/osint", tags=["football-osint"])
 _ANSWER_CONCURRENCY = max(1, int(os.getenv("FOOTBALL_OSINT_ANSWER_CONCURRENCY", "4")))
 _ANSWER_SEMAPHORE = asyncio.Semaphore(_ANSWER_CONCURRENCY)
 
-_JOB_CACHE_MAX = max(64, int(os.getenv("FOOTBALL_OSINT_JOB_CACHE_MAX", "512")))
-_JOB_CACHE_TTL = max(60, int(os.getenv("FOOTBALL_OSINT_JOB_CACHE_TTL", "3600")))
-
-
-class _JobCache:
-    """Bounded LRU + TTL cache for completed OSINT jobs.
-
-    Keeps the in-memory store from growing unboundedly when the public
-    endpoint is hit by many distinct match queries.
-    """
-
-    def __init__(self, max_size: int, ttl_seconds: int) -> None:
-        self._lock = threading.Lock()
-        self._store: OrderedDict[str, tuple[float, FootballOsintJob]] = OrderedDict()
-        self._max = max_size
-        self._ttl = ttl_seconds
-
-    def __contains__(self, key: str) -> bool:
-        return self.get(key) is not None
-
-    def __len__(self) -> int:
-        with self._lock:
-            self._evict_expired()
-            return len(self._store)
-
-    def get(self, key: str) -> FootballOsintJob | None:
-        with self._lock:
-            entry = self._store.get(key)
-            if entry is None:
-                return None
-            ts, job = entry
-            if time.time() - ts >= self._ttl:
-                del self._store[key]
-                return None
-            self._store.move_to_end(key)
-            return job
-
-    def set(self, key: str, job: FootballOsintJob) -> None:
-        with self._lock:
-            self._evict_expired()
-            if key in self._store:
-                self._store.move_to_end(key)
-            self._store[key] = (time.time(), job)
-            while len(self._store) > self._max:
-                self._store.popitem(last=False)
-
-    def _evict_expired(self) -> None:
-        now = time.time()
-        expired = [k for k, (ts, _) in self._store.items() if now - ts >= self._ttl]
-        for k in expired:
-            del self._store[k]
-
-
-_JOBS = _JobCache(_JOB_CACHE_MAX, _JOB_CACHE_TTL)
-
 
 @router.post("/predict-sync", response_model=FootballOsintJob)
 async def predict_sync(request: FootballOsintJobRequest, http_request: Request):
     _require_paid(http_request)
     async with _ANSWER_SEMAPHORE:
-        job = await asyncio.to_thread(run_prediction_sync, request)
-    _JOBS.set(job.job_id, job)
-    return job
+        entry = await warm_cache.cache_or_compute(request)
+    return entry.job
 
 
 @router.post("/jobs", response_model=FootballOsintJob)
 async def create_job(request: FootballOsintJobRequest, http_request: Request):
     _require_paid(http_request)
     async with _ANSWER_SEMAPHORE:
-        job = await asyncio.to_thread(run_prediction_sync, request)
-    _JOBS.set(job.job_id, job)
-    return job
+        entry = await warm_cache.cache_or_compute(request)
+    return entry.job
+
+
+@router.post(
+    "/decisions",
+    response_model=MatchDecision,
+    response_model_exclude_none=True,
+)
+async def get_match_decision(request: FootballOsintJobRequest, http_request: Request):
+    """Return the paid primary full-time decision for one fixture.
+
+    The service normalizes every caller to the fixed full-time question, so a
+    specialist prompt cannot change the first-view prediction or its cache key.
+    """
+    _require_paid(http_request)
+    async with _ANSWER_SEMAPHORE:
+        return await decision_service.resolve(request)
 
 
 @router.post("/answer", response_model=FootballOsintAnswer)
@@ -120,13 +103,18 @@ async def answer_question(request: FootballOsintJobRequest, http_request: Reques
         )
 
     async with _ANSWER_SEMAPHORE:
-        job = await asyncio.to_thread(run_prediction_sync, request)
-    _JOBS.set(job.job_id, job)
-    return _answer_from_job(job, request.question)
+        entry = await warm_cache.cache_or_compute(request)
+    return entry.answer
+
+
+@router.get("/track-record")
+async def get_track_record():
+    """Public hit-rate stats (settled predictions vs actual results) for the landing page."""
+    return await asyncio.to_thread(track_record.get_stats)
 
 
 @router.get("/fixtures")
-async def list_fixtures(days: int = 3):
+async def list_fixtures(days: int = Query(3, ge=0, le=14)):
     fixtures = await asyncio.to_thread(football_data_schedule.fetch_fixtures, days)
 
     upcoming = football_data_schedule.upcoming(fixtures)
@@ -135,11 +123,16 @@ async def list_fixtures(days: int = 3):
             "id": f.match_id,
             "league": f.league,
             "kickoff_at": f.kickoff_at.astimezone(football_data_schedule.CST).strftime("%m-%d %H:%M"),
+            "kickoff_iso": f.kickoff_at.astimezone(football_data_schedule.CST).isoformat(),
             "home_team": f.home_team,
             "away_team": f.away_team,
             "status": f.status,
             "home_score": f.home_score,
             "away_score": f.away_score,
+            "provider": getattr(f, "provider", "football-data"),
+            "provider_match_id": getattr(f, "provider_match_id", ""),
+            "home_provider_id": getattr(f, "home_provider_id", ""),
+            "away_provider_id": getattr(f, "away_provider_id", ""),
         }
         for f in upcoming
     ]
@@ -147,8 +140,9 @@ async def list_fixtures(days: int = 3):
 
 @router.get("/jobs/{job_id}", response_model=FootballOsintJob)
 async def get_job(job_id: str, http_request: Request):
+    job_id = _validate_job_id(job_id)
     _require_paid(http_request)
-    job = _JOBS.get(job_id)
+    job = await asyncio.to_thread(history_module.load_job_from_bronze, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="football osint job not found")
     return job
@@ -156,11 +150,12 @@ async def get_job(job_id: str, http_request: Request):
 
 @router.get("/jobs/{job_id}/report.md", response_class=PlainTextResponse)
 async def get_report(job_id: str, http_request: Request):
+    job_id = _validate_job_id(job_id)
     _require_paid(http_request)
-    job = _JOBS.get(job_id)
-    if job is None:
+    report = await asyncio.to_thread(history_module.load_report_from_bronze, job_id)
+    if report is None:
         raise HTTPException(status_code=404, detail="football osint job not found")
-    return job.report_markdown
+    return report
 
 
 def _is_match_related(request: FootballOsintJobRequest) -> bool:
@@ -181,6 +176,7 @@ def _is_match_related(request: FootballOsintJobRequest) -> bool:
         "平",
         "负",
         "进球",
+        "比分",
         "角球",
         "红黄牌",
         "半场",
@@ -208,14 +204,29 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
     prediction = job.prediction
     confidence = job.confidence
 
-    # ── osint-core analysis pipeline ──
+    # ── preferred: LLM synthesis over all collected multi-source evidence ──
+    from .analysis import match_report
+
+    report = match_report.synthesize(job, question)
+    if report:
+        return FootballOsintAnswer(
+            related=True,
+            analysis_started=True,
+            answer=report,
+            judgment=_LEAN_JUDGMENT.get(prediction.lean, "") if prediction else "",
+            reasons=prediction.drivers[:3] if prediction else [],
+            confidence_level=confidence.level if confidence else "L4",
+        )
+
+    # ── fallback: osint-core template / short LLM / prediction summary ──
     from .analysis import osint_qa
 
-    analysis = osint_qa.analyze(job, question)
+    lean = prediction.lean if prediction else ""
+    analysis = osint_qa.analyze(job, question, lean)
 
     if analysis.dimension:
         answer = analysis.answer
-        judgment = analysis.confidence_level
+        judgment = _LEAN_JUDGMENT.get(prediction.lean, "") if prediction else ""
         reasons = analysis.assessments[:2] + analysis.data_gaps[:1]
         if not reasons:
             reasons = analysis.confirmed_facts[:2]
@@ -228,7 +239,8 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
         evidence_text = "\n".join(ev_lines) if ev_lines else "暂无有效证据"
 
         from .analysis import llm_qa
-        llm_answer = llm_qa.answer_question(question, evidence_text, match_ctx)
+        lean_cn = _LEAN_JUDGMENT.get(prediction.lean, "") if prediction else ""
+        llm_answer = llm_qa.answer_question(question, evidence_text, match_ctx, lean_cn)
         if llm_answer:
             answer = llm_answer
         else:
@@ -248,3 +260,39 @@ def _answer_from_job(job: FootballOsintJob, question: str = "") -> FootballOsint
         reasons=reasons[:3],
         confidence_level=confidence.level if confidence else "L4",
     )
+
+
+# ── v2: 赛后回看 & 多场对比 ──────────────────────────────────────────────────
+
+@router.get("/history")
+async def list_history(http_request: Request, days: int = Query(30, ge=1, le=90)):
+    """已结束比赛历史列表（摘要）。需付费。"""
+    _require_paid(http_request)
+    return await asyncio.to_thread(history_module.get_history_list, days=days, paid=True)
+
+
+@router.get("/history/{job_id}")
+async def get_history_detail(job_id: str, http_request: Request):
+    """单场回顾（含预测、盘口与赛后复盘）。需付费。"""
+    job_id = _validate_job_id(job_id)
+    _require_paid(http_request)
+    result = await asyncio.to_thread(history_module.get_history_detail, job_id, paid=True)
+    if result is None:
+        raise HTTPException(status_code=404, detail="未找到该比赛的已结算记录")
+    return result
+
+
+@router.post("/compare")
+async def compare_matches(body: CompareRequest, http_request: Request):
+    """多场对比（最多 3 场）。需付费。body: {"job_ids": ["fo_...", ...]}"""
+    _require_paid(http_request)
+    match_keys = await asyncio.to_thread(history_module.match_keys_for_job_ids, body.job_ids)
+    seen: dict[str, str] = {}
+    for job_id in body.job_ids:
+        match_key = match_keys.get(job_id)
+        if not match_key:
+            continue
+        if match_key in seen:
+            raise HTTPException(status_code=422, detail="不能对比同一场比赛的多个问题记录")
+        seen[match_key] = job_id
+    return await asyncio.to_thread(history_module.compare_jobs, body.job_ids)

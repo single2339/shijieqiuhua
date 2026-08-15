@@ -141,7 +141,12 @@ def cmd_payment_codes(args: argparse.Namespace) -> int:
         log.error("billing error: %s — %s", exc.error_code, exc)
         return 4
     _emit_codes(codes, args.output, kind="payment")
-    log.info("created %d payment codes (validity=%dd)", len(codes), args.validity_days)
+    log.info(
+        "created %d payment codes (validity=%dd, entitlement=%dd)",
+        len(codes),
+        args.validity_days,
+        args.validity_after_redeem,
+    )
     return 0
 
 
@@ -236,6 +241,18 @@ def cmd_ban_user(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backfill(_args: argparse.Namespace) -> int:
+    """手动触发 prediction_record 回填 + 结算。
+
+    本地 dev 环境不会自动运行 backfill_loop（只有 app_football.py 启动它），
+    可以用这个命令手动补齐 bronze_storage → prediction_record 的数据链路。
+    """
+    from backend.football_osint import track_record
+    result = track_record.backfill_due()
+    log.info("backfill complete: recorded=%d settled=%d", result["recorded"], result["settled"])
+    return 0
+
+
 # ── helpers ──
 
 def _resolve_admin_user_id(db) -> int:
@@ -286,8 +303,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pay.add_argument(
         "--validity-after-redeem",
         type=int,
-        default=None,
-        help="entitlement validity after redeem in days; omit for permanent",
+        default=30,
+        help="entitlement validity after redeem in days",
     )
     pay.add_argument("--note", type=str, default="")
     pay.add_argument("--output", type=str, default=None)
@@ -314,6 +331,9 @@ def _build_parser() -> argparse.ArgumentParser:
     bn.add_argument("--user-id", type=int, required=True)
     bn.add_argument("--reason", type=str, required=True)
     bn.set_defaults(func=cmd_ban_user)
+
+    bf = sub.add_parser("backfill", help="手动 backfill prediction_record（从 bronze_storage 扫 job → 结算比分）")
+    bf.set_defaults(func=cmd_backfill)
 
     return p
 

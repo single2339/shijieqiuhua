@@ -1,35 +1,39 @@
-# 全球开源情报收集网络（递进式体系）— 实现说明
+# 世界球花（ShijieQiuhua）— 足球 OSINT 赛前研判
 
-本目录包含架构计划的**可交付规格**：合规策略、采集契约、湖仓与核心对象、分渠道适配器、智能体平面与阶段路线图。未修改原始计划文件（`.cursor/plans/...`）。
+世界球花是一个面向足球赛前情报研判的产品：后端采集公开足球信息并生成可解释情报报告，前端提供选赛、提问、历史记录、赛后复盘、胜平负倾向和置信等级展示。
 
-## 文档索引
+## 当前架构
 
-| 文档 | 内容 |
-|------|------|
-| [docs/01-compliance-and-data-classification.md](docs/01-compliance-and-data-classification.md) | 合法边界、审计字段、数据分级、留存 |
-| [docs/02-collection-contracts.md](docs/02-collection-contracts.md) | `RawDocument`、`CollectionJob`、队列与背压 |
-| [docs/03-medallion-architecture.md](docs/03-medallion-architecture.md) | Bronze/Silver/Gold、Document/Entity/Event/Claim |
-| [docs/collectors/](docs/collectors/) | Web / 社交 / API / App 四类适配器 |
-| [docs/04-agent-plane.md](docs/04-agent-plane.md) | Orchestrator、验真、经济子 Agent、HITL |
-| [docs/05-roadmap.md](docs/05-roadmap.md) | 阶段 A–D 排期与退出标准 |
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| FastAPI 入口 | `backend/app_football.py` | 当前生产应用，组合 auth/admin/billing/football OSINT 路由，并启动缓存预热与赛果回填后台任务 |
+| 兼容入口 | `backend/main.py` | 仅 re-export `backend.app_football.app`，保留旧部署/import 路径 |
+| 足球 OSINT 引擎 | `backend/football_osint/` | 赛程、公开源采集、因子构建、置信评级、预测倾向、报告、历史与 track record |
+| Auth / Billing | `backend/auth/`, `backend/billing/` | 用户、会话、邀请码、权益、审计日志 |
+| 遥测与运维 | `backend/telemetry.py`, `backend/alert_runner.py`, `scripts/run-dashboard.sh` | SQLite telemetry、告警、Datasette 仪表盘 |
+| React SPA | `frontend/src/shijieqiuhua/` | Warm beige 风格产品界面：落地页、主工作台、报告、历史、对比、账号与后台 |
+| 运行数据 | `bronze_storage/` | 本地 SQLite 与 football job artifacts；这是运行时状态，不是源码 |
 
-## 机器可读规格
+## 常用命令
 
-| 路径 | 说明 |
-|------|------|
-| [schemas/collection-job.schema.json](schemas/collection-job.schema.json) | 采集任务 |
-| [schemas/raw-document.schema.json](schemas/raw-document.schema.json) | Bronze 入库单元 |
-| [schemas/silver-document.schema.json](schemas/silver-document.schema.json) | Silver 文档 |
-| [schemas/entity.schema.json](schemas/entity.schema.json) | 实体 |
-| [schemas/event.schema.json](schemas/event.schema.json) | 事件 |
-| [schemas/claim.schema.json](schemas/claim.schema.json) | 主张与验真 |
-| [schemas/economic-brief.schema.json](schemas/economic-brief.schema.json) | 经济简报 |
-| [sql/001_medallion_tables.sql](sql/001_medallion_tables.sql) | 参考 DDL |
+| What | Command | From |
+|------|---------|------|
+| Run backend | `uvicorn backend.app_football:app --reload --port 8000` | root（激活 `.venv` 后） |
+| Run frontend | `npm run dev` | `frontend/` |
+| Frontend build | `npm run build` | `frontend/` |
+| Frontend test | `npm test` | `frontend/` |
+| Backend test | `pytest` | root（激活 `.venv` 后） |
 
-## 原则
+Python 依赖在 `requirements.txt`，前端依赖在 `frontend/package.json`。
 
-仅采集与处理**合法公开或已授权**数据；具体采集实现须遵守各平台条款与适用法律。详见合规文档。
+## 关键文档
 
-## 架构幻灯片（PPT）
+- `docs/football-analysis.md`：早期足球分析接口说明
+- `docs/runbook-v1.md`：生产运维与故障处理
+- `docs/superpowers/specs/`：PRD、验收标准、telemetry、track record、情报不足等规格
+- `docs/superpowers/plans/`：已执行/进行中的实现计划
 
-已用 **baoyu-slide-deck**（`blueprint` 风格）生成递进式架构说明幻灯片，见目录 [slide-deck/global-osint-architecture/](slide-deck/global-osint-architecture/)（含 `global-osint-architecture.pptx` 与 `.pdf`）。
+## 设计产物
+
+- `designs/osint-network-intro/`：项目介绍 PPTX/HTML deck
+- `designs/shijieqiuhua-product/`：产品 UI 原型与预览图

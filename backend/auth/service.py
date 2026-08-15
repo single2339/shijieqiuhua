@@ -107,8 +107,8 @@ def register_user(username: str, email: str, password: str, invite_code: str) ->
     if email and not EMAIL_RE.match(email):
         raise ValueError("邮箱格式不正确")
     db = get_db()
-    try:
-        db.execute("BEGIN IMMEDIATE")
+    user_id = 0
+    with db:  # commits on success, rolls back on any exception
         existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if existing:
             raise ValueError("用户名已存在")
@@ -120,22 +120,25 @@ def register_user(username: str, email: str, password: str, invite_code: str) ->
             raise ValueError("邀请码无效、已使用或已过期")
         if row["current_uses"] >= row["max_uses"]:
             raise ValueError("邀请码无效、已使用或已过期")
-        if row["expires_at"] and row["expires_at"] < datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"):
-            raise ValueError("邀请码无效、已使用或已过期")
+        if row["expires_at"]:
+            expires = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < datetime.now(timezone.utc):
+                raise ValueError("邀请码无效、已使用或已过期")
         password_hash = hash_password(password)
         cursor = db.execute(
             "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
             (username, email, password_hash),
         )
         user_id = cursor.lastrowid
-        db.execute(
-            "UPDATE registration_codes SET current_uses = current_uses + 1 WHERE code = ?",
+        updated = db.execute(
+            "UPDATE registration_codes SET current_uses = current_uses + 1 "
+            "WHERE code = ? AND is_active = 1 AND current_uses < max_uses",
             (code,),
         )
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+        if updated.rowcount != 1:
+            raise ValueError("邀请码无效、已使用或已过期")
     return _user_row_to_dict(
         db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     )
@@ -143,6 +146,16 @@ def register_user(username: str, email: str, password: str, invite_code: str) ->
 
 def login_user(username: str, password: str, ip_address: str = "", user_agent: str = "") -> dict:
     db = get_db()
+    failures = db.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM login_attempts
+        WHERE identifier = ? AND success = 0 AND created_at >= datetime('now', '-15 minutes')
+        """,
+        (username,),
+    ).fetchone()["n"]
+    if failures >= 5:
+        raise ValueError("登录失败次数过多，请稍后再试")
     cur = db.execute(
         "INSERT INTO login_attempts (identifier, ip_address, success) VALUES (?, ?, 0)",
         (username, ip_address),

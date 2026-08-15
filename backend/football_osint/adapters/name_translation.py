@@ -41,6 +41,25 @@ def translate(names: list[str]) -> dict[str, str]:
         return {name: cache.get(name, name) for name in unique}
 
 
+def to_english(name: str) -> str:
+    """Reverse-lookup the English original for a Chinese name via the cache.
+
+    Fixtures are shown with translated Chinese names, but quality preview/stats
+    sites are English — search queries need the English original. Names selected
+    from the sidebar were translated earlier, so they're in the cache. Falls
+    back to the input when there's no mapping (already English, or uncached).
+    """
+    name = (name or "").strip()
+    if not name:
+        return name
+    with _LOCK:
+        cache = _load()
+    for english, chinese in cache.items():
+        if chinese == name:
+            return english
+    return name
+
+
 def _load() -> dict[str, str]:
     try:
         return json.loads(_CACHE_PATH.read_text(encoding="utf-8"))

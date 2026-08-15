@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { askFootballQuestion, createFootballOsintJob, fetchFootballOsintJob } from '../src/shijieqiuhua/api'
+import { askFootballQuestion, createFootballOsintJob, fetchFootballOsintJob, fetchTrackRecord } from '../src/shijieqiuhua/api'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -93,5 +93,17 @@ describe('shijieqiuhua football osint api', () => {
         question: '这场怎么看？',
       }),
     })
+  })
+
+  test('fetches track record stats', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ settled: 30, lean_accuracy: 0.6, scoreline_accuracy: 0.2, recent: [] }),
+    }))
+
+    const stats = await fetchTrackRecord()
+
+    expect(stats.settled).toBe(30)
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/football/osint/track-record')
   })
 })

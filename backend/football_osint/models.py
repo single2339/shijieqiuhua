@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from math import isclose, isfinite
+from typing import Any, Literal, Mapping, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 
 class FootballOsintJobStatus(str, Enum):
@@ -29,7 +30,24 @@ class FootballOsintJobRequest(BaseModel):
     venue: str = ""
     locale: str = "zh-CN"
     question: str = ""
+    provider: str = ""
+    provider_match_id: str = ""
+    home_provider_id: str = ""
+    away_provider_id: str = ""
+    home_aliases: list[str] = Field(default_factory=list)
+    away_aliases: list[str] = Field(default_factory=list)
     user_supplied: UserSuppliedInput = Field(default_factory=UserSuppliedInput)
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        copied = super().model_copy(update=update, deep=deep)
+        if not isinstance(copied.user_supplied, UserSuppliedInput):
+            copied.user_supplied = UserSuppliedInput.model_validate(copied.user_supplied)
+        return copied
 
 
 class MatchProfile(BaseModel):
@@ -83,18 +101,247 @@ class FactorImpact(BaseModel):
     missing_reason: str = ""
 
 
+class OutcomeProbabilities(BaseModel):
+    home_win: float = Field(ge=0.0, le=1.0)
+    draw: float = Field(ge=0.0, le=1.0)
+    away_win: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_total(self) -> OutcomeProbabilities:
+        if not isclose(self.home_win + self.draw + self.away_win, 1.0, abs_tol=1e-5):
+            raise ValueError("outcome probabilities must sum to 1")
+        return self
+
+
+class OutcomeOdds(BaseModel):
+    home_win: float = Field(gt=0.0)
+    draw: float = Field(gt=0.0)
+    away_win: float = Field(gt=0.0)
+
+    @model_validator(mode="after")
+    def validate_finite(self) -> OutcomeOdds:
+        if not all(isfinite(value) for value in self.model_dump().values()):
+            raise ValueError("outcome odds must be finite")
+        return self
+
+
+class MarketSourceSnapshot(BaseModel):
+    source_id: str
+    display_name: str = ""
+    market: Literal["1x2"] = "1x2"
+    odds: OutcomeOdds
+    implied_probabilities: OutcomeProbabilities | None = None
+    observed_at: datetime
+    provider_event_id: str = ""
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+
+class MarketHandicapSnapshot(BaseModel):
+    source_id: str
+    home_handicap: int
+    odds: OutcomeOdds
+    implied_probabilities: OutcomeProbabilities
+    observed_at: datetime
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+
+class MarketConsensus(BaseModel):
+    status: Literal["consensus", "single_source", "insufficient_sources"]
+    fresh_source_count: int = Field(ge=0)
+    source_ids: list[str] = Field(default_factory=list)
+    probabilities: OutcomeProbabilities | None = None
+
+    @model_validator(mode="after")
+    def validate_status(self) -> MarketConsensus:
+        if len(set(self.source_ids)) != len(self.source_ids):
+            raise ValueError("consensus source_ids must be unique")
+        if self.fresh_source_count != len(self.source_ids):
+            raise ValueError("fresh_source_count must match source_ids")
+        if self.status == "consensus":
+            if self.fresh_source_count < 3 or self.probabilities is None:
+                raise ValueError("consensus requires three fresh sources and probabilities")
+        elif self.status == "single_source":
+            if self.fresh_source_count != 1 or self.probabilities is not None:
+                raise ValueError("single_source requires exactly one source and no probabilities")
+        elif self.fresh_source_count not in (0, 2) or self.probabilities is not None:
+            raise ValueError("insufficient_sources requires zero or two sources and no probabilities")
+        return self
+
+
+class MarketComparison(BaseModel):
+    status: Literal["aligned", "divergent", "limited"]
+    model_leader: Literal["home_win", "draw", "away_win"] | None = None
+    market_leader: Literal["home_win", "draw", "away_win"] | None = None
+    leader_delta: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_status(self) -> MarketComparison:
+        details = (self.model_leader, self.market_leader, self.leader_delta)
+        if self.status == "limited":
+            if any(value is not None for value in details):
+                raise ValueError("limited comparison cannot include leader details")
+        elif any(value is None for value in details):
+            raise ValueError("aligned or divergent comparison requires leader details")
+        return self
+
+
+class MarketContext(BaseModel):
+    snapshots: list[MarketSourceSnapshot] = Field(default_factory=list)
+    handicap_snapshots: list[MarketHandicapSnapshot] = Field(default_factory=list)
+    consensus: MarketConsensus | None = None
+    comparison: MarketComparison | None = None
+
+
+class SportteryMarket(BaseModel):
+    provider: Literal["sporttery"] = "sporttery"
+    had_odds: OutcomeOdds | None = None
+    had_implied_probabilities: OutcomeProbabilities
+    home_handicap: int | None = None
+    hhad_odds: OutcomeOdds | None = None
+    hhad_implied_probabilities: OutcomeProbabilities | None = None
+    observed_at: str
+    provider_event_id: str = Field(default="", exclude=True)
+
+    @model_validator(mode="after")
+    def validate_hhad_group(self) -> SportteryMarket:
+        hhad_fields = (
+            self.home_handicap,
+            self.hhad_odds,
+            self.hhad_implied_probabilities,
+        )
+        if any(field is not None for field in hhad_fields) and not all(field is not None for field in hhad_fields):
+            raise ValueError("home_handicap, hhad_odds, and hhad_implied_probabilities must be provided together")
+        return self
+
+
+class HandicapConclusion(BaseModel):
+    home_handicap: int
+    outcome: Literal["home", "draw", "away"]
+    handicap_probabilities: OutcomeProbabilities
+    probability: float = Field(ge=0.0, le=1.0)
+    margin_to_runner_up: float = Field(ge=0.0, le=1.0)
+    clarity: Literal["clear", "close"]
+
+    @model_validator(mode="after")
+    def validate_derived_fields(self) -> HandicapConclusion:
+        probabilities = self.handicap_probabilities.model_dump()
+        ranked = sorted(probabilities.values(), reverse=True)
+        probability = ranked[0]
+        margin_to_runner_up = probability - ranked[1]
+        clarity = "clear" if margin_to_runner_up >= 0.05 else "close"
+        outcome_key = {"home": "home_win", "draw": "draw", "away": "away_win"}[self.outcome]
+        if not isclose(probabilities[outcome_key], probability, abs_tol=1e-6):
+            raise ValueError("outcome must match the highest handicap probability")
+        if not isclose(self.probability, probability, abs_tol=1e-6):
+            raise ValueError("probability must match the highest handicap probability")
+        if not isclose(self.margin_to_runner_up, margin_to_runner_up, abs_tol=1e-6):
+            raise ValueError("margin_to_runner_up must match the top-two handicap probability margin")
+        if self.clarity != clarity:
+            raise ValueError("clarity must match the top-two handicap probability margin")
+        return self
+
+
 class PredictionResult(BaseModel):
-    lean: Literal["home", "away", "draw", "home_or_draw", "away_or_draw"]
+    lean: Literal["home", "away", "draw", "home_or_draw", "away_or_draw", "info_insufficient"]
     summary: str
-    probability_band: dict[str, tuple[float, float]]
+    outcome_probabilities: OutcomeProbabilities
+    primary_probability: float = Field(ge=0.0, le=1.0)
+    margin_to_runner_up: float = Field(ge=0.0, le=1.0)
+    clarity: Literal["clear", "close", "insufficient"]
     scoreline_band: list[str]
     drivers: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
+    sporttery_market: SportteryMarket | None = None
+    handicap_conclusion: HandicapConclusion | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def convert_legacy_probability_band(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "probability_band" not in value:
+            return value
+
+        payload = dict(value)
+        bands = payload.pop("probability_band") or {}
+        midpoint = {
+            outcome: (float(band[0]) + float(band[1])) / 2
+            for outcome, band in bands.items()
+            if isinstance(band, (list, tuple)) and len(band) == 2
+        }
+        outcomes = ("home_win", "draw", "away_win")
+        if set(midpoint) != set(outcomes) or sum(midpoint.values()) <= 0:
+            midpoint = {outcome: 1 / 3 for outcome in outcomes}
+
+        total = sum(midpoint.values())
+        probabilities = {
+            outcome: round(midpoint[outcome] / total, 6)
+            for outcome in outcomes
+        }
+        ranked = sorted(probabilities.values(), reverse=True)
+        payload["outcome_probabilities"] = probabilities
+        payload["primary_probability"] = ranked[0]
+        payload["margin_to_runner_up"] = round(ranked[0] - ranked[1], 6)
+        payload["clarity"] = (
+            "insufficient"
+            if payload.get("lean") == "info_insufficient"
+            else "clear" if ranked[0] - ranked[1] >= 0.05 else "close"
+        )
+        return payload
+
+    @model_validator(mode="after")
+    def validate_derived_fields(self) -> PredictionResult:
+        ranked = sorted(self.outcome_probabilities.model_dump().values(), reverse=True)
+        primary_probability = ranked[0]
+        margin_to_runner_up = primary_probability - ranked[1]
+        clarity = (
+            "insufficient"
+            if self.lean == "info_insufficient"
+            else "clear" if margin_to_runner_up >= 0.05 else "close"
+        )
+        if not isclose(self.primary_probability, primary_probability, abs_tol=1e-6):
+            raise ValueError("primary_probability must match the highest outcome probability")
+        if not isclose(self.margin_to_runner_up, margin_to_runner_up, abs_tol=1e-6):
+            raise ValueError("margin_to_runner_up must match the top-two probability margin")
+        if self.clarity != clarity:
+            raise ValueError("clarity must match the lean and top-two probability margin")
+        if self.handicap_conclusion is not None:
+            market = self.sporttery_market
+            if (
+                market is None
+                or market.home_handicap is None
+                or market.hhad_odds is None
+                or market.hhad_implied_probabilities is None
+            ):
+                raise ValueError("handicap_conclusion requires a complete HHAD market")
+            if self.handicap_conclusion.home_handicap != market.home_handicap:
+                raise ValueError("handicap_conclusion home_handicap must match the HHAD market")
+        return self
 
 
 class ConfidenceRating(BaseModel):
     level: Literal["L1", "L2", "L3", "L4"]
     reason: str
+
+
+class DataQualitySummary(BaseModel):
+    insufficiency_reasons: list[str] = Field(default_factory=list)
+    primary_insufficiency_reason: str = ""
+    source_summary: dict[str, int] = Field(default_factory=dict)
+    fundamental_factor_count: int = 0
+    relevant_search_results_count: int = 0
+    dropped_search_results_count: int = 0
+    extraction_status: str = "not_run"
 
 
 class IntelligenceCycleStage(BaseModel):
@@ -112,6 +359,54 @@ class IntelligenceFinding(BaseModel):
     source_summary: str = ""
 
 
+class ActualResult(BaseModel):
+    home_score: int = Field(ge=0)
+    away_score: int = Field(ge=0)
+    outcome: Literal["home", "draw", "away"]
+    settled_at: datetime | None = None
+
+
+class PostMatchReview(BaseModel):
+    lean_correct: bool | None = None
+    scoreline_hit: bool | None = None
+    summary: str = ""
+
+
+class MatchDecision(BaseModel):
+    """Paid first-view match decision.
+
+    ``outcome`` and ``outcome_probabilities`` are retained as the small model
+    input consumed by :func:`analysis.market.compare_market_consensus`.  The
+    remaining fields form the API response and deliberately keep the OSINT
+    prediction and market context in separate branches.
+    """
+
+    outcome: Literal["home_win", "draw", "away_win", "info_insufficient"]
+    outcome_probabilities: OutcomeProbabilities | None = None
+    reason: str = ""
+    match: OsintMatch | None = None
+    fixture_status: Literal["scheduled", "live", "finished"] = "scheduled"
+    model_prediction: PredictionResult | None = None
+    confidence: ConfidenceRating | None = None
+    market_consensus: MarketConsensus | None = None
+    market_sources: list[MarketSourceSnapshot] = Field(default_factory=list)
+    market_comparison: MarketComparison = Field(
+        default_factory=lambda: MarketComparison(status="limited")
+    )
+    evidence_summary: list[IntelligenceFinding] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    actual_result: ActualResult | None = None
+    review: PostMatchReview | None = None
+    disclaimer: str = ""
+
+    @field_serializer("model_prediction")
+    def serialize_model_prediction(self, prediction: PredictionResult | None) -> dict[str, Any] | None:
+        """Never expose legacy odds fields through the system-prediction panel."""
+        if prediction is None:
+            return None
+        return prediction.model_dump(exclude={"sporttery_market", "handicap_conclusion"})
+
+
 class FootballOsintJob(BaseModel):
     job_id: str
     status: FootballOsintJobStatus
@@ -122,7 +417,9 @@ class FootballOsintJob(BaseModel):
     evidence: list[OsintEvidence] = Field(default_factory=list)
     factors: list[FactorImpact] = Field(default_factory=list)
     prediction: PredictionResult | None = None
+    market_context: MarketContext | None = None
     confidence: ConfidenceRating | None = None
+    data_quality: DataQualitySummary | None = None
     intelligence_cycle: list[IntelligenceCycleStage] = Field(default_factory=list)
     confirmed_findings: list[IntelligenceFinding] = Field(default_factory=list)
     assessments: list[IntelligenceFinding] = Field(default_factory=list)

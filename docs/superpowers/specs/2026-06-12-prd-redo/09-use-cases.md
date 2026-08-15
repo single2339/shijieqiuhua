@@ -187,7 +187,7 @@ POST /api/auth/login  { "email": ..., "otp_code": ... }
 
 **Postconditions**：
 - activation_code.status='used'，redeemed_at=now()
-- user 获得 entitlement(type='full_analysis', granted_at=now(), expires_at=null/+90d)
+- user 获得 entitlement(type='full_analysis', granted_at=now(), expires_at=now()+30d)
 - 缓存中 user.entitlements 立即失效重读
 - 写 audit_log
 

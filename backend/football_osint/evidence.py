@@ -5,10 +5,13 @@ OsintEvidence rows without depending on pipeline.py internals.
 """
 from __future__ import annotations
 
+from threading import Lock
+
 from .models import OsintEvidence
 
 STRONG_THRESHOLD = 0.50
 WEAK_THRESHOLD = 0.25
+_EVIDENCE_APPEND_LOCK = Lock()
 
 
 def append_evidence(
@@ -29,20 +32,23 @@ def append_evidence(
     job. Mutation rather than immutable return is intentional: the surrounding
     job assembly tracks evidence as one growing list.
     """
-    eid = f"ev_{len(evidence) + 1:03d}"
-    evidence.append(
-        OsintEvidence(
-            id=eid,
-            source=source,
-            source_type=source_type,
-            claim=claim,
-            topic=topic,
-            side=side,  # type: ignore[arg-type]
-            confidence=confidence,
-            raw_excerpt=raw_excerpt,
-            url=url,
+    # Multiple collector adapters append to one job list concurrently. Keep ID
+    # allocation and insertion indivisible so returned IDs always resolve.
+    with _EVIDENCE_APPEND_LOCK:
+        eid = f"ev_{len(evidence) + 1:03d}"
+        evidence.append(
+            OsintEvidence(
+                id=eid,
+                source=source,
+                source_type=source_type,
+                claim=claim,
+                topic=topic,
+                side=side,  # type: ignore[arg-type]
+                confidence=confidence,
+                raw_excerpt=raw_excerpt,
+                url=url,
+            )
         )
-    )
     return eid
 
 

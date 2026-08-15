@@ -120,7 +120,7 @@ class OutcomeOdds(BaseModel):
 
 
 class MarketSourceSnapshot(BaseModel):
-    source: str
+    source_id: str
     odds: OutcomeOdds
     observed_at: datetime
 
@@ -128,7 +128,7 @@ class MarketSourceSnapshot(BaseModel):
 class MarketConsensus(BaseModel):
     status: Literal["consensus", "single_source", "insufficient_sources"]
     fresh_source_count: int = Field(ge=0)
-    source_names: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
     probabilities: OutcomeProbabilities | None = None
 
     @model_validator(mode="after")

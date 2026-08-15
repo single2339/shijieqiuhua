@@ -18,9 +18,9 @@ from backend.football_osint.models import (
 NOW = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
 
 
-def snapshot(source: str, odds: tuple[float, float, float], observed_at: datetime = NOW) -> MarketSourceSnapshot:
+def snapshot(source_id: str, odds: tuple[float, float, float], observed_at: datetime = NOW) -> MarketSourceSnapshot:
     return MarketSourceSnapshot(
-        source=source,
+        source_id=source_id,
         odds=OutcomeOdds(home_win=odds[0], draw=odds[1], away_win=odds[2]),
         observed_at=observed_at,
     )
@@ -55,6 +55,24 @@ def test_two_fresh_sources_do_not_create_probabilities():
     assert consensus.probabilities is None
 
 
+def test_duplicate_snapshots_do_not_count_as_independent_sources():
+    consensus = build_market_consensus(
+        [
+            snapshot("a", (2.0, 4.0, 4.0), NOW - timedelta(minutes=5)),
+            snapshot("a", (2.5, 10 / 3, 10 / 3), NOW - timedelta(minutes=1)),
+            snapshot("a", (20 / 9, 10 / 3, 4.0), NOW - timedelta(minutes=3)),
+            snapshot("b", (2.0, 4.0, 4.0), NOW - timedelta(minutes=4)),
+            snapshot("b", (2.5, 10 / 3, 10 / 3), NOW - timedelta(minutes=2)),
+        ],
+        now=NOW,
+    )
+
+    assert consensus.status == "insufficient_sources"
+    assert consensus.fresh_source_count == 2
+    assert consensus.source_ids == ["a", "b"]
+    assert consensus.probabilities is None
+
+
 def test_stale_snapshot_is_excluded_from_consensus():
     consensus = build_market_consensus(
         [
@@ -67,7 +85,7 @@ def test_stale_snapshot_is_excluded_from_consensus():
 
     assert consensus.status == "insufficient_sources"
     assert consensus.fresh_source_count == 2
-    assert consensus.source_names == ["a", "b"]
+    assert consensus.source_ids == ["a", "b"]
     assert consensus.probabilities is None
 
 

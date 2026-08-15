@@ -53,12 +53,8 @@ def is_market_snapshot_fresh(
     now: datetime | None = None,
 ) -> bool:
     """Return whether a snapshot is no more than thirty minutes old."""
-    reference = now or datetime.now(timezone.utc)
-    observed_at = snapshot.observed_at
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=timezone.utc)
-    if observed_at.tzinfo is None:
-        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    reference = _as_utc(now or datetime.now(timezone.utc))
+    observed_at = _as_utc(snapshot.observed_at)
     return reference - observed_at <= MARKET_SNAPSHOT_MAX_AGE
 
 
@@ -71,27 +67,40 @@ def fresh_market_sources(
     return [snapshot for snapshot in snapshots if is_market_snapshot_fresh(snapshot, now=now)]
 
 
+def _latest_fresh_market_sources(
+    snapshots: list[MarketSourceSnapshot],
+    *,
+    now: datetime | None = None,
+) -> list[MarketSourceSnapshot]:
+    latest_by_source_id: dict[str, MarketSourceSnapshot] = {}
+    for snapshot in fresh_market_sources(snapshots, now=now):
+        current = latest_by_source_id.get(snapshot.source_id)
+        if current is None or _as_utc(snapshot.observed_at) > _as_utc(current.observed_at):
+            latest_by_source_id[snapshot.source_id] = snapshot
+    return list(latest_by_source_id.values())
+
+
 def build_market_consensus(
     snapshots: list[MarketSourceSnapshot],
     *,
     now: datetime | None = None,
 ) -> MarketConsensus:
-    """Build a median probability consensus only when three sources are fresh."""
-    fresh_sources = fresh_market_sources(snapshots, now=now)
-    source_names = [snapshot.source for snapshot in fresh_sources]
+    """Build a median probability consensus from distinct fresh sources."""
+    fresh_sources = _latest_fresh_market_sources(snapshots, now=now)
+    source_ids = [snapshot.source_id for snapshot in fresh_sources]
     source_count = len(fresh_sources)
     if source_count < 3:
         return MarketConsensus(
             status="single_source" if source_count == 1 else "insufficient_sources",
             fresh_source_count=source_count,
-            source_names=source_names,
+            source_ids=source_ids,
         )
 
     probabilities = [de_vig_snapshot(snapshot) for snapshot in fresh_sources]
     return MarketConsensus(
         status="consensus",
         fresh_source_count=source_count,
-        source_names=source_names,
+        source_ids=source_ids,
         probabilities=_probabilities(
             median(probability.home_win for probability in probabilities),
             median(probability.draw for probability in probabilities),
@@ -139,6 +148,10 @@ def _probability_leader(
 ) -> Literal["home_win", "draw", "away_win"]:
     values = probabilities.model_dump()
     return max(values, key=values.__getitem__)
+
+
+def _as_utc(timestamp: datetime) -> datetime:
+    return timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
 
 
 def parse_home_handicap(raw: str) -> int | None:

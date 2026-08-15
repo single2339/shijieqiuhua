@@ -229,5 +229,5 @@ def _review(prediction, actual_result: ActualResult | None) -> PostMatchReview |
         lean_correct=lean_correct,
         scoreline_hit=scoreline_hit,
         summary=("赛果方向命中。" if lean_correct else "赛果方向未命中。")
-        + (" 推荐比分命中。" if scoreline_hit else " 推荐比分未命中。"),
+        + (" 预测比分命中。" if scoreline_hit else " 预测比分未命中。"),
     )

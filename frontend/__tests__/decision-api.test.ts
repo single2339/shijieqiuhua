@@ -57,6 +57,37 @@ describe('match decision API', () => {
     })
   })
 
+  test('accepts nullable decision fields omitted by response_model_exclude_none', async () => {
+    const {
+      outcome_probabilities, match, model_prediction, confidence, market_consensus,
+      actual_result, review, ...withoutNullableFields
+    } = decisionFixture
+    void outcome_probabilities
+    void match
+    void model_prediction
+    void confidence
+    void market_consensus
+    void actual_result
+    void review
+    const sparseDecision = {
+      ...withoutNullableFields,
+      actual_result: { home_score: 2, away_score: 1, outcome: 'home' as const },
+      market_comparison: { status: 'limited' as const },
+    }
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => sparseDecision,
+    }))
+
+    const decision = await fetchMatchDecision(fixtureRequest)
+
+    expect(decision.model_prediction).toBeUndefined()
+    expect(decision.market_consensus).toBeUndefined()
+    expect(decision.market_comparison.model_leader).toBeUndefined()
+    expect(decision.actual_result?.settled_at).toBeUndefined()
+  })
+
   test.each([
     [401, '未登录'],
     [403, '需要付费权限'],

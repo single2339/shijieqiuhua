@@ -169,7 +169,7 @@ export interface MarketSourceSnapshot {
   display_name: string
   market: '1x2'
   odds: OutcomeOdds
-  implied_probabilities: OutcomeProbabilities | null
+  implied_probabilities?: OutcomeProbabilities
   observed_at: string
   provider_event_id: string
 }
@@ -178,14 +178,14 @@ export interface MarketConsensus {
   status: 'consensus' | 'single_source' | 'insufficient_sources'
   fresh_source_count: number
   source_ids: string[]
-  probabilities: OutcomeProbabilities | null
+  probabilities?: OutcomeProbabilities
 }
 
 export interface MarketComparison {
   status: 'aligned' | 'divergent' | 'limited'
-  model_leader: 'home_win' | 'draw' | 'away_win' | null
-  market_leader: 'home_win' | 'draw' | 'away_win' | null
-  leader_delta: number | null
+  model_leader?: 'home_win' | 'draw' | 'away_win'
+  market_leader?: 'home_win' | 'draw' | 'away_win'
+  leader_delta?: number
 }
 
 export interface SportteryMarket {
@@ -226,30 +226,30 @@ export interface ActualResult {
   home_score: number
   away_score: number
   outcome: 'home' | 'draw' | 'away'
-  settled_at: string | null
+  settled_at?: string
 }
 
 export interface PostMatchReview {
-  lean_correct: boolean | null
-  scoreline_hit: boolean | null
+  lean_correct?: boolean
+  scoreline_hit?: boolean
   summary: string
 }
 
 export interface MatchDecision {
   outcome: 'home_win' | 'draw' | 'away_win' | 'info_insufficient'
-  outcome_probabilities: OutcomeProbabilities | null
+  outcome_probabilities?: OutcomeProbabilities
   reason: string
-  match: OsintMatch | null
+  match?: OsintMatch
   fixture_status: 'scheduled' | 'live' | 'finished'
-  model_prediction: SystemPrediction | null
-  confidence: ConfidenceRating | null
-  market_consensus: MarketConsensus | null
+  model_prediction?: SystemPrediction
+  confidence?: ConfidenceRating
+  market_consensus?: MarketConsensus
   market_sources: MarketSourceSnapshot[]
   market_comparison: MarketComparison
   evidence_summary: IntelligenceFinding[]
   updated_at: string
-  actual_result: ActualResult | null
-  review: PostMatchReview | null
+  actual_result?: ActualResult
+  review?: PostMatchReview
   disclaimer: string
 }
 

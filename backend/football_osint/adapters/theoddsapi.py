@@ -23,6 +23,10 @@ DEFAULT_BOOKMAKERS = "pinnacle,bet365,williamhill"
 REQUEST_TIMEOUT_SECONDS = 8.0
 _CST = timezone(timedelta(hours=8))
 
+
+class MalformedProviderPayload(ValueError):
+    """A provider response violates the documented The Odds API shape."""
+
 # The provider uses these stable sport keys.  We only request competitions
 # whose identity can be expressed without guessing.
 _SPORT_KEYS = {
@@ -96,7 +100,7 @@ def collect(request: FootballOsintJobRequest) -> tuple[list[MarketSourceSnapshot
 
     try:
         snapshots = _snapshots_from_event(matches[0])
-    except ValueError:
+    except MalformedProviderPayload:
         return [], "授权赔率数据服务响应无效"
     if not snapshots:
         return [], "授权赔率数据服务未提供完整有效的胜平负赔率"
@@ -162,7 +166,7 @@ def _snapshots_from_event(event: dict[str, Any]) -> list[MarketSourceSnapshot]:
     seen_source_ids: set[str] = set()
     bookmakers = event.get("bookmakers")
     if not isinstance(bookmakers, list):
-        raise ValueError("bookmakers must be a list")
+        raise MalformedProviderPayload("bookmakers must be a list")
     for bookmaker in bookmakers:
         snapshot = _snapshot_from_bookmaker(bookmaker, home, away, event_id, observed_at)
         if snapshot is not None and snapshot.source_id not in seen_source_ids:
@@ -187,18 +191,18 @@ def _snapshot_from_bookmaker(
     odds_by_outcome: dict[str, float] = {}
     markets = bookmaker.get("markets")
     if not isinstance(markets, list):
-        raise ValueError("markets must be a list")
+        raise MalformedProviderPayload("markets must be a list")
     for market in markets:
         if not isinstance(market, dict):
-            raise ValueError("market must be an object")
+            raise MalformedProviderPayload("market must be an object")
         if market.get("key") != "h2h":
             continue
         outcomes = market.get("outcomes")
         if not isinstance(outcomes, list):
-            raise ValueError("outcomes must be a list")
+            raise MalformedProviderPayload("outcomes must be a list")
         for outcome in outcomes:
             if not isinstance(outcome, dict):
-                raise ValueError("outcome must be an object")
+                raise MalformedProviderPayload("outcome must be an object")
             name = _normalise(outcome.get("name"))
             if name == home:
                 outcome_key = "home"

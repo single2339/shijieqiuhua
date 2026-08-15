@@ -170,17 +170,17 @@ def test_collect_does_not_hide_unexpected_parser_failures(monkeypatch):
     monkeypatch.setenv("THEODDS_API_KEY", "test-key")
     monkeypatch.setattr(theoddsapi.httpx, "get", lambda *args, **kwargs: _Response([_event()]))
 
-    def broken_parser(event):
-        raise RuntimeError("implementation regression")
+    for error_type in (RuntimeError, ValueError):
+        def broken_parser(event, error_type=error_type):
+            raise error_type("implementation regression")
 
-    monkeypatch.setattr(theoddsapi, "_snapshots_from_event", broken_parser)
-
-    try:
-        theoddsapi.collect(_request())
-    except RuntimeError as exc:
-        assert str(exc) == "implementation regression"
-    else:
-        raise AssertionError("unexpected parser failures must propagate")
+        monkeypatch.setattr(theoddsapi, "_snapshots_from_event", broken_parser)
+        try:
+            theoddsapi.collect(_request())
+        except error_type as exc:
+            assert str(exc) == "implementation regression"
+        else:
+            raise AssertionError("unexpected parser failures must propagate")
 
 
 def test_collect_rejects_date_only_kickoff_without_calling_provider(monkeypatch):

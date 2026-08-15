@@ -119,6 +119,52 @@ class OutcomeOdds(BaseModel):
     away_win: float = Field(gt=0.0)
 
 
+class MarketSourceSnapshot(BaseModel):
+    source: str
+    odds: OutcomeOdds
+    observed_at: datetime
+
+
+class MarketConsensus(BaseModel):
+    status: Literal["consensus", "single_source", "insufficient_sources"]
+    fresh_source_count: int = Field(ge=0)
+    source_names: list[str] = Field(default_factory=list)
+    probabilities: OutcomeProbabilities | None = None
+
+    @model_validator(mode="after")
+    def validate_status(self) -> MarketConsensus:
+        if self.status == "consensus":
+            if self.fresh_source_count < 3 or self.probabilities is None:
+                raise ValueError("consensus requires three fresh sources and probabilities")
+        elif self.probabilities is not None:
+            raise ValueError("non-consensus market states cannot include probabilities")
+        return self
+
+
+class MarketComparison(BaseModel):
+    status: Literal["aligned", "divergent", "limited"]
+    model_leader: Literal["home_win", "draw", "away_win"] | None = None
+    market_leader: Literal["home_win", "draw", "away_win"] | None = None
+    leader_delta: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class MarketContext(BaseModel):
+    snapshots: list[MarketSourceSnapshot] = Field(default_factory=list)
+    consensus: MarketConsensus | None = None
+    comparison: MarketComparison | None = None
+
+
+class ActualResult(BaseModel):
+    home_score: int = Field(ge=0)
+    away_score: int = Field(ge=0)
+
+
+class MatchDecision(BaseModel):
+    outcome: Literal["home_win", "draw", "away_win", "info_insufficient"]
+    outcome_probabilities: OutcomeProbabilities | None = None
+    reason: str = ""
+
+
 class SportteryMarket(BaseModel):
     provider: Literal["sporttery"] = "sporttery"
     had_odds: OutcomeOdds | None = None

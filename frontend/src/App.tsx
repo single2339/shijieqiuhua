@@ -29,6 +29,7 @@ import { dedupeHistoryRecords } from './shijieqiuhua/historyRecords'
 import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
+const DECISION_PREFETCH_CONCURRENCY = 2
 
 const TOTAL_GOALS_QUESTION: MatchQuestion = {
   id: 'total_goals',
@@ -58,6 +59,29 @@ export function fixtureRequest(match: FootballMatch): FootballOsintJobRequest {
  */
 export function decisionRequestKey(match: FootballMatch | null): string {
   return match ? JSON.stringify(fixtureRequest(match)) : ''
+}
+
+/**
+ * Start background work with a small ceiling so loading a fixture list does
+ * not fan out into an unbounded number of OSINT and licensed-odds requests.
+ */
+export async function prefetchWithConcurrency<T>(
+  tasks: Array<() => Promise<T>>,
+  maxConcurrent = DECISION_PREFETCH_CONCURRENCY,
+): Promise<void> {
+  let cursor = 0
+  async function worker() {
+    while (cursor < tasks.length) {
+      const task = tasks[cursor]
+      cursor += 1
+      try {
+        await task()
+      } catch {
+        // A single fixture must not block prewarming the rest of the list.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(maxConcurrent, tasks.length) }, () => worker()))
 }
 
 export function shouldChangeFixture(currentId: string, nextId: string): boolean {
@@ -114,6 +138,7 @@ export default function App() {
   const [showCompare, setShowCompare] = useState(false)
   const [compareLoading, setCompareLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const decisionRequestsRef = useRef(new Map<string, Promise<MatchDecision>>())
   const { staged, start: startStaged, finish: finishStaged, reset: resetStaged } = useStagedProgress()
 
   useEffect(() => { getMe().then(setUser).finally(() => setAuthLoading(false)) }, [])
@@ -161,6 +186,30 @@ export default function App() {
   )
   const selectedDecisionKey = decisionRequestKey(selectedMatch)
 
+  function loadDecision(match: FootballMatch): Promise<MatchDecision> {
+    const key = decisionRequestKey(match)
+    const existing = decisionRequestsRef.current.get(key)
+    if (existing) return existing
+
+    const request = fetchMatchDecision(fixtureRequest(match)).catch((error: unknown) => {
+      decisionRequestsRef.current.delete(key)
+      throw error
+    })
+    decisionRequestsRef.current.set(key, request)
+    return request
+  }
+
+  // Fetching fixtures is also the prediction start time for paid users. The
+  // request cache shares this work with the visible selected-fixture panel.
+  useEffect(() => {
+    if (historyMode || userTier !== 'paid' || matches.length === 0) return
+    const missingMatches = matches.filter(match => !decisionRequestsRef.current.has(decisionRequestKey(match)))
+    if (missingMatches.length === 0) return
+    void prefetchWithConcurrency(
+      missingMatches.map(match => () => loadDecision(match)),
+    )
+  }, [historyMode, matches, userTier])
+
   // The first view for a paid fixture is always the full-time decision. Follow-up
   // questions deliberately stay out of this request and below the decision desk.
   useEffect(() => {
@@ -176,7 +225,7 @@ export default function App() {
     setDecision(null)
     setDecisionLoading(true)
     setDecisionError('')
-    fetchMatchDecision(fixtureRequest(selectedMatch))
+    loadDecision(selectedMatch)
       .then(result => { if (!cancelled) setDecision(result) })
       .catch((e) => {
         if (!cancelled) setDecisionError(e instanceof Error ? e.message : '比赛决策加载失败')
@@ -203,6 +252,7 @@ export default function App() {
     setDecision(null)
     setDecisionError('')
     setDecisionLoading(false)
+    decisionRequestsRef.current.clear()
     setHistoryMode(false)
     setHistoryRecords([])
     setSelectedHistoryJobId(null)

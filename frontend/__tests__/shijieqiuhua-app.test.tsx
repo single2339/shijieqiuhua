@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import App, { decisionRequestKey, fixtureRequest, shouldChangeFixture, specialistQuestions } from '../src/App'
+import App, { decisionRequestKey, fixtureRequest, prefetchWithConcurrency, shouldChangeFixture, specialistQuestions } from '../src/App'
 import LandingPage from '../src/shijieqiuhua/components/LandingPage'
 import PostMatchReview from '../src/shijieqiuhua/components/PostMatchReview'
 import ComparePanel from '../src/shijieqiuhua/components/ComparePanel'
@@ -81,6 +81,24 @@ describe('match decision entry point', () => {
 
     expect(refreshedMatch).not.toBe(match)
     expect(decisionRequestKey(refreshedMatch)).toBe(decisionRequestKey(match))
+  })
+
+  test('prewarms all fixture decisions with bounded concurrency', async () => {
+    let active = 0
+    let peakActive = 0
+    const completed: string[] = []
+    await prefetchWithConcurrency([
+      ...['a', 'b', 'c'].map(label => async () => {
+        active += 1
+        peakActive = Math.max(peakActive, active)
+        await new Promise(resolve => setTimeout(resolve, 0))
+        active -= 1
+        completed.push(label)
+      }),
+    ], 2)
+
+    expect(peakActive).toBe(2)
+    expect(completed).toHaveLength(3)
   })
 })
 

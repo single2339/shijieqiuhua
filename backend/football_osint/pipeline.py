@@ -93,19 +93,23 @@ def run_prediction_sync(
     )
 
     search_stats, market_context = _collect_zero_config_sources(request, evidence, sources)
+    osint_sources = sorted(
+        (source for source in sources if source.adapter != "theoddsapi"),
+        key=lambda source: source.adapter,
+    )
     factors = factor_registry_module.build_factors(request, match.profile, evidence)
     prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
     confidence = confidence_module.grade(match.profile, evidence, factors)
     data_quality = data_quality_module.build_data_quality(
-        request, sources, evidence, factors, prediction, search_stats=search_stats,
+        request, osint_sources, evidence, factors, prediction, search_stats=search_stats,
     )
-    cycle = intelligence_module.build_intelligence_cycle(sources, evidence)
+    cycle = intelligence_module.build_intelligence_cycle(osint_sources, evidence)
     confirmed_findings = intelligence_module.confirmed_findings(match, evidence)
     assessments = intelligence_module.assessments(match, factors, prediction, confidence)
-    alternatives = intelligence_module.alternative_explanations(match, sources, factors)
-    next_steps = intelligence_module.next_steps(sources, factors)
+    alternatives = intelligence_module.alternative_explanations(match, osint_sources, factors)
+    next_steps = intelligence_module.next_steps(osint_sources, factors)
     report = report_module.render_report(
-        match, [source for source in sources if source.adapter != "theoddsapi"], evidence,
+        match, osint_sources, evidence,
         factors, prediction, confidence,
         cycle, confirmed_findings, assessments, alternatives, next_steps,
     )

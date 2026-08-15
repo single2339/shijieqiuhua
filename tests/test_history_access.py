@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+import threading
 
 from fastapi.testclient import TestClient
 
@@ -90,3 +92,65 @@ def test_paid_job_replay_uses_persisted_market_snapshot_not_current_cache(monkey
     replayed = asyncio.run(routes.get_job(job_id, object()))
 
     assert replayed.market_context.snapshots[0].source_id == "persisted-book"
+
+
+def test_paid_history_detail_returns_persisted_market_not_current_cache(monkeypatch, tmp_path):
+    from backend.app_football import app
+    from backend.auth import db as auth_db
+    from backend.auth import routes as auth_routes
+    import backend.billing as billing
+    from backend.football_osint import history as history_module, warm_cache
+    from backend.football_osint.models import (
+        FootballOsintJob,
+        FootballOsintJobStatus,
+        MarketContext,
+        MarketSourceSnapshot,
+        OsintMatch,
+        OutcomeOdds,
+    )
+
+    storage = tmp_path / "bronze_storage"
+    storage.mkdir()
+    monkeypatch.setattr(auth_db, "STORAGE_ROOT", storage)
+    monkeypatch.setattr(auth_db, "DB_PATH", storage / "_auth.db")
+    monkeypatch.setattr(auth_db, "_local", threading.local())
+    conn = auth_db.get_db()
+    job_id = "fo_20260630_abcdef1234"
+    conn.execute(
+        """
+        INSERT INTO prediction_record
+        (job_id, home_team, away_team, kickoff_at, competition, predicted_lean,
+         predicted_scoreline_band, actual_home_score, actual_away_score,
+         actual_outcome, lean_correct, scoreline_hit, settled_at)
+        VALUES (?, '巴西', '日本', '2026-06-30 01:00', '世界杯', 'home', '[]', 2, 1, 'home', 1, 0, ?)
+        """,
+        (job_id, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")),
+    )
+    conn.commit()
+
+    bronze_root = storage / "football_osint"
+    job_dir = bronze_root / job_id
+    job_dir.mkdir(parents=True)
+    persisted = FootballOsintJob(
+        job_id=job_id,
+        status=FootballOsintJobStatus.COMPLETED,
+        progress=100,
+        match=OsintMatch(home_team="巴西", away_team="日本", kickoff_at="2026-06-30T01:00:00+08:00"),
+        market_context=MarketContext(snapshots=[MarketSourceSnapshot(
+            source_id="persisted-book", display_name="历史快照", odds=OutcomeOdds(home_win=2.0, draw=3.0, away_win=4.0),
+            observed_at="2026-06-29T10:00:00+08:00",
+        )]),
+    )
+    current = persisted.model_copy(deep=True)
+    current.market_context.snapshots[0].source_id = "current-book"
+    (job_dir / "status.json").write_text(persisted.model_dump_json(), encoding="utf-8")
+
+    monkeypatch.setattr(history_module, "DEFAULT_STORAGE_ROOT", bronze_root)
+    monkeypatch.setattr(warm_cache, "get_cached_by_job_id", lambda _job_id: current)
+    monkeypatch.setattr(auth_routes, "get_current_user", lambda request: _paid_user())
+    monkeypatch.setattr(billing, "has_entitlement", lambda user_id: True)
+
+    response = TestClient(app).get(f"/api/football/osint/history/{job_id}")
+
+    assert response.status_code == 200
+    assert response.json()["market_context"]["snapshots"][0]["source_id"] == "persisted-book"

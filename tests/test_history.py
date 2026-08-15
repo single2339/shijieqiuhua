@@ -158,6 +158,7 @@ def test_history_detail_hides_predictions_for_free_user(tmp_db):
     assert "predicted_scoreline_band" not in rec
     assert "lean_correct" not in rec
     assert "scoreline_hit" not in rec
+    assert "market_context" not in result
     assert "factors" not in result
     assert "retrospective" not in result
 

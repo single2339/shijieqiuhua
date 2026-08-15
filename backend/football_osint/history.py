@@ -204,22 +204,19 @@ def get_history_detail(job_id: str, *, paid: bool) -> dict | None:
         }
 
     # ── paid-only: factors + retrospective ──
-    factors = _load_factors(job_id)
-    if factors is None:
+    archived_job = load_job_from_bronze(job_id)
+    if archived_job is None:
         result["factors_expired"] = True
     else:
+        if archived_job.market_context is not None:
+            # Historical detail is a replay: expose only the market snapshot
+            # persisted with this job, never a current provider/cache value.
+            result["market_context"] = archived_job.market_context.model_dump(mode="json")
+        factors = archived_job.factors or []
         result["factors"] = [f.model_dump() for f in factors]
         result["retrospective"] = _build_retrospective(factors, row["actual_outcome"])
 
     return result
-
-
-def _load_factors(job_id: str) -> list[FactorImpact] | None:
-    """bronze_storage/{job_id}/status.json から因子を読む。失敗時は None（Q-v2-5 降級）。"""
-    job = load_job_from_bronze(job_id)
-    if job is None:
-        return None
-    return job.factors or []
 
 
 def _build_retrospective(factors: list[FactorImpact], actual_outcome: str) -> dict:

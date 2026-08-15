@@ -55,7 +55,6 @@ from .models import (
     FootballOsintJobStatus,
     MarketContext,
     MarketHandicapSnapshot,
-    MarketSourceSnapshot,
     MatchProfile,
     OsintEvidence,
     OsintMatch,
@@ -171,15 +170,8 @@ def _market_context_from_sporttery(market: SportteryMarket | None) -> MarketCont
     except ValueError:
         return None
 
-    snapshots = []
-    if market.had_odds is not None:
-        snapshots.append(
-            MarketSourceSnapshot(
-                source_id=market.provider,
-                odds=market.had_odds,
-                observed_at=observed_at,
-            )
-        )
+    source_snapshot = sporttery_adapter.market_source_snapshot(market, observed_at=observed_at)
+    snapshots = [source_snapshot] if source_snapshot is not None else []
     handicap_snapshots = []
     if (
         market.home_handicap is not None

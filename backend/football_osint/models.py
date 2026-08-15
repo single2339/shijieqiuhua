@@ -127,8 +127,12 @@ class OutcomeOdds(BaseModel):
 
 class MarketSourceSnapshot(BaseModel):
     source_id: str
+    display_name: str = ""
+    market: Literal["1x2"] = "1x2"
     odds: OutcomeOdds
+    implied_probabilities: OutcomeProbabilities | None = None
     observed_at: datetime
+    provider_event_id: str = ""
 
     @field_validator("observed_at")
     @classmethod
@@ -219,6 +223,7 @@ class SportteryMarket(BaseModel):
     hhad_odds: OutcomeOdds | None = None
     hhad_implied_probabilities: OutcomeProbabilities | None = None
     observed_at: str
+    provider_event_id: str = Field(default="", exclude=True)
 
     @model_validator(mode="after")
     def validate_hhad_group(self) -> SportteryMarket:

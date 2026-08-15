@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +15,45 @@ def test_farich_foot_source_catalog_contains_only_dongqiudi_fundamentals():
     adapters = {source.adapter for source in DONGQIUDI_SOURCE_TEMPLATES}
 
     assert adapters == {"dongqiudi_schedule", "dongqiudi_analysis"}
+
+
+def test_sporttery_had_quote_converts_to_generic_market_source():
+    from backend.football_osint.adapters.sporttery import SportteryOdds, market_source_snapshot
+
+    snapshot = market_source_snapshot(
+        SportteryOdds(
+            home_team="主队",
+            away_team="客队",
+            kickoff_at="2026-08-15 19:30:00",
+            had_h=2.0,
+            had_d=3.5,
+            had_a=4.0,
+            match_id="2040327",
+        ),
+        observed_at=datetime(2026, 8, 15, 20, 0, tzinfo=timezone(timedelta(hours=8))),
+    )
+
+    assert snapshot is not None
+    assert snapshot.source_id == "sporttery"
+    assert snapshot.display_name == "中国体育彩票"
+    assert snapshot.market == "1x2"
+    assert snapshot.provider_event_id == "2040327"
+    assert snapshot.odds.model_dump() == {"home_win": 2.0, "draw": 3.5, "away_win": 4.0}
+    assert snapshot.implied_probabilities is not None
+    assert snapshot.implied_probabilities.model_dump() == pytest.approx(
+        {"home_win": 0.4827586, "draw": 0.2758621, "away_win": 0.2413793},
+    )
+    assert snapshot.observed_at == datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("bad_odds", [(2.0, 0.0, 4.0), (float("nan"), 3.5, 4.0)])
+def test_sporttery_market_source_rejects_invalid_had_odds(bad_odds):
+    from backend.football_osint.adapters.sporttery import SportteryOdds, market_source_snapshot
+
+    assert market_source_snapshot(
+        SportteryOdds("主队", "客队", "", *bad_odds),
+        observed_at=datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc),
+    ) is None
 
 
 def test_osint_prediction_runs_without_api_keys(monkeypatch, tmp_path):

@@ -25,7 +25,7 @@ import httpx
 from .. import cache
 from ..analysis.market import normalize_decimal_odds, parse_home_handicap
 from ..evidence import append_evidence
-from ..models import FootballOsintJobRequest, OsintEvidence, OutcomeOdds, SportteryMarket
+from ..models import FootballOsintJobRequest, MarketSourceSnapshot, OsintEvidence, OutcomeOdds, SportteryMarket
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ class SportteryOdds:
     hhad_a: float | None = None
     hhad_goal_line: str = ""
     league: str = ""
+    match_id: str = ""
 
 
 def market_snapshot(odds: SportteryOdds, *, observed_at: str) -> SportteryMarket | None:
@@ -108,6 +109,36 @@ def market_snapshot(odds: SportteryOdds, *, observed_at: str) -> SportteryMarket
         hhad_odds=hhad_odds,
         hhad_implied_probabilities=hhad_probabilities,
         observed_at=observed_at,
+        provider_event_id=odds.match_id,
+    )
+
+
+def market_source_snapshot(
+    market: SportteryOdds | SportteryMarket,
+    *,
+    observed_at: datetime,
+) -> MarketSourceSnapshot | None:
+    """Convert a valid official HAD quote into the generic 1x2 market source."""
+    if isinstance(market, SportteryOdds):
+        if not all(math.isfinite(value) and value > 0 for value in (market.had_h, market.had_d, market.had_a)):
+            return None
+        had_odds = OutcomeOdds(home_win=market.had_h, draw=market.had_d, away_win=market.had_a)
+        provider_event_id = market.match_id
+    else:
+        had_odds = market.had_odds
+        provider_event_id = market.provider_event_id
+
+    if had_odds is None:
+        return None
+
+    return MarketSourceSnapshot(
+        source_id="sporttery",
+        display_name="中国体育彩票",
+        market="1x2",
+        odds=had_odds,
+        implied_probabilities=normalize_decimal_odds(had_odds),
+        observed_at=observed_at,
+        provider_event_id=provider_event_id,
     )
 
 
@@ -384,6 +415,7 @@ def get_odds(
         hhad_a=hhad.get("a") if hhad else None,
         hhad_goal_line=hhad_goal_line,
         league=selected.get("leagueAllName") or selected.get("leagueAbbName", ""),
+        match_id=str(selected.get("matchId", "")),
     )
 
 

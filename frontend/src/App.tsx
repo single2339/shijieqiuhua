@@ -3,12 +3,12 @@ import { ArrowRight, Clock, Eye, House, Question } from '@phosphor-icons/react'
 import { motion } from 'framer-motion'
 import {
   askFootballQuestion, compareMatches, createFootballOsintJob, fetchFixtures,
-  fetchFootballOsintJob, fetchHistory, fetchHistoryDetail,
+  fetchFootballOsintJob, fetchHistory, fetchHistoryDetail, fetchMatchDecision,
   getMe, loginUser, logoutUser, registerUser,
 } from './shijieqiuhua/api'
 import type { AuthUser } from './shijieqiuhua/api'
 import { fixtureToMatch } from './shijieqiuhua/mockData'
-import type { CompareItem, FootballMatch, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord } from './shijieqiuhua/types'
+import type { CompareItem, FootballMatch, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord, MatchDecision, MatchQuestion } from './shijieqiuhua/types'
 import AuthGate from './shijieqiuhua/components/AuthGate'
 import type { UserTier } from './shijieqiuhua/components/AuthGate'
 import AdminPanel from './shijieqiuhua/components/AdminPanel'
@@ -23,11 +23,40 @@ import type { HistoryItem } from './shijieqiuhua/components/AccountPanel'
 import PostMatchReview from './shijieqiuhua/components/PostMatchReview'
 import ComparePanel from './shijieqiuhua/components/ComparePanel'
 import IdleHint from './shijieqiuhua/components/IdleHint'
+import DecisionDesk from './shijieqiuhua/components/DecisionDesk'
 import { useStagedProgress } from './shijieqiuhua/useStagedProgress'
 import { dedupeHistoryRecords } from './shijieqiuhua/historyRecords'
 import './shijieqiuhua.css'
 
 const FIXTURES_POLL_MS = 60_000
+
+const TOTAL_GOALS_QUESTION: MatchQuestion = {
+  id: 'total_goals',
+  label: '总进球',
+  prompt: '全场总进球数预测是多少？',
+}
+
+/** Build a fixture-only request so the primary decision cannot inherit a specialist question. */
+export function fixtureRequest(match: FootballMatch): FootballOsintJobRequest {
+  return {
+    home_team: match.homeTeam,
+    away_team: match.awayTeam,
+    kickoff_at: match.kickoffAt,
+    competition: match.league,
+    provider: match.provider,
+    provider_match_id: match.provider_match_id,
+    home_provider_id: match.home_provider_id,
+    away_provider_id: match.away_provider_id,
+  }
+}
+
+/** The full-time verdict belongs to the decision desk, not the follow-up menu. */
+export function specialistQuestions(match: FootballMatch): MatchQuestion[] {
+  const questions = match.questions.filter(item => item.id !== 'fulltime' && item.id !== 'goals')
+  return questions.some(item => item.id === 'total_goals')
+    ? questions
+    : [...questions.slice(0, 2), TOTAL_GOALS_QUESTION, ...questions.slice(2)]
+}
 
 // Entitlement expires_at is stored UTC as "YYYY-MM-DD HH:MM:SS" (no tz). Parse
 // it as a real timestamp instead of lexicographic string compare, which broke
@@ -44,11 +73,14 @@ export default function App() {
   const [matches, setMatches] = useState<FootballMatch[]>([])
   const [fixturesLoading, setFixturesLoading] = useState(true)
   const [selectedId, setSelectedId] = useState('')
-  const [question, setQuestion] = useState('全场角球数预测是多少？')
+  const [question, setQuestion] = useState('全场比分预测是多少？')
   const [answer, setAnswer] = useState<FootballQuestionAnswer | null>(null)
   const [osintJob, setOsintJob] = useState<FootballOsintJob | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [decision, setDecision] = useState<MatchDecision | null>(null)
+  const [decisionLoading, setDecisionLoading] = useState(false)
+  const [decisionError, setDecisionError] = useState('')
   const [user, setUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
@@ -109,6 +141,36 @@ export default function App() {
     return hasPaid ? 'paid' : 'free'
   }, [user])
 
+  const selectedMatch = useMemo(
+    () => matches.find(m => m.id === selectedId) ?? (matches.length > 0 ? matches[0] : null),
+    [matches, selectedId],
+  )
+
+  // The first view for a paid fixture is always the full-time decision. Follow-up
+  // questions deliberately stay out of this request and below the decision desk.
+  useEffect(() => {
+    let cancelled = false
+
+    if (historyMode || userTier !== 'paid' || !selectedMatch) {
+      setDecision(null)
+      setDecisionLoading(false)
+      setDecisionError('')
+      return () => { cancelled = true }
+    }
+
+    setDecision(null)
+    setDecisionLoading(true)
+    setDecisionError('')
+    fetchMatchDecision(fixtureRequest(selectedMatch))
+      .then(result => { if (!cancelled) setDecision(result) })
+      .catch((e) => {
+        if (!cancelled) setDecisionError(e instanceof Error ? e.message : '比赛决策加载失败')
+      })
+      .finally(() => { if (!cancelled) setDecisionLoading(false) })
+
+    return () => { cancelled = true }
+  }, [historyMode, selectedMatch, userTier])
+
   async function handleAuthSubmit(creds: AuthCredentials) {
     const u = authMode === 'login'
       ? await loginUser(creds.username, creds.password)
@@ -123,6 +185,9 @@ export default function App() {
     setAnswer(null)
     setOsintJob(null)
     setError('')
+    setDecision(null)
+    setDecisionError('')
+    setDecisionLoading(false)
     setHistoryMode(false)
     setHistoryRecords([])
     setSelectedHistoryJobId(null)
@@ -135,11 +200,6 @@ export default function App() {
   function goAuth(mode: 'login' | 'register') { setAuthMode(mode); setView('auth') }
 
   function handlePaid(u: AuthUser) { setUser(u); setShowPaywall(false) }
-
-  const selectedMatch = useMemo(
-    () => matches.find(m => m.id === selectedId) ?? (matches.length > 0 ? matches[0] : null),
-    [matches, selectedId],
-  )
 
   const filteredMatches = useMemo(() => {
     if (fixtureFilter === '全部') return matches
@@ -216,17 +276,7 @@ export default function App() {
     setOsintJob(null)
     stopPoll()
     startStaged()
-    const request: FootballOsintJobRequest = {
-      home_team: selectedMatch.homeTeam,
-      away_team: selectedMatch.awayTeam,
-      kickoff_at: selectedMatch.kickoffAt,
-      competition: selectedMatch.league,
-      question: next,
-      provider: selectedMatch.provider,
-      provider_match_id: selectedMatch.provider_match_id,
-      home_provider_id: selectedMatch.home_provider_id,
-      away_provider_id: selectedMatch.away_provider_id,
-    }
+    const request: FootballOsintJobRequest = { ...fixtureRequest(selectedMatch), question: next }
     try {
       const [job, qa] = await Promise.all([
         createFootballOsintJob(request).catch(() => null),
@@ -389,7 +439,10 @@ export default function App() {
                     const isLive = m.publicLean.startsWith('进行中')
                     return (
                       <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
-                        onClick={() => { stopPoll(); resetStaged(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false) }}>
+                        onClick={() => {
+                          stopPoll(); resetStaged(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false)
+                          setDecision(null); setDecisionError(''); setDecisionLoading(userTier === 'paid')
+                        }}>
                         <div className="sqh-fixture-top">
                           <span className="sqh-fixture-league">{m.league}</span>
                           {isLive && <span className="sqh-fixture-live">LIVE</span>}
@@ -430,11 +483,22 @@ export default function App() {
             )}
           </section>
         ) : (
-          <MatchCard match={selectedMatch} question={question} answer={answer}
-            osintJob={osintJob} loading={loading} error={error} userTier={userTier}
-            staged={staged}
-            onChange={setQuestion} onAsk={() => ask()} onPreset={ask}
-            onUpgrade={() => setShowPaywall(true)} />
+          <section className="sqh-panel sqh-question-card">
+            {selectedMatch ? (
+              <>
+                <AuthGate tier={userTier} requiredTier="paid" onUpgrade={() => setShowPaywall(true)}>
+                  <DecisionDesk decision={decision} loading={decisionLoading} error={decisionError} />
+                </AuthGate>
+                <MatchCard match={selectedMatch} question={question} answer={answer}
+                  osintJob={osintJob} loading={loading} error={error} userTier={userTier}
+                  staged={staged} embedded
+                  onChange={setQuestion} onAsk={() => ask()} onPreset={ask}
+                  onUpgrade={() => setShowPaywall(true)} />
+              </>
+            ) : (
+              <DecisionDesk />
+            )}
+          </section>
         )}
 
         {/* right */}
@@ -582,10 +646,11 @@ function ConfidenceBadge({ body }: { body: string }) {
 
 // ── MatchQuestionCard ──
 
-function MatchCard({ match, question, answer, osintJob, loading, error, userTier, staged, onChange, onAsk, onPreset, onUpgrade }: {
+function MatchCard({ match, question, answer, osintJob, loading, error, userTier, staged, embedded = false, onChange, onAsk, onPreset, onUpgrade }: {
   match: FootballMatch | null; question: string; answer: FootballQuestionAnswer | null
   osintJob: FootballOsintJob | null; loading: boolean; error: string; userTier: UserTier
   staged: { phase: string; progress: number }
+  embedded?: boolean
   onChange: (v: string) => void; onAsk: () => void; onPreset: (v: string) => void
   onUpgrade: () => void
 }) {
@@ -597,8 +662,8 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
     )
   }
   return (
-    <section className="sqh-panel sqh-question-card">
-      <div className="sqh-match-hero">
+    <section className={embedded ? 'sqh-specialist-followup' : 'sqh-panel sqh-question-card'} style={embedded ? { marginTop: 18, paddingTop: 18, borderTop: '1px solid #e5ddcd' } : undefined}>
+      {!embedded && <div className="sqh-match-hero">
         <div className="sqh-hero-meta"><span>{match.league}</span><span>{match.kickoffAt}</span></div>
         <div className="sqh-teams"><strong>{match.homeTeam}</strong><span>对阵</span><strong>{match.awayTeam}</strong></div>
         <div className="sqh-hero-foot">
@@ -610,10 +675,10 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
               : null
           })()}
         </div>
-      </div>
+      </div>}
       <AuthGate tier={userTier} requiredTier="paid">
         <div className="sqh-ask-box">
-          <div className="sqh-section-title"><Question size={16} weight="duotone" /><span>继续问这场比赛</span></div>
+          <div className="sqh-section-title"><Question size={16} weight="duotone" /><span>专项补充研判</span></div>
           <div className="sqh-input-row">
             <input value={question} onChange={e => onChange(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') onAsk() }}
@@ -623,7 +688,7 @@ function MatchCard({ match, question, answer, osintJob, loading, error, userTier
             </motion.button>
           </div>
           <div className="sqh-question-chips">
-            {match.questions.map(item => (
+            {specialistQuestions(match).map(item => (
               <button key={item.id} onClick={() => onPreset(item.prompt)}>{item.label}</button>
             ))}
           </div>

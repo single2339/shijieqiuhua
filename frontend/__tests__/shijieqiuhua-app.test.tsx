@@ -1,9 +1,29 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import App from '../src/App'
+import App, { fixtureRequest, specialistQuestions } from '../src/App'
 import LandingPage from '../src/shijieqiuhua/components/LandingPage'
 import PostMatchReview from '../src/shijieqiuhua/components/PostMatchReview'
 import ComparePanel from '../src/shijieqiuhua/components/ComparePanel'
+import type { FootballMatch } from '../src/shijieqiuhua/types'
+
+const match: FootballMatch = {
+  id: 'fixture-1',
+  league: '英超',
+  kickoffAt: '2026-08-16T14:00:00+00:00',
+  kickoffIso: '2026-08-16T14:00:00+00:00',
+  homeTeam: '阿森纳',
+  awayTeam: '热刺',
+  provider: 'football-data',
+  provider_match_id: 'match_1',
+  home_provider_id: 'home_1',
+  away_provider_id: 'away_1',
+  publicLean: '未开赛',
+  questions: [
+    { id: 'goals', label: '赛果', prompt: '全场比分预测是多少？' },
+    { id: 'corners', label: '角球', prompt: '全场角球数预测是多少？' },
+    { id: 'fulltime', label: '全场赛果', prompt: '谁会赢？' },
+  ],
+}
 
 describe('shijieqiuhua app shell', () => {
   test('renders landing page by default (initial view)', () => {
@@ -21,6 +41,30 @@ describe('shijieqiuhua app shell', () => {
     expect(html).toContain('按需选择')
     expect(html).toContain('情报通')
     expect(html).toContain('诚实的不确定性')
+  })
+})
+
+describe('match decision entry point', () => {
+  test('builds the paid first-view request from fixture identity only', () => {
+    expect(fixtureRequest(match)).toEqual({
+      home_team: '阿森纳',
+      away_team: '热刺',
+      kickoff_at: '2026-08-16T14:00:00+00:00',
+      competition: '英超',
+      provider: 'football-data',
+      provider_match_id: 'match_1',
+      home_provider_id: 'home_1',
+      away_provider_id: 'away_1',
+    })
+    expect(fixtureRequest(match)).not.toHaveProperty('question')
+  })
+
+  test('keeps full-time verdict out of specialist chips and exposes total goals separately', () => {
+    const questions = specialistQuestions(match)
+
+    expect(questions.map(item => item.id)).toEqual(['corners', 'total_goals'])
+    expect(questions.map(item => item.label)).toContain('角球')
+    expect(questions.map(item => item.label)).toContain('总进球')
   })
 })
 

@@ -322,6 +322,11 @@ def test_market_sources_stay_outside_osint_prediction(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(pipeline.rss_adapter, "collect_all", lambda request, evidence: [])
     monkeypatch.setattr(pipeline, "_collect_football_data_stats", lambda request, evidence, sources: None)
+    monkeypatch.setattr(
+        pipeline.theoddsapi_adapter,
+        "collect",
+        lambda request: ([], "未配置授权赔率数据服务"),
+    )
     monkeypatch.setattr(pipeline.factor_registry_module, "build_factors", lambda *args, **kwargs: factors)
     monkeypatch.setattr(pipeline.sporttery_adapter, "get_odds", lambda *args, **kwargs: odds)
 

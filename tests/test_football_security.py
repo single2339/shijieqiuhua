@@ -92,6 +92,11 @@ def test_zero_config_collection_attaches_official_sporttery_market_once(monkeypa
     monkeypatch.setattr(pipeline, "_collect_search_sources", lambda request, evidence, sources: None)
     monkeypatch.setattr(pipeline.rss_adapter, "collect_all", lambda request, evidence: [])
     monkeypatch.setattr(pipeline, "_collect_football_data_stats", lambda request, evidence, sources: None)
+    monkeypatch.setattr(
+        pipeline.theoddsapi_adapter,
+        "collect",
+        lambda request: ([], "未配置授权赔率数据服务"),
+    )
 
     market = SportteryMarket(
         had_odds=OutcomeOdds(home_win=2.0, draw=3.5, away_win=4.0),
@@ -108,12 +113,13 @@ def test_zero_config_collection_attaches_official_sporttery_market_once(monkeypa
         return market, "ev_sporttery", ""
     monkeypatch.setattr(pipeline, "_collect_sporttery", fake_sporttery, raising=False)
 
-    _, collected_market = pipeline._collect_zero_config_sources(request, evidence, sources)
+    _, market_context = pipeline._collect_zero_config_sources(request, evidence, sources)
 
     assert called["sporttery"] == 1
     assert [ev.topic for ev in evidence].count("odds.sporttery.market") == 1
     assert next(src for src in sources if src.adapter == "sporttery").status == "ok"
-    assert collected_market == market
+    assert market_context.snapshots[0].source_id == "sporttery"
+    assert next(src for src in sources if src.adapter == "theoddsapi").status == "skipped"
 
 
 def test_zero_config_collection_marks_uncovered_sporttery_as_skipped(monkeypatch):
@@ -130,6 +136,11 @@ def test_zero_config_collection_marks_uncovered_sporttery_as_skipped(monkeypatch
     monkeypatch.setattr(pipeline.rss_adapter, "collect_all", lambda request, evidence: [])
     monkeypatch.setattr(pipeline, "_collect_football_data_stats", lambda request, evidence, sources: None)
     monkeypatch.setattr(pipeline, "_collect_sporttery", lambda request, evidence: (None, "", "体彩未覆盖该场比赛"), raising=False)
+    monkeypatch.setattr(
+        pipeline.theoddsapi_adapter,
+        "collect",
+        lambda request: ([], "未配置授权赔率数据服务"),
+    )
 
     pipeline._collect_zero_config_sources(request, evidence, sources)
 

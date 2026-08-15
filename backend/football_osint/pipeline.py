@@ -48,13 +48,13 @@ from .analysis import report as report_module
 from . import evidence as evidence_module
 from . import data_quality as data_quality_module
 from . import factor_registry as factor_registry_module
+from . import market_service
 from . import storage
 from .models import (
     FootballOsintJob,
     FootballOsintJobRequest,
     FootballOsintJobStatus,
     MarketContext,
-    MarketHandicapSnapshot,
     MatchProfile,
     OsintEvidence,
     OsintMatch,
@@ -65,6 +65,7 @@ from .sources import DONGQIUDI_SOURCE_TEMPLATES, SEARCH_SOURCE_TEMPLATES
 from .adapters import open_meteo as weather_adapter
 from .adapters import rss_feed as rss_adapter
 from .adapters import sporttery as sporttery_adapter
+from .adapters import theoddsapi as theoddsapi_adapter
 from .adapters import web_search as web_search_adapter
 
 
@@ -91,7 +92,7 @@ def run_prediction_sync(
         profile=_profile_match(request),
     )
 
-    search_stats, market = _collect_zero_config_sources(request, evidence, sources)
+    search_stats, market_context = _collect_zero_config_sources(request, evidence, sources)
     factors = factor_registry_module.build_factors(request, match.profile, evidence)
     prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
     confidence = confidence_module.grade(match.profile, evidence, factors)
@@ -104,7 +105,8 @@ def run_prediction_sync(
     alternatives = intelligence_module.alternative_explanations(match, sources, factors)
     next_steps = intelligence_module.next_steps(sources, factors)
     report = report_module.render_report(
-        match, sources, evidence, factors, prediction, confidence,
+        match, [source for source in sources if source.adapter != "theoddsapi"], evidence,
+        factors, prediction, confidence,
         cycle, confirmed_findings, assessments, alternatives, next_steps,
     )
 
@@ -118,7 +120,7 @@ def run_prediction_sync(
         evidence=evidence,
         factors=factors,
         prediction=prediction,
-        market_context=_market_context_from_sporttery(market),
+        market_context=market_context,
         confidence=confidence,
         data_quality=data_quality,
         intelligence_cycle=cycle,
@@ -160,39 +162,6 @@ def _read_factor_min() -> int:
         return 1
 
 
-def _market_context_from_sporttery(market: SportteryMarket | None) -> MarketContext | None:
-    """Preserve collected market data separately from OSINT prediction output."""
-    if market is None:
-        return None
-
-    try:
-        observed_at = datetime.fromisoformat(market.observed_at.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-    source_snapshot = sporttery_adapter.market_source_snapshot(market, observed_at=observed_at)
-    snapshots = [source_snapshot] if source_snapshot is not None else []
-    handicap_snapshots = []
-    if (
-        market.home_handicap is not None
-        and market.hhad_odds is not None
-        and market.hhad_implied_probabilities is not None
-    ):
-        handicap_snapshots.append(
-            MarketHandicapSnapshot(
-                source_id=market.provider,
-                home_handicap=market.home_handicap,
-                odds=market.hhad_odds,
-                implied_probabilities=market.hhad_implied_probabilities,
-                observed_at=observed_at,
-            )
-        )
-    return MarketContext(
-        snapshots=snapshots,
-        handicap_snapshots=handicap_snapshots,
-    )
-
-
 def _job_id(request: FootballOsintJobRequest) -> str:
     payload = request.model_dump(mode="json")
     seed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -220,7 +189,7 @@ def _collect_zero_config_sources(
     request: FootballOsintJobRequest,
     evidence: list[OsintEvidence],
     sources: list[OsintSourceStatus],
-) -> tuple[data_quality_module.SearchQualityStats, SportteryMarket | None]:
+) -> tuple[data_quality_module.SearchQualityStats, MarketContext]:
     fixture_id = evidence_module.append_evidence(
         evidence,
         source="User request",
@@ -246,13 +215,15 @@ def _collect_zero_config_sources(
     # ── weather / search / RSS / football-data / official market — parallel I/O ──
     search_stats = data_quality_module.SearchQualityStats()
     market: SportteryMarket | None = None
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    licensed_snapshots = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
         futures = {
             pool.submit(_collect_one_weather, request, evidence): "weather",
             pool.submit(_collect_search_sources, request, evidence, sources): "search",
             pool.submit(rss_adapter.collect_all, request, evidence): "rss",
             pool.submit(_collect_football_data_stats, request, evidence, sources): "football_data",
             pool.submit(_collect_sporttery, request, evidence): "sporttery",
+            pool.submit(theoddsapi_adapter.collect, request): "theoddsapi",
         }
         for future in as_completed(futures):
             label = futures[future]
@@ -284,9 +255,20 @@ def _collect_zero_config_sources(
                         evidence_ids=[evidence_id] if evidence_id else [],
                         reason="" if evidence_id else reason,
                     ))
+                elif label == "theoddsapi":
+                    licensed_snapshots, reason = result
+                    sources.append(
+                        market_service.licensed_market_source_status(licensed_snapshots, reason)
+                    )
                 # search / football_data append to evidence + sources internally
             except Exception:
                 log.warning("%s phase failed or timed out", label)
+                if label == "theoddsapi":
+                    sources.append(
+                        market_service.licensed_market_source_status(
+                            [], "授权赔率数据服务请求失败",
+                        )
+                    )
 
     if request.user_supplied.notes:
         note_ids = []
@@ -306,7 +288,7 @@ def _collect_zero_config_sources(
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="ok", evidence_ids=note_ids))
     else:
         sources.append(OsintSourceStatus(adapter="user_supplied", label="用户补充基本面", status="skipped", reason="未提供伤病、首发或球队新闻补充"))
-    return search_stats, market
+    return search_stats, market_service.build_market_context(market, licensed_snapshots)
 
 
 def _collect_one_weather(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:

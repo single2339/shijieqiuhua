@@ -19,6 +19,7 @@ from ..models import (
 
 _HANDICAP_PATTERN = re.compile(r"[+-]?\d+")
 MARKET_SNAPSHOT_MAX_AGE = timedelta(minutes=30)
+MARKET_SNAPSHOT_FUTURE_SKEW = timedelta(seconds=60)
 
 
 def _probabilities(home: float, draw: float, away: float) -> OutcomeProbabilities:
@@ -55,7 +56,8 @@ def is_market_snapshot_fresh(
     """Return whether a snapshot is no more than thirty minutes old."""
     reference = _as_utc(now or datetime.now(timezone.utc))
     observed_at = _as_utc(snapshot.observed_at)
-    return reference - observed_at <= MARKET_SNAPSHOT_MAX_AGE
+    age = reference - observed_at
+    return -MARKET_SNAPSHOT_FUTURE_SKEW <= age <= MARKET_SNAPSHOT_MAX_AGE
 
 
 def fresh_market_sources(
@@ -75,9 +77,9 @@ def _latest_fresh_market_sources(
     latest_by_source_id: dict[str, MarketSourceSnapshot] = {}
     for snapshot in fresh_market_sources(snapshots, now=now):
         current = latest_by_source_id.get(snapshot.source_id)
-        if current is None or _as_utc(snapshot.observed_at) > _as_utc(current.observed_at):
+        if current is None or _snapshot_precedes(current, snapshot):
             latest_by_source_id[snapshot.source_id] = snapshot
-    return list(latest_by_source_id.values())
+    return [latest_by_source_id[source_id] for source_id in sorted(latest_by_source_id)]
 
 
 def build_market_consensus(
@@ -151,7 +153,22 @@ def _probability_leader(
 
 
 def _as_utc(timestamp: datetime) -> datetime:
-    return timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return timestamp.astimezone(timezone.utc)
+
+
+def _snapshot_precedes(current: MarketSourceSnapshot, candidate: MarketSourceSnapshot) -> bool:
+    current_observed_at = _as_utc(current.observed_at)
+    candidate_observed_at = _as_utc(candidate.observed_at)
+    if candidate_observed_at != current_observed_at:
+        return candidate_observed_at > current_observed_at
+    return _odds_tuple(candidate) < _odds_tuple(current)
+
+
+def _odds_tuple(snapshot: MarketSourceSnapshot) -> tuple[float, float, float]:
+    odds = snapshot.odds
+    return odds.home_win, odds.draw, odds.away_win
 
 
 def parse_home_handicap(raw: str) -> int | None:

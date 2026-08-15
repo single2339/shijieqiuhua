@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from math import isclose
+from math import isclose, isfinite
 from typing import Any, Literal, Mapping, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class FootballOsintJobStatus(str, Enum):
@@ -118,11 +118,24 @@ class OutcomeOdds(BaseModel):
     draw: float = Field(gt=0.0)
     away_win: float = Field(gt=0.0)
 
+    @model_validator(mode="after")
+    def validate_finite(self) -> OutcomeOdds:
+        if not all(isfinite(value) for value in self.model_dump().values()):
+            raise ValueError("outcome odds must be finite")
+        return self
+
 
 class MarketSourceSnapshot(BaseModel):
     source_id: str
     odds: OutcomeOdds
     observed_at: datetime
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
 
 
 class MarketConsensus(BaseModel):
@@ -133,11 +146,18 @@ class MarketConsensus(BaseModel):
 
     @model_validator(mode="after")
     def validate_status(self) -> MarketConsensus:
+        if len(set(self.source_ids)) != len(self.source_ids):
+            raise ValueError("consensus source_ids must be unique")
+        if self.fresh_source_count != len(self.source_ids):
+            raise ValueError("fresh_source_count must match source_ids")
         if self.status == "consensus":
             if self.fresh_source_count < 3 or self.probabilities is None:
                 raise ValueError("consensus requires three fresh sources and probabilities")
-        elif self.probabilities is not None:
-            raise ValueError("non-consensus market states cannot include probabilities")
+        elif self.status == "single_source":
+            if self.fresh_source_count != 1 or self.probabilities is not None:
+                raise ValueError("single_source requires exactly one source and no probabilities")
+        elif self.fresh_source_count not in (0, 2) or self.probabilities is not None:
+            raise ValueError("insufficient_sources requires zero or two sources and no probabilities")
         return self
 
 
@@ -146,6 +166,16 @@ class MarketComparison(BaseModel):
     model_leader: Literal["home_win", "draw", "away_win"] | None = None
     market_leader: Literal["home_win", "draw", "away_win"] | None = None
     leader_delta: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_status(self) -> MarketComparison:
+        details = (self.model_leader, self.market_leader, self.leader_delta)
+        if self.status == "limited":
+            if any(value is not None for value in details):
+                raise ValueError("limited comparison cannot include leader details")
+        elif any(value is None for value in details):
+            raise ValueError("aligned or divergent comparison requires leader details")
+        return self
 
 
 class MarketContext(BaseModel):

@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import App, { fixtureRequest, specialistQuestions } from '../src/App'
+import App, { decisionRequestKey, fixtureRequest, shouldChangeFixture, specialistQuestions } from '../src/App'
 import LandingPage from '../src/shijieqiuhua/components/LandingPage'
 import PostMatchReview from '../src/shijieqiuhua/components/PostMatchReview'
 import ComparePanel from '../src/shijieqiuhua/components/ComparePanel'
@@ -65,6 +65,22 @@ describe('match decision entry point', () => {
     expect(questions.map(item => item.id)).toEqual(['corners', 'total_goals'])
     expect(questions.map(item => item.label)).toContain('角球')
     expect(questions.map(item => item.label)).toContain('总进球')
+  })
+
+  test('does not restart a decision when the active fixture is clicked again', () => {
+    expect(shouldChangeFixture('fixture-1', 'fixture-1')).toBe(false)
+    expect(shouldChangeFixture('fixture-1', 'fixture-2')).toBe(true)
+  })
+
+  test('keeps the decision request key stable across a refreshed fixture object', () => {
+    const refreshedMatch: FootballMatch = {
+      ...match,
+      questions: [...match.questions],
+      publicLean: '进行中 1-0',
+    }
+
+    expect(refreshedMatch).not.toBe(match)
+    expect(decisionRequestKey(refreshedMatch)).toBe(decisionRequestKey(match))
   })
 })
 

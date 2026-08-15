@@ -50,6 +50,20 @@ export function fixtureRequest(match: FootballMatch): FootballOsintJobRequest {
   }
 }
 
+/**
+ * A fixture list is refreshed every minute. Use the outgoing request fields,
+ * rather than the in-memory match object, to decide whether that is a new
+ * decision. This keeps a refresh from flashing the paid verdict back to a
+ * loading state.
+ */
+export function decisionRequestKey(match: FootballMatch | null): string {
+  return match ? JSON.stringify(fixtureRequest(match)) : ''
+}
+
+export function shouldChangeFixture(currentId: string, nextId: string): boolean {
+  return currentId !== nextId
+}
+
 /** The full-time verdict belongs to the decision desk, not the follow-up menu. */
 export function specialistQuestions(match: FootballMatch): MatchQuestion[] {
   const questions = match.questions.filter(item => item.id !== 'fulltime' && item.id !== 'goals')
@@ -145,6 +159,7 @@ export default function App() {
     () => matches.find(m => m.id === selectedId) ?? (matches.length > 0 ? matches[0] : null),
     [matches, selectedId],
   )
+  const selectedDecisionKey = decisionRequestKey(selectedMatch)
 
   // The first view for a paid fixture is always the full-time decision. Follow-up
   // questions deliberately stay out of this request and below the decision desk.
@@ -169,7 +184,7 @@ export default function App() {
       .finally(() => { if (!cancelled) setDecisionLoading(false) })
 
     return () => { cancelled = true }
-  }, [historyMode, selectedMatch, userTier])
+  }, [historyMode, selectedDecisionKey, userTier])
 
   async function handleAuthSubmit(creds: AuthCredentials) {
     const u = authMode === 'login'
@@ -218,6 +233,17 @@ export default function App() {
   )
 
   function stopPoll() { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
+
+  function selectFixture(nextId: string) {
+    if (!shouldChangeFixture(selectedId, nextId)) return
+    stopPoll()
+    resetStaged()
+    setSelectedId(nextId)
+    setAnswer(null)
+    setOsintJob(null)
+    setError('')
+    setLoading(false)
+  }
 
   async function enterHistoryMode() {
     setHistoryMode(true)
@@ -439,10 +465,7 @@ export default function App() {
                     const isLive = m.publicLean.startsWith('进行中')
                     return (
                       <button key={m.id} className="sqh-fixture" data-active={m.id === selectedId}
-                        onClick={() => {
-                          stopPoll(); resetStaged(); setSelectedId(m.id); setAnswer(null); setOsintJob(null); setError(''); setLoading(false)
-                          setDecision(null); setDecisionError(''); setDecisionLoading(userTier === 'paid')
-                        }}>
+                        onClick={() => selectFixture(m.id)}>
                         <div className="sqh-fixture-top">
                           <span className="sqh-fixture-league">{m.league}</span>
                           {isLive && <span className="sqh-fixture-live">LIVE</span>}

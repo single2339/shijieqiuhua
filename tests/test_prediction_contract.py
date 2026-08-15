@@ -12,7 +12,10 @@ from backend.football_osint.models import (
     FactorImpact,
     FootballOsintJob,
     FootballOsintJobStatus,
+    FootballOsintJobRequest,
     HandicapConclusion,
+    MarketContext,
+    MarketSourceSnapshot,
     OsintMatch,
     OutcomeOdds,
     OutcomeProbabilities,
@@ -283,14 +286,13 @@ def test_partly_applied_sporttery_migration_adds_remaining_columns(tmp_path, mon
     } <= columns
 
 
-def test_mocked_sporttery_pipeline_prediction_persists_and_settles_handicap(tmp_path, monkeypatch):
-    """Exercise the official-market path from pipeline result through history."""
+def test_market_sources_stay_outside_osint_prediction(tmp_path, monkeypatch):
+    """Market context may be retained separately without altering OSINT prediction."""
     from datetime import datetime, timezone
 
-    from backend.football_osint import pipeline, track_record
-    from backend.football_osint.adapters import football_data_schedule
+    from backend.football_osint import pipeline
+    from backend.football_osint.analysis.prediction import predict
     from backend.football_osint.adapters.sporttery import SportteryOdds
-    from backend.football_osint.history import get_history_detail
 
     storage = tmp_path / "bronze_storage"
     storage.mkdir()
@@ -303,6 +305,15 @@ def test_mocked_sporttery_pipeline_prediction_persists_and_settles_handicap(tmp_
         home_team="主队", away_team="客队", kickoff_at="2026-05-01 19:00",
         had_h=2.10, had_d=3.40, had_a=3.60,
         hhad_h=2.00, hhad_d=3.20, hhad_a=3.80, hhad_goal_line="+1", league="测试联赛",
+    )
+    market_context = MarketContext(
+        snapshots=[
+            MarketSourceSnapshot(
+                source_id="sporttery",
+                odds=OutcomeOdds(home_win=odds.had_h, draw=odds.had_d, away_win=odds.had_a),
+                observed_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            )
+        ]
     )
     factors = [
         FactorImpact(
@@ -340,23 +351,18 @@ def test_mocked_sporttery_pipeline_prediction_persists_and_settles_handicap(tmp_
     assert job.prediction.summary
     assert len(set(job.prediction.outcome_probabilities.model_dump().values())) == 3
     assert sum(job.prediction.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
-    assert isinstance(job.prediction.sporttery_market, SportteryMarket)
-    assert job.prediction.sporttery_market.home_handicap == 1
+    prediction_payload = job.prediction.model_dump(exclude_none=True)
+    assert "sporttery_market" not in prediction_payload
+    assert "handicap_conclusion" not in prediction_payload
     assert next(source for source in job.sources if source.adapter == "sporttery").status == "ok"
-    assert job.prediction.handicap_conclusion is not None
-    assert job.prediction.handicap_conclusion.home_handicap == 1
-
-    assert track_record.record_if_definite(job, conn=conn) is True
-    settled_fixture = football_data_schedule.Fixture(
-        match_id="settled", league="测试联赛",
-        kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
-        home_team="主队", away_team="客队", status="finished", home_score=1, away_score=2,
+    assert market_context.snapshots[0].source_id == "sporttery"
+    expected_prediction = predict(
+        FootballOsintJobRequest(
+            home_team="主队",
+            away_team="客队",
+            kickoff_at="2026-05-01 19:00",
+            competition="测试联赛",
+        ),
+        factors,
     )
-    monkeypatch.setattr(
-        football_data_schedule, "fetch_fixtures_for_range", lambda date_from, date_to: [settled_fixture]
-    )
-
-    assert track_record.settle_pending(conn=conn) == 1
-    detail = get_history_detail(job.job_id, paid=False)
-    assert detail is not None
-    assert detail["record"]["sporttery_handicap"]["actual_outcome"] == "draw"
+    assert job.prediction.model_dump(exclude_none=True) == expected_prediction.model_dump(exclude_none=True)

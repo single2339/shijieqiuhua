@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from inspect import signature
 
 import pytest
 
@@ -11,9 +10,6 @@ from backend.football_osint.analysis.prediction import predict
 from backend.football_osint.models import (
     FactorImpact,
     FootballOsintJobRequest,
-    MarketContext,
-    MarketSourceSnapshot,
-    OutcomeOdds,
 )
 from backend.football_osint.factor_registry import build_factors
 from backend.football_osint.models import MatchProfile, OsintEvidence
@@ -128,25 +124,14 @@ def test_close_prediction_summary_explicitly_says_advantage_is_insufficient():
     assert "优势不足" in result.summary
 
 
-def test_prediction_is_identical_when_generic_market_context_exists_elsewhere():
+def test_prediction_rejects_market_input_and_is_deterministic():
     factors = [_direction_factor(impact=0.30)]
-    model_only = predict(_request("2026-06-20 20:00"), factors)
-    market_context = MarketContext(
-        snapshots=[
-            MarketSourceSnapshot(
-                source_id="example-book",
-                odds=OutcomeOdds(home_win=12.0, draw=6.0, away_win=1.2),
-                observed_at=datetime(2026, 8, 11, tzinfo=timezone.utc),
-            )
-        ]
-    )
-    with_market_context = predict(_request("2026-06-20 20:00"), factors)
+    baseline = predict(_request("2026-06-20 20:00"), factors)
 
-    assert market_context.snapshots[0].source_id == "example-book"
-    assert "market" not in signature(predict).parameters
-    assert with_market_context.model_dump() == model_only.model_dump()
-    assert with_market_context.sporttery_market is None
-    assert with_market_context.handicap_conclusion is None
+    with pytest.raises(TypeError, match="unexpected keyword argument 'market'"):
+        predict(_request("2026-06-20 20:00"), factors, market=object())
+
+    assert predict(_request("2026-06-20 20:00"), factors).model_dump() == baseline.model_dump()
 
 
 def test_factor_registry_never_creates_a_market_prediction_driver():

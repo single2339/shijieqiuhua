@@ -2,17 +2,16 @@
 
 Fetches match fixtures with HAD (胜平负) / HHAD (让球胜平负) odds from the
 官方 sporttery.cn API.  This replaces football-data.org for fixture discovery
-and provides market-consensus odds as a new prediction signal.
+and provides market-consensus odds for the separate decision desk.
 
 Data flow:
-  sporttery.cn → fixture list + odds → pipeline evidence (market odds factor)
+  sporttery.cn → fixture list + odds → independent market context
   sporttery.cn → finished matches → track_record settlement fallback
 
 API docs: https://webapi.sporttery.cn/gateway/uniform/football/getMatchCalculatorV1.qry
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -24,7 +23,6 @@ import httpx
 
 from .. import cache
 from ..analysis.market import normalize_decimal_odds, parse_home_handicap
-from ..evidence import append_evidence
 from ..models import FootballOsintJobRequest, MarketSourceSnapshot, OsintEvidence, OutcomeOdds, SportteryMarket
 
 log = logging.getLogger(__name__)
@@ -419,12 +417,8 @@ def get_odds(
     )
 
 
-def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> tuple[str, str]:
-    """Pipeline adapter entry point — add sporttery odds as market-consensus evidence.
-
-    Returns (evidence_id, error_reason) compatible with the pipeline collector
-    pattern (same signature as open_meteo.collect).
-    """
+def collect(request: FootballOsintJobRequest, _evidence: list[OsintEvidence]) -> tuple[str, str]:
+    """Legacy collector compatibility without writing market odds into OSINT evidence."""
     odds = get_odds(
         request.home_team,
         request.away_team,
@@ -435,52 +429,4 @@ def collect(request: FootballOsintJobRequest, evidence: list[OsintEvidence]) -> 
     if odds is None:
         return "", "体彩未覆盖该场比赛"
 
-    # Build HAD claim
-    had_parts = [f"主胜{odds.had_h:.2f}", f"平{odds.had_d:.2f}", f"客胜{odds.had_a:.2f}"]
-    claim_parts = [f"体彩胜平负赔率: {' / '.join(had_parts)}"]
-
-    if odds.hhad_h is not None:
-        hhad_parts = [f"主胜{odds.hhad_h:.2f}", f"平{odds.hhad_d:.2f}", f"客胜{odds.hhad_a:.2f}"]
-        if odds.hhad_goal_line:
-            claim_parts.append(f"让球({odds.hhad_goal_line})赔率: {' / '.join(hhad_parts)}")
-        else:
-            claim_parts.append(f"让球赔率: {' / '.join(hhad_parts)}")
-
-    claim = "；".join(claim_parts)
-
-    # Compute implied probabilities from HAD odds (overround-removed)
-    implied = _implied_probabilities(odds.had_h, odds.had_d, odds.had_a)
-
-    raw = json.dumps({
-        "had": {"h": odds.had_h, "d": odds.had_d, "a": odds.had_a},
-        "hhad": {"h": odds.hhad_h, "d": odds.hhad_d, "a": odds.hhad_a, "goal_line": odds.hhad_goal_line} if odds.hhad_h else None,
-        "implied": implied,
-    }, ensure_ascii=False)
-
-    # Market odds are strong signals — confidence 0.60 (higher than weather's 0.55,
-    # lower than structured fundamental data at 0.65+)
-    eid = append_evidence(
-        evidence,
-        source=f"中国体育彩票 ({odds.league})",
-        source_type="odds",
-        claim=claim,
-        topic="odds.sporttery.market",
-        side="neutral",
-        confidence=0.60,
-        raw_excerpt=raw,
-    )
-    return eid, ""
-
-
-def _implied_probabilities(h: float, d: float, a: float) -> dict[str, float]:
-    """Convert decimal odds to implied probabilities (overround-removed)."""
-    if h <= 0 or d <= 0 or a <= 0:
-        return {"home": 0.0, "draw": 0.0, "away": 0.0}
-    total = 1.0 / h + 1.0 / d + 1.0 / a
-    if total == 0:
-        return {"home": 0.0, "draw": 0.0, "away": 0.0}
-    return {
-        "home": round((1.0 / h) / total, 4),
-        "draw": round((1.0 / d) / total, 4),
-        "away": round((1.0 / a) / total, 4),
-    }
+    return "", ""

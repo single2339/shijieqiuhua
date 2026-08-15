@@ -215,6 +215,7 @@ def test_collect_passes_request_provider_to_odds_lookup(monkeypatch):
 
     monkeypatch.setattr(sporttery, "get_odds", fake_get_odds)
 
+    evidence = []
     sporttery.collect(
         FootballOsintJobRequest(
             home_team="主队",
@@ -222,7 +223,28 @@ def test_collect_passes_request_provider_to_odds_lookup(monkeypatch):
             provider="football-data",
             provider_match_id="foreign-id",
         ),
-        [],
+        evidence,
     )
 
     assert received == {"provider": "football-data", "provider_match_id": "foreign-id"}
+    assert evidence == []
+
+
+def test_collect_keeps_successful_market_quotes_out_of_osint_evidence(monkeypatch):
+    monkeypatch.setattr(
+        sporttery,
+        "get_odds",
+        lambda *args, **kwargs: SportteryOdds(
+            home_team="主队", away_team="客队", kickoff_at="2026-08-15 19:30",
+            had_h=2.0, had_d=3.5, had_a=4.0, league="测试联赛",
+        ),
+    )
+    evidence = []
+
+    evidence_id, reason = sporttery.collect(
+        FootballOsintJobRequest(home_team="主队", away_team="客队"),
+        evidence,
+    )
+
+    assert (evidence_id, reason) == ("", "")
+    assert evidence == []

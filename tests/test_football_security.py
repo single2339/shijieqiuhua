@@ -106,17 +106,13 @@ def test_zero_config_collection_attaches_official_sporttery_market_once(monkeypa
 
     def fake_sporttery(request, evidence):
         called["sporttery"] += 1
-        evidence.append(OsintEvidence(
-            id="ev_sporttery", source="中国体育彩票", source_type="odds",
-            claim="体彩胜平负", topic="odds.sporttery.market", confidence=0.6,
-        ))
-        return market, "ev_sporttery", ""
+        return market, "", ""
     monkeypatch.setattr(pipeline, "_collect_sporttery", fake_sporttery, raising=False)
 
     _, market_context = pipeline._collect_zero_config_sources(request, evidence, sources)
 
     assert called["sporttery"] == 1
-    assert [ev.topic for ev in evidence].count("odds.sporttery.market") == 1
+    assert not [ev for ev in evidence if ev.topic.startswith("odds.")]
     assert next(src for src in sources if src.adapter == "sporttery").status == "ok"
     assert market_context.snapshots[0].source_id == "sporttery"
     assert next(src for src in sources if src.adapter == "theoddsapi").status == "skipped"

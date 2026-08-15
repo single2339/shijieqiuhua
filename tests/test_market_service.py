@@ -149,3 +149,53 @@ def test_market_provider_states_do_not_change_osint_artifacts(monkeypatch, tmp_p
     assert success.market_context is not None
     assert success.market_context.consensus is not None
     assert no_key.market_context != success.market_context
+
+
+def test_sporttery_snapshot_does_not_change_osint_artifacts(monkeypatch, tmp_path):
+    from backend.football_osint import pipeline
+
+    factors = [
+        FactorImpact(
+            factor_id="form", label="状态", group="form", enabled=True,
+            weight=0.3, impact=0.2, direction="home", confidence=0.8,
+        )
+    ]
+    monkeypatch.setattr(pipeline, "_collect_farich_foot_sources", lambda *args: None)
+    monkeypatch.setattr(pipeline, "_collect_one_weather", lambda *args: ("", "disabled"))
+    monkeypatch.setattr(
+        pipeline,
+        "_collect_search_sources",
+        lambda *args: pipeline.data_quality_module.SearchQualityStats(),
+    )
+    monkeypatch.setattr(pipeline.rss_adapter, "collect_all", lambda *args: [])
+    monkeypatch.setattr(pipeline, "_collect_football_data_stats", lambda *args: None)
+    monkeypatch.setattr(
+        pipeline.theoddsapi_adapter,
+        "collect",
+        lambda request: ([], "未配置授权赔率数据服务"),
+    )
+    monkeypatch.setattr(pipeline.factor_registry_module, "build_factors", lambda *args: factors)
+
+    def run(sporttery_market):
+        monkeypatch.setattr(
+            pipeline,
+            "_collect_sporttery",
+            lambda *args: (sporttery_market, "", "" if sporttery_market else "体彩未覆盖该场比赛"),
+        )
+        return pipeline.run_prediction_sync(
+            {"home_team": "主队", "away_team": "客队", "competition": "英超"},
+            storage_root=tmp_path,
+        )
+
+    with_snapshot = run(_sporttery_market())
+    without_snapshot = run(None)
+
+    assert not [item for item in with_snapshot.evidence if item.topic.startswith("odds.")]
+    assert with_snapshot.prediction == without_snapshot.prediction
+    assert with_snapshot.confidence == without_snapshot.confidence
+    assert with_snapshot.data_quality == without_snapshot.data_quality
+    assert with_snapshot.intelligence_cycle == without_snapshot.intelligence_cycle
+    assert with_snapshot.report_markdown == without_snapshot.report_markdown
+    assert next(source for source in with_snapshot.sources if source.adapter == "sporttery").status == "ok"
+    assert next(source for source in without_snapshot.sources if source.adapter == "sporttery").status == "skipped"
+    assert with_snapshot.market_context != without_snapshot.market_context

@@ -34,6 +34,8 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
+_MARKET_SOURCE_ADAPTERS = frozenset({"sporttery", "theoddsapi"})
+
 from backend import telemetry
 from .adapters import lightpanda as lightpanda_adapter
 from . import cache
@@ -93,23 +95,21 @@ def run_prediction_sync(
     )
 
     search_stats, market_context = _collect_zero_config_sources(request, evidence, sources)
-    osint_sources = sorted(
-        (source for source in sources if source.adapter != "theoddsapi"),
-        key=lambda source: source.adapter,
-    )
-    factors = factor_registry_module.build_factors(request, match.profile, evidence)
+    osint_sources = _osint_sources(sources)
+    osint_evidence = _osint_evidence(evidence)
+    factors = factor_registry_module.build_factors(request, match.profile, osint_evidence)
     prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
-    confidence = confidence_module.grade(match.profile, evidence, factors)
+    confidence = confidence_module.grade(match.profile, osint_evidence, factors)
     data_quality = data_quality_module.build_data_quality(
-        request, osint_sources, evidence, factors, prediction, search_stats=search_stats,
+        request, osint_sources, osint_evidence, factors, prediction, search_stats=search_stats,
     )
-    cycle = intelligence_module.build_intelligence_cycle(osint_sources, evidence)
-    confirmed_findings = intelligence_module.confirmed_findings(match, evidence)
+    cycle = intelligence_module.build_intelligence_cycle(osint_sources, osint_evidence)
+    confirmed_findings = intelligence_module.confirmed_findings(match, osint_evidence)
     assessments = intelligence_module.assessments(match, factors, prediction, confidence)
     alternatives = intelligence_module.alternative_explanations(match, osint_sources, factors)
     next_steps = intelligence_module.next_steps(osint_sources, factors)
     report = report_module.render_report(
-        match, osint_sources, evidence,
+        match, osint_sources, osint_evidence,
         factors, prediction, confidence,
         cycle, confirmed_findings, assessments, alternatives, next_steps,
     )
@@ -164,6 +164,19 @@ def _read_factor_min() -> int:
         return int(row[0]) if row else 1
     except Exception:
         return 1
+
+
+def _osint_sources(sources: list[OsintSourceStatus]) -> list[OsintSourceStatus]:
+    """Keep market availability visible on a job without affecting OSINT output."""
+    return sorted(
+        (source for source in sources if source.adapter not in _MARKET_SOURCE_ADAPTERS),
+        key=lambda source: source.adapter,
+    )
+
+
+def _osint_evidence(evidence: list[OsintEvidence]) -> list[OsintEvidence]:
+    """Exclude persisted legacy market evidence from OSINT-derived artifacts."""
+    return [item for item in evidence if not item.topic.startswith("odds.")]
 
 
 def _job_id(request: FootballOsintJobRequest) -> str:
@@ -255,9 +268,9 @@ def _collect_zero_config_sources(
                     sources.append(OsintSourceStatus(
                         adapter="sporttery",
                         label="中国体育彩票盘口",
-                        status="ok" if evidence_id else "skipped",
+                        status="ok" if market is not None else "skipped",
                         evidence_ids=[evidence_id] if evidence_id else [],
-                        reason="" if evidence_id else reason,
+                        reason="" if market is not None else reason,
                     ))
                 elif label == "theoddsapi":
                     licensed_snapshots, reason = result
@@ -302,9 +315,9 @@ def _collect_one_weather(request: FootballOsintJobRequest, evidence: list[OsintE
 
 def _collect_sporttery(
     request: FootballOsintJobRequest,
-    evidence: list[OsintEvidence],
+    _evidence: list[OsintEvidence],
 ) -> tuple[SportteryMarket | None, str, str]:
-    """Collect one official Sporttery snapshot and its traceable evidence row."""
+    """Collect one official Sporttery snapshot for the separate market context."""
     odds = sporttery_adapter.get_odds(
         request.home_team,
         request.away_team,
@@ -317,20 +330,7 @@ def _collect_sporttery(
     market = sporttery_adapter.market_snapshot(odds, observed_at=datetime.now(timezone.utc).isoformat())
     if market is None:
         return None, "", "体彩赔率不完整"
-    claim = f"体彩胜平负赔率: 主胜{odds.had_h:.2f} / 平{odds.had_d:.2f} / 客胜{odds.had_a:.2f}"
-    if market.home_handicap is not None and odds.hhad_h is not None:
-        claim += f"；让球({market.home_handicap:+d})赔率: 主胜{odds.hhad_h:.2f} / 平{odds.hhad_d:.2f} / 客胜{odds.hhad_a:.2f}"
-    evidence_id = evidence_module.append_evidence(
-        evidence,
-        source=f"中国体育彩票 ({odds.league})",
-        source_type="odds",
-        claim=claim,
-        topic="odds.sporttery.market",
-        side="neutral",
-        confidence=0.60,
-        raw_excerpt=json.dumps(market.model_dump(mode="json"), ensure_ascii=False),
-    )
-    return market, evidence_id, ""
+    return market, "", ""
 
 
 

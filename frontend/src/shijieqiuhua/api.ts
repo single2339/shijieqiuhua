@@ -1,4 +1,4 @@
-import type { CompareItem, FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord, TrackRecordStats } from './types'
+import type { CompareItem, FixtureStatus, FootballOsintJob, FootballOsintJobRequest, FootballQuestionAnswer, HistoryDetail, HistoryRecord, MatchDecision, TrackRecordStats } from './types'
 
 const JSON_HEADER = { 'Content-Type': 'application/json' }
 
@@ -41,6 +41,22 @@ export async function askFootballQuestion(request: FootballOsintJobRequest): Pro
     body: JSON.stringify(request),
   })
   return readJson<FootballQuestionAnswer>(res)
+}
+
+/**
+ * Load the paid, first-view decision for a fixture.
+ *
+ * The server owns the full-time question. Dropping a caller's specialist
+ * question keeps the first-view verdict independent of question UI state.
+ */
+export async function fetchMatchDecision(request: FootballOsintJobRequest): Promise<MatchDecision> {
+  const { question: _question, ...fixtureRequest } = request
+  const res = await fetch('/api/football/osint/decisions', {
+    method: 'POST',
+    headers: JSON_HEADER,
+    body: JSON.stringify(fixtureRequest),
+  })
+  return readJson<MatchDecision>(res)
 }
 
 export async function fetchFootballOsintJob(jobId: string): Promise<FootballOsintJob> {

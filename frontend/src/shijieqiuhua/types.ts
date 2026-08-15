@@ -1,4 +1,4 @@
-export type QuestionDimension = 'half' | 'cards' | 'corners' | 'goals' | 'player' | 'risk'
+export type QuestionDimension = 'half' | 'cards' | 'corners' | 'goals' | 'fulltime' | 'total_goals' | 'player' | 'risk'
 
 export interface MatchQuestion {
   id: QuestionDimension
@@ -135,6 +135,22 @@ export interface PredictionResult {
   handicap_conclusion: HandicapConclusion | null
 }
 
+/**
+ * The OSINT-only prediction exposed by the paid decision endpoint.
+ * Market values intentionally live only in MatchDecision's market branch.
+ */
+export interface SystemPrediction {
+  lean: PredictionResult['lean']
+  summary: string
+  outcome_probabilities: OutcomeProbabilities
+  primary_probability: number
+  margin_to_runner_up: number
+  clarity: PredictionResult['clarity']
+  scoreline_band: string[]
+  drivers: string[]
+  uncertainties: string[]
+}
+
 export interface OutcomeProbabilities {
   home_win: number
   draw: number
@@ -145,6 +161,31 @@ export interface OutcomeOdds {
   home_win: number
   draw: number
   away_win: number
+}
+
+/** A normalized 1X2 quote from an authorized market-data source. */
+export interface MarketSourceSnapshot {
+  source_id: string
+  display_name: string
+  market: '1x2'
+  odds: OutcomeOdds
+  implied_probabilities: OutcomeProbabilities | null
+  observed_at: string
+  provider_event_id: string
+}
+
+export interface MarketConsensus {
+  status: 'consensus' | 'single_source' | 'insufficient_sources'
+  fresh_source_count: number
+  source_ids: string[]
+  probabilities: OutcomeProbabilities | null
+}
+
+export interface MarketComparison {
+  status: 'aligned' | 'divergent' | 'limited'
+  model_leader: 'home_win' | 'draw' | 'away_win' | null
+  market_leader: 'home_win' | 'draw' | 'away_win' | null
+  leader_delta: number | null
 }
 
 export interface SportteryMarket {
@@ -179,6 +220,37 @@ export interface DataQualitySummary {
 export interface ConfidenceRating {
   level: 'L1' | 'L2' | 'L3' | 'L4'
   reason: string
+}
+
+export interface ActualResult {
+  home_score: number
+  away_score: number
+  outcome: 'home' | 'draw' | 'away'
+  settled_at: string | null
+}
+
+export interface PostMatchReview {
+  lean_correct: boolean | null
+  scoreline_hit: boolean | null
+  summary: string
+}
+
+export interface MatchDecision {
+  outcome: 'home_win' | 'draw' | 'away_win' | 'info_insufficient'
+  outcome_probabilities: OutcomeProbabilities | null
+  reason: string
+  match: OsintMatch | null
+  fixture_status: 'scheduled' | 'live' | 'finished'
+  model_prediction: SystemPrediction | null
+  confidence: ConfidenceRating | null
+  market_consensus: MarketConsensus | null
+  market_sources: MarketSourceSnapshot[]
+  market_comparison: MarketComparison
+  evidence_summary: IntelligenceFinding[]
+  updated_at: string
+  actual_result: ActualResult | null
+  review: PostMatchReview | null
+  disclaimer: string
 }
 
 export interface IntelligenceCycleStage {

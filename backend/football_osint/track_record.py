@@ -46,12 +46,7 @@ def record_if_definite(
 
     c = conn or get_db()
     meta = _record_metadata(job, metadata)
-    handicap_conclusion = job.prediction.handicap_conclusion
-    handicap_values = (
-        handicap_conclusion.home_handicap,
-        handicap_conclusion.outcome,
-        handicap_conclusion.probability,
-    ) if handicap_conclusion is not None else (None, None, None)
+    handicap_values = _market_handicap_values(job)
     try:
         c.execute(
             """
@@ -79,6 +74,18 @@ def record_if_definite(
         return True
     except sqlite3.IntegrityError:
         return False  # already recorded
+
+
+def _market_handicap_values(job: FootballOsintJob) -> tuple[int | None, str | None, float | None]:
+    context = job.market_context
+    if context is None or not context.handicap_snapshots:
+        return None, None, None
+
+    snapshot = context.handicap_snapshots[0]
+    probabilities = snapshot.implied_probabilities.model_dump()
+    outcome_key = max(probabilities, key=probabilities.__getitem__)
+    outcome = {"home_win": "home", "draw": "draw", "away_win": "away"}[outcome_key]
+    return snapshot.home_handicap, outcome, probabilities[outcome_key]
 
 
 def _record_metadata(job: FootballOsintJob, metadata: dict | None) -> dict:

@@ -138,6 +138,21 @@ class MarketSourceSnapshot(BaseModel):
         return value.astimezone(timezone.utc)
 
 
+class MarketHandicapSnapshot(BaseModel):
+    source_id: str
+    home_handicap: int
+    odds: OutcomeOdds
+    implied_probabilities: OutcomeProbabilities
+    observed_at: datetime
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+
 class MarketConsensus(BaseModel):
     status: Literal["consensus", "single_source", "insufficient_sources"]
     fresh_source_count: int = Field(ge=0)
@@ -180,6 +195,7 @@ class MarketComparison(BaseModel):
 
 class MarketContext(BaseModel):
     snapshots: list[MarketSourceSnapshot] = Field(default_factory=list)
+    handicap_snapshots: list[MarketHandicapSnapshot] = Field(default_factory=list)
     consensus: MarketConsensus | None = None
     comparison: MarketComparison | None = None
 
@@ -359,6 +375,7 @@ class FootballOsintJob(BaseModel):
     evidence: list[OsintEvidence] = Field(default_factory=list)
     factors: list[FactorImpact] = Field(default_factory=list)
     prediction: PredictionResult | None = None
+    market_context: MarketContext | None = None
     confidence: ConfidenceRating | None = None
     data_quality: DataQualitySummary | None = None
     intelligence_cycle: list[IntelligenceCycleStage] = Field(default_factory=list)

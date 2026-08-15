@@ -104,8 +104,8 @@ from datetime import datetime, timedelta, timezone
 from backend.football_osint import track_record
 from backend.football_osint.adapters import football_data_schedule
 from backend.football_osint.models import (
-    FootballOsintJob, FootballOsintJobStatus, HandicapConclusion, OsintMatch,
-    OutcomeOdds, OutcomeProbabilities, PredictionResult, SportteryMarket,
+    FootballOsintJob, FootballOsintJobStatus, MarketContext, MarketHandicapSnapshot,
+    OsintMatch, OutcomeOdds, OutcomeProbabilities, PredictionResult,
 )
 
 
@@ -125,30 +125,19 @@ def _job(lean="home", status=FootballOsintJobStatus.COMPLETED, job_id="job1",
     )
 
 
-def _with_handicap_conclusion(job, *, handicap=1, outcome="draw", probability=0.41):
-    job.prediction = PredictionResult(
-        lean=job.prediction.lean,
-        summary="",
-        outcome_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.30, away_win=0.20),
-        primary_probability=0.50,
-        margin_to_runner_up=0.20,
-        clarity="clear",
-        scoreline_band=job.prediction.scoreline_band,
-        sporttery_market=SportteryMarket(
-            had_implied_probabilities=OutcomeProbabilities(home_win=0.50, draw=0.30, away_win=0.20),
-            home_handicap=handicap,
-            hhad_odds=OutcomeOdds(home_win=2.0, draw=3.0, away_win=4.0),
-            hhad_implied_probabilities=OutcomeProbabilities(home_win=0.30, draw=probability, away_win=0.29),
-            observed_at="2026-05-01T10:00:00+00:00",
-        ),
-        handicap_conclusion=HandicapConclusion(
-            home_handicap=handicap,
-            outcome=outcome,
-            handicap_probabilities=OutcomeProbabilities(home_win=0.30, draw=probability, away_win=0.29),
-            probability=probability,
-            margin_to_runner_up=probability - 0.30,
-            clarity="clear",
-        ),
+def _with_handicap_snapshot(job, *, handicap=1, probability=0.41):
+    job.market_context = MarketContext(
+        handicap_snapshots=[
+            MarketHandicapSnapshot(
+                source_id="sporttery",
+                home_handicap=handicap,
+                odds=OutcomeOdds(home_win=2.0, draw=3.0, away_win=4.0),
+                implied_probabilities=OutcomeProbabilities(
+                    home_win=0.30, draw=probability, away_win=0.29,
+                ),
+                observed_at=datetime(2026, 5, 1, 10, tzinfo=timezone.utc),
+            )
+        ]
     )
     return job
 
@@ -162,8 +151,8 @@ def test_record_if_definite_inserts_row_for_definite_lean(tmp_db):
     assert row["settled_at"] is None
 
 
-def test_record_if_definite_persists_handicap_conclusion(tmp_db):
-    job = _with_handicap_conclusion(_job())
+def test_record_if_definite_persists_market_handicap_snapshot(tmp_db):
+    job = _with_handicap_snapshot(_job())
 
     assert track_record.record_if_definite(job, conn=tmp_db) is True
 
@@ -230,7 +219,7 @@ def test_settle_pending_resolves_match_and_computes_correctness(tmp_db, monkeypa
 
 
 def test_settle_pending_settles_stored_handicap_prediction(tmp_db, monkeypatch):
-    track_record.record_if_definite(_with_handicap_conclusion(_job()), conn=tmp_db)
+    track_record.record_if_definite(_with_handicap_snapshot(_job()), conn=tmp_db)
     fake_fixture = football_data_schedule.Fixture(
         match_id="hhad-hit", league="EPL",
         kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),
@@ -249,7 +238,7 @@ def test_settle_pending_settles_stored_handicap_prediction(tmp_db, monkeypatch):
 
 
 def test_settle_pending_marks_mismatched_handicap_prediction_incorrect(tmp_db, monkeypatch):
-    track_record.record_if_definite(_with_handicap_conclusion(_job()), conn=tmp_db)
+    track_record.record_if_definite(_with_handicap_snapshot(_job()), conn=tmp_db)
     fake_fixture = football_data_schedule.Fixture(
         match_id="hhad-miss", league="EPL",
         kickoff_at=datetime(2026, 5, 1, 19, 0, tzinfo=timezone.utc),

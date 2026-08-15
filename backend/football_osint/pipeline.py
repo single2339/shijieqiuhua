@@ -53,6 +53,9 @@ from .models import (
     FootballOsintJob,
     FootballOsintJobRequest,
     FootballOsintJobStatus,
+    MarketContext,
+    MarketHandicapSnapshot,
+    MarketSourceSnapshot,
     MatchProfile,
     OsintEvidence,
     OsintMatch,
@@ -116,6 +119,7 @@ def run_prediction_sync(
         evidence=evidence,
         factors=factors,
         prediction=prediction,
+        market_context=_market_context_from_sporttery(market),
         confidence=confidence,
         data_quality=data_quality,
         intelligence_cycle=cycle,
@@ -155,6 +159,46 @@ def _read_factor_min() -> int:
         return int(row[0]) if row else 1
     except Exception:
         return 1
+
+
+def _market_context_from_sporttery(market: SportteryMarket | None) -> MarketContext | None:
+    """Preserve collected market data separately from OSINT prediction output."""
+    if market is None:
+        return None
+
+    try:
+        observed_at = datetime.fromisoformat(market.observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    snapshots = []
+    if market.had_odds is not None:
+        snapshots.append(
+            MarketSourceSnapshot(
+                source_id=market.provider,
+                odds=market.had_odds,
+                observed_at=observed_at,
+            )
+        )
+    handicap_snapshots = []
+    if (
+        market.home_handicap is not None
+        and market.hhad_odds is not None
+        and market.hhad_implied_probabilities is not None
+    ):
+        handicap_snapshots.append(
+            MarketHandicapSnapshot(
+                source_id=market.provider,
+                home_handicap=market.home_handicap,
+                odds=market.hhad_odds,
+                implied_probabilities=market.hhad_implied_probabilities,
+                observed_at=observed_at,
+            )
+        )
+    return MarketContext(
+        snapshots=snapshots,
+        handicap_snapshots=handicap_snapshots,
+    )
 
 
 def _job_id(request: FootballOsintJobRequest) -> str:

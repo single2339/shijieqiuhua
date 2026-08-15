@@ -1,6 +1,7 @@
 """Contract tests for exact outcome probabilities and Sporttery settlement storage."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 
@@ -14,8 +15,6 @@ from backend.football_osint.models import (
     FootballOsintJobStatus,
     FootballOsintJobRequest,
     HandicapConclusion,
-    MarketContext,
-    MarketSourceSnapshot,
     OsintMatch,
     OutcomeOdds,
     OutcomeProbabilities,
@@ -288,9 +287,7 @@ def test_partly_applied_sporttery_migration_adds_remaining_columns(tmp_path, mon
 
 def test_market_sources_stay_outside_osint_prediction(tmp_path, monkeypatch):
     """Market context may be retained separately without altering OSINT prediction."""
-    from datetime import datetime, timezone
-
-    from backend.football_osint import pipeline
+    from backend.football_osint import pipeline, track_record
     from backend.football_osint.analysis.prediction import predict
     from backend.football_osint.adapters.sporttery import SportteryOdds
 
@@ -305,15 +302,6 @@ def test_market_sources_stay_outside_osint_prediction(tmp_path, monkeypatch):
         home_team="主队", away_team="客队", kickoff_at="2026-05-01 19:00",
         had_h=2.10, had_d=3.40, had_a=3.60,
         hhad_h=2.00, hhad_d=3.20, hhad_a=3.80, hhad_goal_line="+1", league="测试联赛",
-    )
-    market_context = MarketContext(
-        snapshots=[
-            MarketSourceSnapshot(
-                source_id="sporttery",
-                odds=OutcomeOdds(home_win=odds.had_h, draw=odds.had_d, away_win=odds.had_a),
-                observed_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
-            )
-        ]
     )
     factors = [
         FactorImpact(
@@ -351,11 +339,19 @@ def test_market_sources_stay_outside_osint_prediction(tmp_path, monkeypatch):
     assert job.prediction.summary
     assert len(set(job.prediction.outcome_probabilities.model_dump().values())) == 3
     assert sum(job.prediction.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
-    prediction_payload = job.prediction.model_dump(exclude_none=True)
-    assert "sporttery_market" not in prediction_payload
-    assert "handicap_conclusion" not in prediction_payload
+    assert job.prediction.sporttery_market is None
+    assert job.prediction.handicap_conclusion is None
     assert next(source for source in job.sources if source.adapter == "sporttery").status == "ok"
-    assert market_context.snapshots[0].source_id == "sporttery"
+    assert job.market_context is not None
+    assert job.market_context.snapshots[0].source_id == "sporttery"
+    handicap_snapshot = job.market_context.handicap_snapshots[0]
+    assert handicap_snapshot.home_handicap == 1
+
+    persisted = json.loads((storage / "football_osint" / job.job_id / "status.json").read_text())
+    assert persisted["market_context"]["handicap_snapshots"][0]["home_handicap"] == 1
+    persisted_job = FootballOsintJob.model_validate(persisted)
+    assert persisted_job.market_context == job.market_context
+
     expected_prediction = predict(
         FootballOsintJobRequest(
             home_team="主队",
@@ -365,4 +361,18 @@ def test_market_sources_stay_outside_osint_prediction(tmp_path, monkeypatch):
         ),
         factors,
     )
-    assert job.prediction.model_dump(exclude_none=True) == expected_prediction.model_dump(exclude_none=True)
+    assert job.prediction.model_dump() == expected_prediction.model_dump()
+
+    assert track_record.record_if_definite(job, conn=conn) is True
+    record = conn.execute(
+        "SELECT sporttery_home_handicap, predicted_hhad_outcome, predicted_hhad_probability "
+        "FROM prediction_record WHERE job_id=?",
+        (job.job_id,),
+    ).fetchone()
+    implied_probabilities = handicap_snapshot.implied_probabilities.model_dump()
+    expected_outcome = max(implied_probabilities, key=implied_probabilities.__getitem__)
+    assert record["sporttery_home_handicap"] == 1
+    assert record["predicted_hhad_outcome"] == {"home_win": "home", "draw": "draw", "away_win": "away"}[expected_outcome]
+    assert record["predicted_hhad_probability"] == pytest.approx(
+        implied_probabilities[expected_outcome]
+    )

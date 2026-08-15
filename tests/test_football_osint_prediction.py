@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from inspect import signature
 
 import pytest
 
 from backend.football_osint.analysis.prediction import predict
-from backend.football_osint.adapters.sporttery import SportteryOdds, market_snapshot
 from backend.football_osint.models import (
     FactorImpact,
     FootballOsintJobRequest,
+    MarketContext,
+    MarketSourceSnapshot,
     OutcomeOdds,
-    OutcomeProbabilities,
-    SportteryMarket,
 )
 from backend.football_osint.factor_registry import build_factors
 from backend.football_osint.models import MatchProfile, OsintEvidence
@@ -32,7 +32,7 @@ def _request(kickoff_at: str) -> FootballOsintJobRequest:
     return FootballOsintJobRequest(home_team="A队", away_team="B队", kickoff_at=kickoff_at)
 
 
-def test_info_insufficient_without_market_has_no_direction_summary():
+def test_info_insufficient_without_fundamental_signals_has_no_direction_summary():
     far_kickoff = (datetime.now(_CST) + timedelta(days=5)).strftime("%Y-%m-%d %H:%M")
 
     result = predict(_request(far_kickoff), _NO_SIGNAL_FACTORS)
@@ -109,17 +109,6 @@ def _weather_factor(*, impact: float = -0.05) -> FactorImpact:
     )
 
 
-def _market(*, home: float = 0.46, draw: float = 0.30, away: float = 0.24, hhad: bool = False) -> SportteryMarket:
-    return SportteryMarket(
-        had_odds=OutcomeOdds(home_win=2.2, draw=3.4, away_win=4.2),
-        had_implied_probabilities=OutcomeProbabilities(home_win=home, draw=draw, away_win=away),
-        home_handicap=-1 if hhad else None,
-        hhad_odds=OutcomeOdds(home_win=3.2, draw=3.4, away_win=2.1) if hhad else None,
-        hhad_implied_probabilities=OutcomeProbabilities(home_win=0.25, draw=0.25, away_win=0.50) if hhad else None,
-        observed_at="2026-08-11T12:00:00+00:00",
-    )
-
-
 def test_score_matrix_produces_normalized_clear_home_probabilities():
     result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)])
 
@@ -139,117 +128,51 @@ def test_close_prediction_summary_explicitly_says_advantage_is_insufficient():
     assert "优势不足" in result.summary
 
 
-def test_had_market_fusion_lies_between_market_and_strong_home_model():
+def test_prediction_is_identical_when_generic_market_context_exists_elsewhere():
     factors = [_direction_factor(impact=0.30)]
     model_only = predict(_request("2026-06-20 20:00"), factors)
-    fused = predict(_request("2026-06-20 20:00"), factors, market=_market())
-
-    assert 0.46 < fused.outcome_probabilities.home_win < model_only.outcome_probabilities.home_win
-    assert fused.sporttery_market is not None
-
-
-def test_cautious_home_lean_falls_back_to_fused_away_primary_when_market_contradicts_it():
-    result = predict(
-        _request("2026-06-20 20:00"),
-        [_direction_factor(impact=0.04), _draw_risk_factor()],
-        market=_market(home=0.08, draw=0.12, away=0.80),
+    market_context = MarketContext(
+        snapshots=[
+            MarketSourceSnapshot(
+                source_id="example-book",
+                odds=OutcomeOdds(home_win=12.0, draw=6.0, away_win=1.2),
+                observed_at=datetime(2026, 8, 11, tzinfo=timezone.utc),
+            )
+        ]
     )
+    with_market_context = predict(_request("2026-06-20 20:00"), factors)
 
-    assert result.outcome_probabilities.away_win == max(result.outcome_probabilities.model_dump().values())
-    assert result.lean == "away"
-    assert result.summary.startswith("客胜")
+    assert market_context.snapshots[0].source_id == "example-book"
+    assert "market" not in signature(predict).parameters
+    assert with_market_context.model_dump() == model_only.model_dump()
+    assert with_market_context.sporttery_market is None
+    assert with_market_context.handicap_conclusion is None
 
 
-def test_one_fundamental_uses_exact_45_55_had_fusion_weights():
+def test_factor_registry_never_creates_a_market_prediction_driver():
+    factors = build_factors(_request("2026-06-20 20:00"), MatchProfile(), [])
+    result = predict(_request("2026-06-20 20:00"), factors, factor_min=1)
+
+    assert all(factor.group != "market" for factor in factors)
+    assert result.lean == "info_insufficient"
+
+
+def test_non_osint_factor_cannot_change_prediction():
     factors = [_direction_factor(impact=0.30)]
-    market = _market()
-    model = predict(_request("2026-06-20 20:00"), factors)
-    fused = predict(_request("2026-06-20 20:00"), factors, market=market)
-
-    for outcome in ("home_win", "draw", "away_win"):
-        expected = 0.45 * getattr(model.outcome_probabilities, outcome) + 0.55 * getattr(
-            market.had_implied_probabilities, outcome
-        )
-        assert getattr(fused.outcome_probabilities, outcome) == pytest.approx(expected)
-    assert sum(fused.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
-
-
-def test_two_fundamentals_use_exact_65_35_had_fusion_weights():
-    factors = [
-        _direction_factor(impact=0.30),
-        FactorImpact(
-            factor_id="h2h.relevance", label="历史交锋参考性", group="h2h",
-            enabled=True, weight=0.10, impact=0.10, direction="home", confidence=0.8,
-        ),
-    ]
-    market = _market()
-    model = predict(_request("2026-06-20 20:00"), factors)
-    fused = predict(_request("2026-06-20 20:00"), factors, market=market)
-
-    for outcome in ("home_win", "draw", "away_win"):
-        expected = 0.65 * getattr(model.outcome_probabilities, outcome) + 0.35 * getattr(
-            market.had_implied_probabilities, outcome
-        )
-        assert getattr(fused.outcome_probabilities, outcome) == pytest.approx(expected)
-    assert sum(fused.outcome_probabilities.model_dump().values()) == pytest.approx(1.0)
-
-
-def test_market_without_fundamentals_remains_insufficient_and_reference_only():
-    result = predict(_request("2026-06-20 20:00"), _NO_SIGNAL_FACTORS, market=_market())
-
-    assert result.lean == "info_insufficient"
-    assert result.clarity == "insufficient"
-    assert "市场仅作参考" in result.summary
-    assert result.sporttery_market is not None
-    assert result.handicap_conclusion is None
-
-
-def test_complete_hhad_yields_normalized_handicap_conclusion():
-    result = predict(
-        _request("2026-06-20 20:00"),
-        [_direction_factor(impact=0.30)],
-        market=_market(hhad=True),
+    baseline = predict(_request("2026-06-20 20:00"), factors)
+    unsupported_factor = FactorImpact(
+        factor_id="market.external_quote",
+        label="外部赔率",
+        group="market",
+        enabled=True,
+        weight=1.0,
+        impact=-1.0,
+        direction="away",
+        confidence=1.0,
     )
+    result = predict(_request("2026-06-20 20:00"), factors + [unsupported_factor])
 
-    conclusion = result.handicap_conclusion
-    assert conclusion is not None
-    assert conclusion.home_handicap == -1
-    assert sum(conclusion.handicap_probabilities.model_dump().values()) == pytest.approx(1.0)
-
-
-def test_incomplete_hhad_is_suppressed():
-    market = _market().model_copy(update={"home_handicap": None})
-    result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)], market=market)
-
-    assert result.handicap_conclusion is None
-
-
-def test_partial_raw_hhad_snapshot_is_suppressed_before_prediction():
-    market = market_snapshot(
-        SportteryOdds(
-            home_team="主队", away_team="客队", kickoff_at="",
-            had_h=2.0, had_d=3.5, had_a=4.0,
-            hhad_h=1.8, hhad_goal_line="+1",
-        ),
-        observed_at="2026-08-11T12:00:00+00:00",
-    )
-
-    assert market is not None
-    assert market.home_handicap is None
-    assert market.hhad_odds is None
-    result = predict(_request("2026-06-20 20:00"), [_direction_factor(impact=0.30)], market=market)
-    assert result.handicap_conclusion is None
-
-
-def test_market_factor_is_a_driver_but_does_not_meet_fundamental_minimum():
-    market = _market()
-    factors = build_factors(_request("2026-06-20 20:00"), MatchProfile(), [], market=market)
-    result = predict(_request("2026-06-20 20:00"), factors, factor_min=1, market=market)
-
-    market_factor = next(factor for factor in factors if factor.factor_id == "market.sporttery_had")
-    assert market_factor.enabled is True
-    assert market_factor.label in result.drivers or result.lean == "info_insufficient"
-    assert result.lean == "info_insufficient"
+    assert result.model_dump() == baseline.model_dump()
 
 
 

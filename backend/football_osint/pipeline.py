@@ -90,8 +90,8 @@ def run_prediction_sync(
     )
 
     search_stats, market = _collect_zero_config_sources(request, evidence, sources)
-    factors = factor_registry_module.build_factors(request, match.profile, evidence, market=market)
-    prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min(), market=market)
+    factors = factor_registry_module.build_factors(request, match.profile, evidence)
+    prediction = prediction_module.predict(request, factors, factor_min=_read_factor_min())
     confidence = confidence_module.grade(match.profile, evidence, factors)
     data_quality = data_quality_module.build_data_quality(
         request, sources, evidence, factors, prediction, search_stats=search_stats,

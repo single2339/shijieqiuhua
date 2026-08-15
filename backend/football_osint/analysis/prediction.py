@@ -1,4 +1,4 @@
-"""Deterministic score-matrix prediction and official market fusion."""
+"""Deterministic score-matrix prediction from OSINT factors."""
 from __future__ import annotations
 
 from math import exp, factorial
@@ -6,26 +6,23 @@ from math import exp, factorial
 from ..models import (
     FactorImpact,
     FootballOsintJobRequest,
-    HandicapConclusion,
     OutcomeProbabilities,
     PredictionResult,
-    SportteryMarket,
 )
-from .market import handicap_probabilities, score_matrix_probabilities
+from .market import score_matrix_probabilities
 
 _DRAW_PRESSURE_LEAN_THRESHOLD = 0.012
 _OUTCOME_TO_LEAN = {"home_win": "home", "draw": "draw", "away_win": "away"}
-_HANDICAP_TO_OUTCOME = {"home_win": "home", "draw": "draw", "away_win": "away"}
+_OSINT_FACTOR_GROUPS = frozenset({"fixture", "form", "h2h", "squad", "uncertainty", "weather", "media"})
+_DIRECTIONAL_OSINT_GROUPS = frozenset({"form", "h2h", "squad"})
 
 
 def predict(
     request: FootballOsintJobRequest,
     factors: list[FactorImpact],
     factor_min: int = 1,
-    *,
-    market: SportteryMarket | None = None,
 ) -> PredictionResult:
-    """Turn scored factors into exact outcomes, optionally blending official HAD."""
+    """Turn scored OSINT factors into exact outcome probabilities."""
     active_fundamentals = [
         factor for factor in factors
         if factor.group in ("form", "h2h", "squad") and factor.enabled
@@ -35,12 +32,20 @@ def predict(
     home_impact = sum(
         factor.impact * factor.weight
         for factor in factors
-        if factor.enabled and factor.group != "market" and factor.direction == "home"
+        if (
+            factor.enabled
+            and factor.group in _DIRECTIONAL_OSINT_GROUPS
+            and factor.direction == "home"
+        )
     )
     away_impact = sum(
         abs(factor.impact) * factor.weight
         for factor in factors
-        if factor.enabled and factor.group != "market" and factor.direction == "away"
+        if (
+            factor.enabled
+            and factor.group in _DIRECTIONAL_OSINT_GROUPS
+            and factor.direction == "away"
+        )
     )
     draw_pressure = sum(
         factor.impact * factor.weight
@@ -51,26 +56,19 @@ def predict(
     model_lean = _model_lean(edge, draw_pressure)
     matrix = _score_matrix(model_lean, edge, factors, draw_pressure)
     model_probabilities = score_matrix_probabilities(matrix)
-    coverage = fundamental_count
-    outcome_probabilities = _blend_probabilities(
-        model_probabilities,
-        market.had_implied_probabilities if market and market.had_odds is not None and coverage else None,
-        coverage,
-    )
+    outcome_probabilities = model_probabilities
     primary_key, primary_probability, margin = _top_two(outcome_probabilities)
 
     if not has_fundamental_signal:
         lean = "info_insufficient"
-        summary = "市场仅作参考，无基本面方向。" if market else "无基本面数据，暂不作方向判断。"
+        summary = "无基本面数据，暂不作方向判断。"
         drivers: list[str] = []
         scoreline_band: list[str] = []
     else:
-        # Cautious double-chance language only remains while the fused market
-        # still leaves that side at least as likely to avoid defeat.
         cautious_lean = _cautious_lean(edge, draw_pressure)
-        if cautious_lean == "home_or_draw" and outcome_probabilities.home_win + outcome_probabilities.draw >= outcome_probabilities.away_win:
+        if cautious_lean == "home_or_draw":
             lean = cautious_lean
-        elif cautious_lean == "away_or_draw" and outcome_probabilities.away_win + outcome_probabilities.draw >= outcome_probabilities.home_win:
+        elif cautious_lean == "away_or_draw":
             lean = cautious_lean
         else:
             lean = _OUTCOME_TO_LEAN[primary_key]
@@ -79,7 +77,11 @@ def predict(
         drivers = [
             factor.label
             for factor in sorted(factors, key=lambda item: abs(item.impact) * item.weight, reverse=True)
-            if factor.enabled and abs(factor.impact) > 0.005
+            if (
+                factor.enabled
+                and factor.group in _OSINT_FACTOR_GROUPS
+                and abs(factor.impact) > 0.005
+            )
         ][:4]
         if not drivers:
             drivers = [factor.label for factor in factors if factor.enabled and factor.factor_id == "fixture.existence"][:1]
@@ -87,8 +89,6 @@ def predict(
 
     uncertainties = [factor.label for factor in factors if factor.group == "uncertainty" and factor.enabled]
     uncertainties.extend(factor.missing_reason for factor in factors if factor.missing_reason)
-    handicap_conclusion = _handicap_conclusion(matrix, market, coverage) if has_fundamental_signal else None
-
     return PredictionResult(
         lean=lean,  # type: ignore[arg-type]
         summary=summary,
@@ -99,8 +99,6 @@ def predict(
         scoreline_band=scoreline_band,
         drivers=drivers,
         uncertainties=uncertainties[:4],
-        sporttery_market=market,
-        handicap_conclusion=handicap_conclusion,
     )
 
 
@@ -181,49 +179,6 @@ def _score_matrix(
             matrix[(home_goals, away_goals)] = probability
     total = sum(matrix.values())
     return {score: mass / total for score, mass in matrix.items()}
-
-
-def _blend_probabilities(
-    model: OutcomeProbabilities,
-    market: OutcomeProbabilities | None,
-    coverage: int,
-) -> OutcomeProbabilities:
-    if market is None:
-        return model
-    model_weight, market_weight = (0.65, 0.35) if coverage >= 2 else (0.45, 0.55)
-    return OutcomeProbabilities(
-        home_win=model.home_win * model_weight + market.home_win * market_weight,
-        draw=model.draw * model_weight + market.draw * market_weight,
-        away_win=model.away_win * model_weight + market.away_win * market_weight,
-    )
-
-
-def _handicap_conclusion(
-    matrix: dict[tuple[int, int], float],
-    market: SportteryMarket | None,
-    coverage: int,
-) -> HandicapConclusion | None:
-    if (
-        market is None
-        or market.home_handicap is None
-        or market.hhad_implied_probabilities is None
-        or market.hhad_odds is None
-    ):
-        return None
-    probabilities = _blend_probabilities(
-        handicap_probabilities(matrix, market.home_handicap),
-        market.hhad_implied_probabilities,
-        coverage,
-    )
-    key, probability, margin = _top_two(probabilities)
-    return HandicapConclusion(
-        home_handicap=market.home_handicap,
-        outcome=_HANDICAP_TO_OUTCOME[key],
-        handicap_probabilities=probabilities,
-        probability=probability,
-        margin_to_runner_up=margin,
-        clarity="clear" if margin >= 0.05 else "close",
-    )
 
 
 def _top_two(probabilities: OutcomeProbabilities) -> tuple[str, float, float]:

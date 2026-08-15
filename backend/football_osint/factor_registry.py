@@ -17,15 +17,13 @@ import json
 import re
 
 from .analysis import evidence_extraction
-from .models import FactorImpact, FootballOsintJobRequest, MatchProfile, OsintEvidence, SportteryMarket
+from .models import FactorImpact, FootballOsintJobRequest, MatchProfile, OsintEvidence
 
 
 def build_factors(
     request: FootballOsintJobRequest,
     profile: MatchProfile,
     evidence: list[OsintEvidence],
-    *,
-    market: SportteryMarket | None = None,
 ) -> list[FactorImpact]:
     fixture_evidence = [ev.id for ev in evidence if ev.topic.startswith("fixture.")]
     fundamental_evidence = [ev.id for ev in evidence if ev.topic.startswith("fundamental.")]
@@ -250,23 +248,6 @@ def build_factors(
             missing_reason="" if cn_evidence else "未抓取到国内媒体报道，中文覆盖因子不启用",
         ),
     ]
-    if market is not None and market.had_odds is not None:
-        probabilities = market.had_implied_probabilities.model_dump()
-        ranked = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
-        direction = {"home_win": "home", "draw": "draw", "away_win": "away"}[ranked[0][0]]
-        factors.append(
-            FactorImpact(
-                factor_id="market.sporttery_had",
-                label="体彩胜平负市场",
-                group="market",
-                enabled=True,
-                weight=0.08,
-                impact=min(0.18, ranked[0][1] - ranked[1][1]),
-                direction=direction,  # type: ignore[arg-type]
-                confidence=0.60,
-                evidence_ids=[ev.id for ev in evidence if ev.topic == "odds.sporttery.market"],
-            )
-        )
     return factors
 
 
